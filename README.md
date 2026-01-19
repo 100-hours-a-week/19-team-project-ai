@@ -1,5 +1,7 @@
 # 19-team-project-ai
 
+(설계 기준 계획 - *바뀔 수 있음)
+
 <pre><code>ai_app/
 ├── main.py                         # FastAPI Entrypoint
 ├── api/
