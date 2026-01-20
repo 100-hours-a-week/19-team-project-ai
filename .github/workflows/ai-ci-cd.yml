@@ -102,18 +102,17 @@ jobs:
             # aws s3 cp "$BACKUP_DIR/db_snap_$TIMESTAMP.sql" "s3://$S3_BUCKET/ai/db-backups/"
 
             # 7. [로컬 코드 백업]
-            cp -r "$AI_APP_DIR" "$BACKUP_DIR/code_$TIMESTAMP"
+            if [ -d "$AI_APP_DIR" ]; then
+              cp -r "$AI_APP_DIR" "$BACKUP_DIR/code_$TIMESTAMP"
+            fi
 
             # 8. [소스 업데이트] S3에서 최신 아티팩트 가져오기
-            aws s3 sync "s3://$S3_BUCKET/ai/code/$GITHUB_SHA" "$AI_APP_DIR" --delete || rollback
+            aws s3 sync "s3://$S3_BUCKET/ai/code/$GITHUB_SHA/ai_app" "$AI_APP_DIR" --delete || rollback
 
             # 9. [의존성 설치 및 Systemd 재시작]
             cd "$AI_DIR"
             source venv/bin/activate
             REQUIREMENTS_PATH="$AI_APP_DIR/requirements.txt"
-            if [ ! -f "$REQUIREMENTS_PATH" ]; then
-              REQUIREMENTS_PATH="$AI_APP_DIR/ai_app/requirements.txt"
-            fi
             if [ -f "$REQUIREMENTS_PATH" ]; then
               pip install -r "$REQUIREMENTS_PATH" || rollback
             fi
