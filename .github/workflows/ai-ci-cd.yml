@@ -92,7 +92,7 @@ jobs:
             echo "--- 배포 프로세스 시작 ($TIMESTAMP) ---"
 
             # 5. [Caddy 점검 페이지 ON]
-            echo 'handle { respond "System Updating..." 503 }' | sudo tee /etc/caddy/maintenance.conf
+            sudo cp /home/ubuntu/refit/infra/caddy/pretty_maintenance.conf /etc/caddy/maintenance.conf
             sudo systemctl reload caddy
 
             # 6. [DB 스냅샷 & S3 업로드]
