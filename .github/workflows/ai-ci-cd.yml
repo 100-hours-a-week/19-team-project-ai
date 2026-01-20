@@ -1,4 +1,4 @@
-name: Re-Fit AI Integrated CI/CD (Single YAML Master)
+name: Re-Fit AI Integrated CI/CD
 
 on:
   push:
@@ -33,7 +33,7 @@ jobs:
 
       # 2. [유닛 테스트]
       - name: Run Unit Tests
-        run: pytest || echo "No tests found or tests failed"
+        run: pytest || echo "No tests found 또는  테스트 실패"
 
   # [CD 단계] S3 백업, DB 스냅샷, 배포 및 자동 롤백
   deploy:
@@ -46,7 +46,7 @@ jobs:
       # 3. [S3 코드 백업] 배포될 최신 코드를 S3에 업로드
       - name: Sync Code to S3
         run: |
-          aws s3 sync . s3://${{ secrets.S3_BUCKET_NAME }}/code/${{ github.sha }} --exclude ".git/*"
+          aws s3 sync . s3://${{ secrets.S3_BUCKET_NAME }}/ai/code/${{ github.sha }} --exclude ".git/*"
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_KEY }}
@@ -56,9 +56,9 @@ jobs:
       - name: Deploy to Server with Rollback
         uses: appleboy/ssh-action@master
         with:
-          host: ${{ secrets.PROD_HOST }}
-          username: ${{ secrets.PROD_USER }}
-          key: ${{ secrets.PROD_SSH_KEY }}
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USER }}
+          key: ${{ secrets.SSH_KEY }}
           envs: GITHUB_SHA
           script: |
             # --- 변수 및 환경 설정 ---
@@ -99,13 +99,13 @@ jobs:
             echo "DB 스냅샷 생성 중..."
             mkdir -p $BACKUP_DIR
             pg_dump $DB_NAME > "$BACKUP_DIR/db_snap_$TIMESTAMP.sql"
-            aws s3 cp "$BACKUP_DIR/db_snap_$TIMESTAMP.sql" "s3://$S3_BUCKET/db-backups/"
+            aws s3 cp "$BACKUP_DIR/db_snap_$TIMESTAMP.sql" "s3://$S3_BUCKET/ai/db-backups/"
 
             # 7. [로컬 코드 백업]
             cp -r "$AI_APP_DIR" "$BACKUP_DIR/code_$TIMESTAMP"
 
             # 8. [소스 업데이트] S3에서 최신 아티팩트 가져오기
-            aws s3 sync "s3://$S3_BUCKET/code/$GITHUB_SHA" "$AI_APP_DIR" --delete || rollback
+            aws s3 sync "s3://$S3_BUCKET/ai/code/$GITHUB_SHA" "$AI_APP_DIR" --delete || rollback
 
             # 9. [의존성 설치 및 Systemd 재시작]
             cd "$AI_DIR"
@@ -115,13 +115,15 @@ jobs:
 
             # 10. [헬스 체크 및 롤백 결정]
             echo "최종 확인 중..."
-            sleep 10
+            sleep 2
             HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/health || echo "000")
 
             if [ "$HTTP_STATUS" = "200" ]; then
               echo "--- 배포 성공! 점검 페이지를 해제합니다 ---"
               sudo truncate -s 0 /etc/caddy/maintenance.conf
               sudo systemctl reload caddy
+              # 서버 용량 관리를 위해 5개 이상의 오래된 로컬 백업 삭제
+              ls -dt $BACKUP_DIR/code_* | tail -n +6 | xargs rm -rf || true
             else
               rollback
             fi
