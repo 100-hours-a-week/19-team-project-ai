@@ -1,6 +1,6 @@
 ---
 name: Bug report template
-about: Describe this issue template's purpose here.
+about: 버그 해결하기전에 만들 템플릿
 title: ''
 labels: AI, Sprint-Backlog
 assignees: gyur2
