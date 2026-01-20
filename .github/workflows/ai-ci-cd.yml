@@ -4,8 +4,8 @@ on:
   push:
     branches: [ main, develop ]
   pull_request:
-    types: [ opened, synchronize, reopened ]
     branches: [ develop ]
+    types: [ opened, synchronize, reopened ]
 
 jobs:
   # [CI 단계] 정적 분석 및 유닛 테스트
