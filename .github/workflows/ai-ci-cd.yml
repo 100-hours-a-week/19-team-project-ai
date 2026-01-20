@@ -67,7 +67,7 @@ jobs:
             BACKUP_DIR="/home/ubuntu/refit/backups/ai"
             TIMESTAMP=$(date +%Y%m%d%H%M%S)
             S3_BUCKET="${{ secrets.S3_BUCKET_NAME }}"
-            DB_NAME="${{ secrets.DB_NAME }}"
+            # DB_NAME="${{ secrets.DB_NAME }}"
             
             # --- 롤백 함수 정의 (실패 시 호출) ---
             rollback() {
@@ -77,10 +77,10 @@ jobs:
                 rm -rf "$AI_APP_DIR"
                 cp -r "$BACKUP_DIR/code_$TIMESTAMP" "$AI_APP_DIR"
               fi
-              # 2. DB 복구 (스냅샷 사용)
-              if [ -f "$BACKUP_DIR/db_snap_$TIMESTAMP.sql" ]; then
-                psql -h localhost -U postgres -d $DB_NAME < "$BACKUP_DIR/db_snap_$TIMESTAMP.sql"
-              fi
+              # 2. DB 복구 (스냅샷 사용) - DB 이슈 확인 전 임시 비활성화
+              # if [ -f "$BACKUP_DIR/db_snap_$TIMESTAMP.sql" ]; then
+              #   psql -h localhost -U postgres -d $DB_NAME < "$BACKUP_DIR/db_snap_$TIMESTAMP.sql"
+              # fi
               # 3. 서비스 복구
               sudo systemctl restart fastapi
               sudo truncate -s 0 /etc/caddy/maintenance.conf
@@ -95,11 +95,11 @@ jobs:
             sudo cp /etc/caddy/maintenance_pretty.conf /etc/caddy/maintenance.conf
             sudo systemctl reload caddy
 
-            # 6. [DB 스냅샷 & S3 업로드]
-            echo "DB 스냅샷 생성 중..."
+            # 6. [DB 스냅샷 & S3 업로드] - DB 이슈 확인 전 임시 비활성화
+            # echo "DB 스냅샷 생성 중..."
             mkdir -p $BACKUP_DIR
-            pg_dump -h localhost -U postgres $DB_NAME > "$BACKUP_DIR/db_snap_$TIMESTAMP.sql"
-            aws s3 cp "$BACKUP_DIR/db_snap_$TIMESTAMP.sql" "s3://$S3_BUCKET/ai/db-backups/"
+            # pg_dump -h localhost -U postgres $DB_NAME > "$BACKUP_DIR/db_snap_$TIMESTAMP.sql"
+            # aws s3 cp "$BACKUP_DIR/db_snap_$TIMESTAMP.sql" "s3://$S3_BUCKET/ai/db-backups/"
 
             # 7. [로컬 코드 백업]
             cp -r "$AI_APP_DIR" "$BACKUP_DIR/code_$TIMESTAMP"
