@@ -79,7 +79,7 @@ jobs:
               fi
               # 2. DB 복구 (스냅샷 사용)
               if [ -f "$BACKUP_DIR/db_snap_$TIMESTAMP.sql" ]; then
-                psql -d $DB_NAME < "$BACKUP_DIR/db_snap_$TIMESTAMP.sql"
+                psql -h localhost -U postgres -d $DB_NAME < "$BACKUP_DIR/db_snap_$TIMESTAMP.sql"
               fi
               # 3. 서비스 복구
               sudo systemctl restart fastapi
@@ -98,7 +98,7 @@ jobs:
             # 6. [DB 스냅샷 & S3 업로드]
             echo "DB 스냅샷 생성 중..."
             mkdir -p $BACKUP_DIR
-            pg_dump $DB_NAME > "$BACKUP_DIR/db_snap_$TIMESTAMP.sql"
+            pg_dump -h localhost -U postgres $DB_NAME > "$BACKUP_DIR/db_snap_$TIMESTAMP.sql"
             aws s3 cp "$BACKUP_DIR/db_snap_$TIMESTAMP.sql" "s3://$S3_BUCKET/ai/db-backups/"
 
             # 7. [로컬 코드 백업]
