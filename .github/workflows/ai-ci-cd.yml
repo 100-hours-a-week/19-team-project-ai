@@ -110,7 +110,7 @@ jobs:
             # 9. [의존성 설치 및 Systemd 재시작]
             cd "$AI_DIR"
             source venv/bin/activate
-            pip install -r "$AI_APP_DIR/requirements.txt" || rollback
+            pip install -r "$AI_APP_DIR/ai_app/requirements.txt" || rollback
             sudo systemctl restart fastapi
 
             # 10. [헬스 체크 및 롤백 결정]
