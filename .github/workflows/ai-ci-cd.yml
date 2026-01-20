@@ -92,7 +92,7 @@ jobs:
             echo "--- 배포 프로세스 시작 ($TIMESTAMP) ---"
 
             # 5. [Caddy 점검 페이지 ON]
-            sudo cp /home/ubuntu/refit/infra/caddy/pretty_maintenance.conf /etc/caddy/maintenance.conf
+            sudo cp /etc/caddy/maintenance_pretty.conf /etc/caddy/maintenance.conf
             sudo systemctl reload caddy
 
             # 6. [DB 스냅샷 & S3 업로드]
@@ -110,7 +110,13 @@ jobs:
             # 9. [의존성 설치 및 Systemd 재시작]
             cd "$AI_DIR"
             source venv/bin/activate
-            pip install -r "$AI_APP_DIR/ai_app/requirements.txt" || rollback
+            REQUIREMENTS_PATH="$AI_APP_DIR/requirements.txt"
+            if [ ! -f "$REQUIREMENTS_PATH" ]; then
+              REQUIREMENTS_PATH="$AI_APP_DIR/ai_app/requirements.txt"
+            fi
+            if [ -f "$REQUIREMENTS_PATH" ]; then
+              pip install -r "$REQUIREMENTS_PATH" || rollback
+            fi
             sudo systemctl restart fastapi
 
             # 10. [헬스 체크 및 롤백 결정]
