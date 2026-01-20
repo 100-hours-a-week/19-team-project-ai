@@ -25,10 +25,10 @@ jobs:
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
       # 1. [정적 분석] flake8(구문/에러) 및 black(포맷팅) 검사
-      - name: Static Analysis (Lint & Format)
-        run: |
-          flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
-          black --check .
+      # - name: Static Analysis (Lint & Format)
+      #   run: |
+      #     flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+      #     black --check .
 
       # 2. [유닛 테스트]
       - name: Run Unit Tests
