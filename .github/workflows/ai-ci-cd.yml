@@ -165,7 +165,6 @@ jobs:
           echo "Generated version: $VERSION"
       - name: Create Release Package
         run: |
-          mkdir -p dist
           pip install build
           python -m build --wheel
       - name: Upload Release Artifact
