@@ -2,10 +2,10 @@ name: Re-Fit AI Integrated CI/CD
 
 on:
   pull_request:
-    branches: [develop, main]
+    branches: [develop]
     types: [opened, synchronize, reopened]
   push:
-    branches: [develop, main]
+    branches: [feature/*, develop, main]
 
 env:
   PYTHON_VERSION: '3.11'
@@ -14,10 +14,9 @@ env:
 
 jobs:
   # ===========================================
-  # Feature/Chore/Hotfix PR 검증 (병렬 실행)
+  # CI 검증 (feature push, PR, develop/main push)
   # ===========================================
   lint:
-    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -33,7 +32,6 @@ jobs:
           mypy . --ignore-missing-imports || true
 
   test:
-    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -54,7 +52,6 @@ jobs:
           fi
 
   build-check:
-    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -95,42 +92,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   # ===========================================
-  # Develop 브랜치 통합 검증
-  # ===========================================
-  integration:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/develop'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-      - name: Install Dependencies
-        run: |
-          pip install pytest pytest-cov pytest-asyncio httpx
-          if [ -f ${{ env.WORKING_DIRECTORY }}/requirements.txt ]; then pip install -r ${{ env.WORKING_DIRECTORY }}/requirements.txt; fi
-      - name: Run All Tests
-        run: |
-          if [ -d "tests" ]; then
-            pytest tests/ -v --cov=${{ env.WORKING_DIRECTORY }} --cov-report=xml
-          elif [ -d "${{ env.WORKING_DIRECTORY }}/tests" ]; then
-            pytest ${{ env.WORKING_DIRECTORY }}/tests -v --cov=${{ env.WORKING_DIRECTORY }} --cov-report=xml
-          else
-            echo "No tests found"
-          fi
-      - name: Security Scan (Safety)
-        run: |
-          pip install safety
-          if [ -f ${{ env.WORKING_DIRECTORY }}/requirements.txt ]; then safety check -r ${{ env.WORKING_DIRECTORY }}/requirements.txt || true; fi
-        continue-on-error: true
-      - name: Security Scan (Bandit)
-        run: |
-          pip install bandit
-          bandit -r ${{ env.WORKING_DIRECTORY }}/ -ll
-        continue-on-error: true
-
-  # ===========================================
-  # Main 브랜치 릴리즈 빌드
+  # Main 브랜치 릴리즈 빌드 (CD)
   # ===========================================
   release:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -144,19 +106,6 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-      - name: Install Dependencies
-        run: |
-          pip install pytest pytest-cov pytest-asyncio httpx
-          if [ -f ${{ env.WORKING_DIRECTORY }}/requirements.txt ]; then pip install -r ${{ env.WORKING_DIRECTORY }}/requirements.txt; fi
-      - name: Run Full Tests
-        run: |
-          if [ -d "tests" ]; then
-            pytest tests/ -v --cov=${{ env.WORKING_DIRECTORY }} --cov-report=xml
-          elif [ -d "${{ env.WORKING_DIRECTORY }}/tests" ]; then
-            pytest ${{ env.WORKING_DIRECTORY }}/tests -v --cov=${{ env.WORKING_DIRECTORY }} --cov-report=xml
-          else
-            echo "No tests found"
-          fi
       - name: Get Version
         id: version
         run: |
