@@ -7,128 +7,173 @@ on:
     branches: [ develop ]
     types: [ opened, synchronize, reopened ]
 
+env:
+  PYTHON_VERSION: '3.10'
+  WORKING_DIRECTORY: 'refit/app/ai/ai_app'
+  SERVER_AI_DIR: '/home/ubuntu/refit/app/ai'
 jobs:
-  # [CI 단계] 정적 분석 및 유닛 테스트
-  ci-test:
+  # [CI 단계] 검증 및 품질 체크 (Lint, Test, Security)
+  verify:
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
       - uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.10'
+          python-version: ${{ env.PYTHON_VERSION}}
+          cache: 'pip'
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install flake8 black pytest
-          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          pip install ruff mypy pytest pytest-cov bandit safety
+          if [ -f ${{ env.WORKING_DIRECTORY }}/requirements.txt ]; then 
+          pip install -r ${{ env.WORKING_DIRECTORY }}/requirements.txt; fi
 
-      # 1. [정적 분석] flake8(구문/에러) 및 black(포맷팅) 검사
-      # - name: Static Analysis (Lint & Format)
-      #   run: |
-      #     flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
-      #     black --check .
+      # 1. [정적 분석] ruff(구문/에러) 및 mypy(타입 검사) 검사
+      - name: Run Ruff
+        run: |
+          ruff check .
+          ruff format --check .
 
-      # 2. [유닛 테스트]
+      # 2. [보안 스캔]
+      - name: Security Scan
+        run: |
+          safety check -r ${{ env.WORKING_DIRECTORY }}/requirements.txt || true
+          bandit -r ${{ env.WORKING_DIRECTORY }} -ll || true
+
+      # [Unit Test] 커버리지 포함
       - name: Run Unit Tests
-        run: pytest || echo "No tests found 또는  테스트 실패"
+        run: pytest ${{ env.WORKING_DIRECTORY }}/tests -v --cov=${{ env.WORKING_DIRECTORY }} --cov-report=xml
 
-  # [CD 단계] S3 백업, DB 스냅샷, 배포 및 자동 롤백
-  deploy:
-    needs: ci-test
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+      # [Artifact] 테스트 리포트 저장 (실패 시 3일 보관)
+      - name: Upload Test Report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-report-${{ github.sha }}
+          path: htmlcov/
+          retention-days: 3
+
+
+  # 2. SonarCloud 분석
+  sonar:
+    needs: verify
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      # 3. [S3 코드 백업] 배포될 최신 코드를 S3에 업로드
-      - name: Sync Code to S3
-        run: |
-          aws s3 sync . s3://${{ secrets.S3_BUCKET_NAME }}/ai/code/${{ github.sha }} --exclude ".git/*"
+        with:
+          fetch-depth: 0
+      - name: SonarCloud Scan
+        uses: SonarSource/sonarcloud-github-action@master
         env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_KEY }}
-          AWS_DEFAULT_REGION: ap-northeast-2
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # 4. [서버 배포] SSH를 통해 단일 명령어로 모든 배포 로직 실행
-      - name: Deploy to Server with Rollback
-        uses: appleboy/ssh-action@master
+        
+  # 3. Build 단계: Wheel 패키지 생성
+  build:
+    needs: verify
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Release Package
+        run: |
+          pip install build
+          python -m build --wheel ${{ env.WORKING_DIRECTORY }}
+
+      # [Aritifact] 릴리즈 빌드 저장 (항상 저장, 14일 보관)
+      - name: Upload Release Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai_app-wheel
+          path: ${{ env.WORKING_DIRECTORY }}/dist/*.whl
+          retention-days: 14
+  # 4. CD 단계: 서버 배포 및 서비스 재시작
+  deploy:
+    needs: build
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Build Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ai_app-wheel
+          path: ./dist
+
+      # [Code Deploy] SCP를 사용하여 서버에 패키지 전송
+      - name: Deploy Wheel to EC2
+        uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.HOST }}
           username: ${{ secrets.USER }}
           key: ${{ secrets.SSH_KEY }}
-          envs: GITHUB_SHA
+          source: "dist/*.whl"
+          target: "${{ env.DEPLOY_PATH }}"
+
+      # [Restart & Health Check]
+      - name: Execute Server Deploy with Rollback
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USER }}
+          key: ${{ secrets.SSH_KEY }}
+          envs: GITHUB_SHA, SERVER_AI_DIR
           script: |
-            # --- 변수 및 환경 설정 ---
-            AI_DIR="/home/ubuntu/refit/app/ai"
-            AI_APP_DIR="$AI_DIR/ai_app"
+            # --- 변수 설정 ---
+            AI_APP_DIR="$SERVER_AI_DIR/ai_app"
             BACKUP_DIR="/home/ubuntu/refit/backups/ai"
             TIMESTAMP=$(date +%Y%m%d%H%M%S)
-            S3_BUCKET="${{ secrets.S3_BUCKET_NAME }}"
-            # DB_NAME="${{ secrets.DB_NAME }}"
-            
-            # --- 롤백 함수 정의 (실패 시 호출) ---
+
+            # --- 롤백 함수 ---
             rollback() {
               echo "!!! 배포 실패: 자동 롤백을 시작합니다 !!!"
-              # 1. 코드 복구 (로컬 백업 사용)
               if [ -d "$BACKUP_DIR/code_$TIMESTAMP" ]; then
                 rm -rf "$AI_APP_DIR"
                 cp -r "$BACKUP_DIR/code_$TIMESTAMP" "$AI_APP_DIR"
               fi
-              # 2. DB 복구 (스냅샷 사용) - DB 이슈 확인 전 임시 비활성화
-              # if [ -f "$BACKUP_DIR/db_snap_$TIMESTAMP.sql" ]; then
-              #   psql -h localhost -U postgres -d $DB_NAME < "$BACKUP_DIR/db_snap_$TIMESTAMP.sql"
-              # fi
-              # 3. 서비스 복구
               sudo systemctl restart fastapi
               sudo truncate -s 0 /etc/caddy/maintenance.conf
               sudo systemctl reload caddy
               exit 1
             }
 
-            # --- 배포 시작 ---
-            echo "--- 배포 프로세스 시작 ($TIMESTAMP) ---"
-
-            # 5. [Caddy 점검 페이지 ON]
+            # 1. [Caddy 점검 페이지 ON]
             sudo cp /etc/caddy/maintenance_pretty.conf /etc/caddy/maintenance.conf
             sudo systemctl reload caddy
 
-            # 6. [DB 스냅샷 & S3 업로드] - DB 이슈 확인 전 임시 비활성화
-            # echo "DB 스냅샷 생성 중..."
+            # 2. [로컬 코드 백업]
             mkdir -p $BACKUP_DIR
-            # pg_dump -h localhost -U postgres $DB_NAME > "$BACKUP_DIR/db_snap_$TIMESTAMP.sql"
-            # aws s3 cp "$BACKUP_DIR/db_snap_$TIMESTAMP.sql" "s3://$S3_BUCKET/ai/db-backups/"
-
-            # 7. [로컬 코드 백업]
             if [ -d "$AI_APP_DIR" ]; then
               cp -r "$AI_APP_DIR" "$BACKUP_DIR/code_$TIMESTAMP"
             fi
 
-            # 8. [소스 업데이트] S3에서 최신 아티팩트 가져오기
-            aws s3 sync "s3://$S3_BUCKET/ai/code/$GITHUB_SHA/ai_app" "$AI_APP_DIR" --delete || rollback
-
-            # 9. [의존성 설치 및 Systemd 재시작]
-            cd "$AI_DIR"
+            # 3. [패키지 설치 및 업데이트]
+            cd $SERVER_AI_DIR
             source venv/bin/activate
-            REQUIREMENTS_PATH="$AI_APP_DIR/requirements.txt"
-            if [ -f "$REQUIREMENTS_PATH" ]; then
-              pip install -r "$REQUIREMENTS_PATH" || rollback
-            fi
+            # 전송된 wheel 파일을 사용하여 강제 재설치
+            pip install ./deploy_temp/dist/*.whl --force-reinstall || rollback
+            rm -rf ./deploy_temp/dist/*.whl
+
+            # 4. [서비스 재시작]
             sudo systemctl restart fastapi
 
-            # 10. [헬스 체크 및 롤백 결정]
+            # 5. [헬스 체크] 5회 재시도
             echo "최종 확인 중..."
-            sleep 2
-            HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/health || echo "000")
-
-            if [ "$HTTP_STATUS" = "200" ]; then
-              echo "--- 배포 성공! 점검 페이지를 해제합니다 ---"
-              sudo truncate -s 0 /etc/caddy/maintenance.conf
-              sudo systemctl reload caddy
-              # 서버 용량 관리를 위해 5개 이상의 오래된 로컬 백업 삭제
-              ls -dt $BACKUP_DIR/code_* | tail -n +6 | xargs rm -rf || true
-            else
-              rollback
-            fi
+            for i in {1..5}; do
+              sleep 5
+              HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/health || echo "000")
+              if [ "$HTTP_STATUS" = "200" ]; then
+                echo "--- 배포 성공! 점검 페이지 해제 ---"
+                sudo truncate -s 0 /etc/caddy/maintenance.conf
+                sudo systemctl reload caddy
+                ls -dt $BACKUP_DIR/code_* | tail -n +6 | xargs rm -rf || true
+                exit 0
+              fi
+              echo "Health check 시도 중... ($i/5)"
+            done
+            rollback
