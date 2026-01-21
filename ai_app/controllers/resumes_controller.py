@@ -38,20 +38,19 @@ class ResumesController:
         # 경력 여부로 신입 판단 
         is_fresher = len(fields.work_experience) == 0 if fields else True
 
-        # 학력 수준 추출
+        # 학력 수준 추출 (첫번째 학력에서)
         education_level = None
         if fields and fields.education:
-            degrees = [edu.degree for edu in fields.education if edu.degree]
-            if degrees:
-                education_level = degrees[0]
+            education_level = fields.education[0] if fields.education else None
 
         # content_json 구성
         content_json = ContentJson(
             careers=[exp.model_dump() for exp in (fields.work_experience if fields else [])],
             projects=[proj.model_dump() for proj in (fields.projects if fields else [])],
+            education=fields.education if fields else [],
             awards=fields.awards if fields else [],
-            certificates=[cert.model_dump() for cert in (fields.certifications if fields else [])],
-            activities=[],
+            certificates=fields.certifications if fields else [],
+            activities=fields.etc if fields else [],
         )
 
         # 원본 텍스트 발췌 (500자 제한)

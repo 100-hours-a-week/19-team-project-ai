@@ -90,7 +90,19 @@ class LLMClient:
             generation_config=generation_config,
         )
 
-        return json.loads(response.text)
+        # 마크다운 코드 블록 제거 (```json ... ``` 또는 ``` ... ```)
+        text = response.text.strip()
+        if text.startswith("```"):
+            # 첫 번째 줄 제거 (```json 또는 ```)
+            lines = text.split("\n")
+            if lines[0].startswith("```"):
+                lines = lines[1:]
+            # 마지막 ``` 제거
+            if lines and lines[-1].strip() == "```":
+                lines = lines[:-1]
+            text = "\n".join(lines)
+
+        return json.loads(text)
 
 
 # Singleton instance

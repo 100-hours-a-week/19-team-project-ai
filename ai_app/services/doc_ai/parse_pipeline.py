@@ -19,71 +19,36 @@ logger = logging.getLogger(__name__)
 # ============== 내부 필드 스키마 (LLM 추출용) ==============
 
 
-class PersonalInfo(BaseModel):
-    """개인 정보 (PII 마스킹 대상)"""
-
-    name: str | None = Field(default=None, description="이름")
-    email: str | None = Field(default=None, description="이메일")
-    phone: str | None = Field(default=None, description="전화번호")
-    address: str | None = Field(default=None, description="주소")
-    gender: str | None = Field(default=None, description="성별")
-
-
-class Education(BaseModel):
-    """학력 정보"""
-
-    institution: str | None = Field(default=None, description="학교명")
-    degree: str | None = Field(default=None, description="학위")
-    major: str | None = Field(default=None, description="전공")
-    start_date: str | None = Field(default=None, description="시작일")
-    end_date: str | None = Field(default=None, description="종료일")
-    gpa: str | None = Field(default=None, description="학점")
-
-
 class WorkExperience(BaseModel):
     """경력 정보"""
 
     company: str | None = Field(default=None, description="회사명")
-    position: str | None = Field(default=None, description="직책")
+    position: str | None = Field(default=None, description="직책 (팀장, 시니어 엔지니어 등)")
+    job: str | None = Field(default=None, description="직무 (서버 개발자, 프론트엔드 개발자 등)")
     start_date: str | None = Field(default=None, description="시작일")
     end_date: str | None = Field(default=None, description="종료일")
     description: str | None = Field(default=None, description="업무 설명")
-    achievements: list[str] = Field(default_factory=list, description="주요 성과")
 
 
 class Project(BaseModel):
     """프로젝트 정보"""
 
     name: str | None = Field(default=None, description="프로젝트명")
-    role: str | None = Field(default=None, description="역할")
     start_date: str | None = Field(default=None, description="시작일")
     end_date: str | None = Field(default=None, description="종료일")
-    description: str | None = Field(default=None, description="설명")
-    tech_stack: list[str] = Field(default_factory=list, description="기술 스택")
+    description: str | None = Field(default=None, description="설명 (역할, 성과 포함)")
 
-
-class Certification(BaseModel):
-    """자격증 정보"""
-
-    name: str = Field(..., description="자격증명")
-    issuer: str | None = Field(default=None, description="발급 기관")
-    date: str | None = Field(default=None, description="취득일")
-    expiry_date: str | None = Field(default=None, description="만료일")
-
-class Extra(BaseModel):
-    """기타 정보"""
-    description: str | None = Field(default=None, description="설명")
 
 class ExtractedFields(BaseModel):
     """추출된 이력서 필드 전체"""
 
-    personal_info: PersonalInfo = Field(default_factory=PersonalInfo)
+    title: str | None = Field(default=None, description="이력서 제목 (15자 이내)")
     work_experience: list[WorkExperience] = Field(default_factory=list, description="경력")
     projects: list[Project] = Field(default_factory=list, description="프로젝트")
-    education: list[Education] = Field(default_factory=list, description="학력")
+    education: list[str] = Field(default_factory=list, description="학력 (OO대학교 졸업)")
     awards: list[str] = Field(default_factory=list, description="수상 내역")
-    certifications: list[Certification] = Field(default_factory=list, description="자격증")
-    etc: list[Extra] = Field(default_factory=list, description="대외 활동/기타")
+    certifications: list[str] = Field(default_factory=list, description="자격증 (자격증명 (YYYY))")
+    etc: list[str] = Field(default_factory=list, description="대외 활동/기타")
 
 # ============== 파싱 결과 ==============
 
@@ -278,9 +243,7 @@ class ParsePipeline:
             model_used = "gemini-2.0-flash"
             logger.info("3단계 LLM 필드 추출 완료")
             logger.info(f"  - 사용 모델: {model_used}")
-            logger.info(f"  - 이름: {extracted_fields.personal_info.name}")
-            logger.info(f"  - 이메일: {extracted_fields.personal_info.email}")
-            logger.info(f"  - 전화번호: {extracted_fields.personal_info.phone}")
+            logger.info(f"  - 제목: {extracted_fields.title}")
             logger.info(f"  - 학력 수: {len(extracted_fields.education)}개")
             logger.info(f"  - 경력 수: {len(extracted_fields.work_experience)}개")
             logger.info(f"  - 프로젝트 수: {len(extracted_fields.projects)}개")
@@ -324,27 +287,11 @@ class ParsePipeline:
         """
         개인 식별 정보 마스킹
 
-        참고: 간단한 구현입니다. 전체 PII 마스킹은
-        텍스트용 Presidio와 시각 콘텐츠용 VLM을 사용합니다.
+        참고: PII는 이미 Presidio를 통해 텍스트 레벨에서 마스킹됨.
+        이 함수는 추가적인 필드 레벨 마스킹이 필요할 때 사용.
         """
-        masked_fields = fields.model_copy(deep=True)
-
-        # 개인 정보 마스킹
-        if masked_fields.personal_info:
-            pi = masked_fields.personal_info
-            if pi.email:
-                parts = pi.email.split("@")
-                if len(parts) == 2:
-                    pi.email = f"{parts[0][:2]}***@{parts[1]}"
-            if pi.phone:
-                if len(pi.phone) >= 7:
-                    pi.phone = pi.phone[:3] + "-****-" + pi.phone[-4:]
-                else:
-                    pi.phone = "***-****-****"
-            if pi.address:
-                pi.address = "[주소 마스킹됨]"
-
-        return masked_fields
+        # personal_info가 제거되어 현재는 추가 마스킹 불필요
+        return fields.model_copy(deep=True)
 
     def _calculate_confidence(self, fields: ExtractedFields) -> float:
         """
@@ -354,11 +301,9 @@ class ParsePipeline:
         """
         scores = []
 
-        # 개인 정보 완성도 (15%)
-        pi = fields.personal_info
-        pi_fields = [pi.name, pi.email, pi.phone]
-        pi_score = sum(1 for f in pi_fields if f) / len(pi_fields)
-        scores.append(pi_score * 0.15)
+        # 제목 완성도 (15%)
+        title_score = 1.0 if fields.title else 0.0
+        scores.append(title_score * 0.15)
 
         # 학력 완성도 (20%)
         if fields.education:

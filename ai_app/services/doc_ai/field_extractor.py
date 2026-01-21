@@ -3,84 +3,8 @@
 from typing import Any
 
 from adapters.llm_client import LLMClient, get_llm_client
+from prompts import get_resume_extraction_prompts
 from services.doc_ai.pdf_parser import ParsedDocument
-
-
-EXTRACTION_SYSTEM_PROMPT = """You are an expert resume parser. Your task is to extract structured information from resume text.
-
-IMPORTANT RULES:
-1. Extract information exactly as written - do not infer or fabricate data
-2. For dates, normalize to YYYY-MM format when possible, or YYYY if only year is given
-3. If information is not present, use null or empty arrays
-4. Preserve the original language (Korean or English)
-5. Be precise with company names, job titles, and educational institutions
-
-OUTPUT FORMAT:
-Return a valid JSON object matching the specified schema exactly."""
-
-EXTRACTION_USER_PROMPT = """Extract all relevant information from the following resume text and return it as a structured JSON.
-
-Resume Text:
----
-{resume_text}
----
-
-Return the extracted information as JSON with this structure:
-{{
-    "personal_info": {{
-        "name": "string or null",
-        "email": "string or null",
-        "phone": "string or null",
-        "address": "string or null",
-        "gender": "string or null"
-    }},
-    "work_experience": [
-        {{
-            "company": "회사명",
-            "position": "직책/직무",
-            "start_date": "YYYY-MM or YYYY or null",
-            "end_date": "YYYY-MM or YYYY or 'Present' or null",
-            "description": "업무 설명",
-            "achievements": ["주요 성과"]
-        }}
-    ],
-    "projects": [
-        {{
-            "name": "프로젝트명",
-            "role": "역할 or null",
-            "start_date": "YYYY-MM or YYYY or null",
-            "end_date": "YYYY-MM or YYYY or null",
-            "description": "프로젝트 설명",
-            "tech_stack": ["사용 기술"]
-        }}
-    ],
-    "education": [
-        {{
-            "institution": "학교명",
-            "degree": "학위 or null",
-            "major": "전공 or null",
-            "start_date": "YYYY-MM or YYYY or null",
-            "end_date": "YYYY-MM or YYYY or null",
-            "gpa": "학점 or null"
-        }}
-    ],
-    "awards": ["수상 내역 텍스트"],
-    "certifications": [
-        {{
-            "name": "자격증명",
-            "issuer": "발급 기관 or null",
-            "date": "취득일 or null",
-            "expiry_date": "만료일 or null"
-        }}
-    ],
-    "etc": [
-        {{
-            "description": "대외 활동/기타 내용"
-        }}
-    ]
-}}
-
-Extract and return the JSON:"""
 
 
 class FieldExtractor:
@@ -120,15 +44,25 @@ class FieldExtractor:
         else:
             resume_text = parsed_doc.full_text
 
-        # 추출 프롬프트 생성
-        user_prompt = EXTRACTION_USER_PROMPT.format(resume_text=resume_text)
+        # 외부 파일에서 프롬프트 로드
+        system_prompt, user_prompt_template = get_resume_extraction_prompts()
+        user_prompt = user_prompt_template.format(resume_text=resume_text)
 
         # LLM 호출하여 추출
-        raw_response = await self.llm_client.generate_json(
-            prompt=user_prompt,
-            system_instruction=EXTRACTION_SYSTEM_PROMPT,
-            temperature=0.1,
-        )
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        try:
+            raw_response = await self.llm_client.generate_json(
+                prompt=user_prompt,
+                system_instruction=system_prompt,
+                temperature=0.1,
+            )
+            logger.info(f"LLM 응답 타입: {type(raw_response)}")
+            logger.info(f"LLM 응답 키: {raw_response.keys() if isinstance(raw_response, dict) else 'N/A'}")
+        except Exception as e:
+            logger.error(f"LLM 호출 에러: {e}")
+            raise
 
         # 응답 파싱 및 검증
         extracted = self._parse_response(raw_response, ExtractedFields)
@@ -167,7 +101,7 @@ class FieldExtractor:
         except Exception:
             # 검증 실패 시 부분 추출 시도
             return extracted_fields_cls(
-                personal_info=self._safe_get(raw_response, "personal_info", {}),
+                title=raw_response.get("title"),
                 work_experience=self._safe_get_list(raw_response, "work_experience"),
                 projects=self._safe_get_list(raw_response, "projects"),
                 education=self._safe_get_list(raw_response, "education"),
