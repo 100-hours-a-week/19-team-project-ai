@@ -1,5 +1,10 @@
 """FastAPI Application Configuration with Router includes and Middleware."""
 
+from dotenv import load_dotenv
+
+# .env 파일에서 환경변수 로드 (다른 임포트보다 먼저 실행)
+load_dotenv()
+
 import logging
 
 from fastapi import FastAPI
