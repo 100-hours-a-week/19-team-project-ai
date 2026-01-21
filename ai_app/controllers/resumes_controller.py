@@ -8,8 +8,7 @@ from fastapi import HTTPException
 from schemas.common import ErrorDetail, ResponseCode
 from schemas.resumes import (
     ContentJson,
-    ResumeGetData,
-    ResumeParseData,
+    ResumeData,
     ResumeParseRequest,
     ResumeResult,
     ResumeStatus,
@@ -45,12 +44,12 @@ class ResumesController:
 
         # content_json 구성
         content_json = ContentJson(
-            careers=[exp.model_dump() for exp in (fields.work_experience if fields else [])],
-            projects=[proj.model_dump() for proj in (fields.projects if fields else [])],
+            work_experience=fields.work_experience if fields else [],
+            projects=fields.projects if fields else [],
             education=fields.education if fields else [],
             awards=fields.awards if fields else [],
-            certificates=fields.certifications if fields else [],
-            activities=fields.etc if fields else [],
+            certifications=fields.certifications if fields else [],
+            etc=fields.etc if fields else [],
         )
 
         # 원본 텍스트 발췌 (500자 제한)
@@ -72,7 +71,7 @@ class ResumesController:
         self,
         resume_id: int,
         request: ResumeParseRequest,
-    ) -> ResumeParseData:
+    ) -> ResumeData:
         """
         이력서 추출 파이프라인 실행
 
@@ -81,7 +80,7 @@ class ResumesController:
             request: 파싱 요청 정보
 
         Returns:
-            ResumeParseData: 파싱 결과
+            ResumeData: 파싱 결과
         """
         # PDF 다운로드
         try:
@@ -111,7 +110,7 @@ class ResumesController:
         if result.success:
             # 성공: 결과 변환 및 저장
             resume_result = self._convert_to_resume_result(result)
-            response_data = ResumeParseData(
+            response_data = ResumeData(
                 resume_id=resume_id,
                 status=ResumeStatus.COMPLETED,
                 result=resume_result,
@@ -120,7 +119,7 @@ class ResumesController:
         else:
             # 실패: 에러 정보 저장
             error_code = "OCR_REQUIRED" if result.needs_ocr else "EXTRACTION_FAILED"
-            response_data = ResumeParseData(
+            response_data = ResumeData(
                 resume_id=resume_id,
                 status=ResumeStatus.FAILED,
                 result=None,
@@ -137,7 +136,7 @@ class ResumesController:
         resume_id: int,
         pdf_bytes: bytes,
         enable_pii_masking: bool = True,
-    ) -> ResumeParseData:
+    ) -> ResumeData:
         """
         [임시] PDF bytes에서 직접 이력서 추출 파이프라인 실행
 
@@ -147,7 +146,7 @@ class ResumesController:
             enable_pii_masking: PII 마스킹 활성화 여부
 
         Returns:
-            ResumeParseData: 파싱 결과
+            ResumeData: 파싱 결과
         """
         # PDF 파싱 및 필드 추출
         result = await self.parse_pipeline.parse_bytes(
@@ -158,7 +157,7 @@ class ResumesController:
         if result.success:
             # 성공: 결과 변환 및 저장
             resume_result = self._convert_to_resume_result(result)
-            response_data = ResumeParseData(
+            response_data = ResumeData(
                 resume_id=resume_id,
                 status=ResumeStatus.COMPLETED,
                 result=resume_result,
@@ -167,7 +166,7 @@ class ResumesController:
         else:
             # 실패: 에러 정보 저장
             error_code = "OCR_REQUIRED" if result.needs_ocr else "EXTRACTION_FAILED"
-            response_data = ResumeParseData(
+            response_data = ResumeData(
                 resume_id=resume_id,
                 status=ResumeStatus.FAILED,
                 result=None,
@@ -179,7 +178,7 @@ class ResumesController:
 
         return response_data
 
-    async def get_resume(self, resume_id: int) -> ResumeGetData:
+    async def get_resume(self, resume_id: int) -> ResumeData:
         """
         이력서 추출 결과 조회
 
@@ -187,7 +186,7 @@ class ResumesController:
             resume_id: 이력서 ID
 
         Returns:
-            ResumeGetData: 이력서 상태 및 결과
+            ResumeData: 이력서 상태 및 결과
         """
         stored = self._resume_store.get(resume_id)
 
@@ -197,7 +196,7 @@ class ResumesController:
                 detail={"code": ResponseCode.NOT_FOUND.value, "data": {"resource": "resume", "id": resume_id}},
             )
 
-        return ResumeGetData(**stored)
+        return ResumeData(**stored)
 
 
 # 싱글톤 인스턴스

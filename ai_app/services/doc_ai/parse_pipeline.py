@@ -8,6 +8,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from schemas.resumes import Project, WorkExperience
 from services.doc_ai.field_extractor import FieldExtractor
 from services.doc_ai.pdf_parser import PDFParser
 from services.doc_ai.pii_masker import PIIMasker, get_pii_masker
@@ -16,27 +17,7 @@ from services.doc_ai.pii_masker import PIIMasker, get_pii_masker
 logger = logging.getLogger(__name__)
 
 
-# ============== 내부 필드 스키마 (LLM 추출용) ==============
-
-
-class WorkExperience(BaseModel):
-    """경력 정보"""
-
-    company: str | None = Field(default=None, description="회사명")
-    position: str | None = Field(default=None, description="직책 (팀장, 시니어 엔지니어 등)")
-    job: str | None = Field(default=None, description="직무 (서버 개발자, 프론트엔드 개발자 등)")
-    start_date: str | None = Field(default=None, description="시작일")
-    end_date: str | None = Field(default=None, description="종료일")
-    description: str | None = Field(default=None, description="업무 설명")
-
-
-class Project(BaseModel):
-    """프로젝트 정보"""
-
-    name: str | None = Field(default=None, description="프로젝트명")
-    start_date: str | None = Field(default=None, description="시작일")
-    end_date: str | None = Field(default=None, description="종료일")
-    description: str | None = Field(default=None, description="설명 (역할, 성과 포함)")
+# ============== LLM 추출 결과 스키마 ==============
 
 
 class ExtractedFields(BaseModel):

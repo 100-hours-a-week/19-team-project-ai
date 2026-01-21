@@ -68,7 +68,7 @@ Return the extracted information as JSON object (without markdown code blocks) w
     ],
     "projects": [
         {{
-            "name": "프로젝트명",
+            "title": "프로젝트명",
             "start_date": "YYYY-MM or YYYY or null",
             "end_date": "YYYY-MM or YYYY or null",
             "description": "프로젝트 설명 (역할, 성과 포함)"

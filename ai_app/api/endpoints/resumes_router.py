@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, File, UploadFile, HTTPException
 from controllers.resumes_controller import ResumesController, get_resumes_controller
 from schemas.common import ApiResponse, ResponseCode
 from schemas.resumes import (
-    ResumeParseData,
+    ResumeData,
     ResumeParseRequest,
     ResumeUploadData,
 )
@@ -74,7 +74,7 @@ async def upload_resume(
 
 @router.post(
     "/{resume_id}/parse",
-    response_model=ApiResponse[ResumeParseData],
+    response_model=ApiResponse[ResumeData],
     summary="이력서 추출 파이프라인 실행",
     description="업로드된 PDF 파일에서 이력서 정보를 추출합니다.",
     responses={
@@ -87,7 +87,7 @@ async def parse_resume(
     resume_id: int,
     enable_pii_masking: bool = True,
     controller: ResumesController = Depends(get_resumes_controller),
-) -> ApiResponse[ResumeParseData]:
+) -> ApiResponse[ResumeData]:
     """이력서 추출 실행 - 업로드된 파일 사용"""
     # 업로드된 파일 확인
     file_path = _uploaded_files.get(resume_id)

@@ -14,15 +14,38 @@ class ResumeStatus(str, Enum):
     FAILED = "FAILED"
 
 
+# ============== 추출 필드 모델 ==============
+
+
+class WorkExperience(BaseModel):
+    """경력 정보"""
+
+    company: str | None = Field(default=None, description="회사명")
+    position: str | None = Field(default=None, description="직책 (팀장, 시니어 엔지니어 등)")
+    job: str | None = Field(default=None, description="직무 (서버 개발자, 프론트엔드 개발자 등)")
+    start_date: str | None = Field(default=None, description="시작일")
+    end_date: str | None = Field(default=None, description="종료일")
+    description: str | None = Field(default=None, description="업무 설명")
+
+
+class Project(BaseModel):
+    """프로젝트 정보"""
+
+    title: str | None = Field(default=None, description="프로젝트명")
+    start_date: str | None = Field(default=None, description="시작일")
+    end_date: str | None = Field(default=None, description="종료일")
+    description: str | None = Field(default=None, description="설명 (역할, 성과 포함)")
+
+
 class ContentJson(BaseModel):
     """추출된 이력서 콘텐츠 구조"""
 
-    careers: list[dict] = Field(default_factory=list, description="주요 경력 (회사명, 기간, 직무, 직책)")
-    projects: list[dict] = Field(default_factory=list, description="주요 프로젝트 (이름, 기간, 설명)")
+    work_experience: list[WorkExperience] = Field(default_factory=list, description="주요 경력")
+    projects: list[Project] = Field(default_factory=list, description="주요 프로젝트")
     education: list[str] = Field(default_factory=list, description="학력 (텍스트)")
     awards: list[str] = Field(default_factory=list, description="수상 내역 (텍스트)")
-    certificates: list[str] = Field(default_factory=list, description="자격증 (텍스트)")
-    activities: list[str] = Field(default_factory=list, description="대외 활동/기타 (텍스트)")
+    certifications: list[str] = Field(default_factory=list, description="자격증 (텍스트)")
+    etc: list[str] = Field(default_factory=list, description="대외 활동/기타 (텍스트)")
 
 
 class ResumeResult(BaseModel):
@@ -41,17 +64,8 @@ class ResumeParseRequest(BaseModel):
     enable_pii_masking: bool = Field(default=True, description="PII 마스킹 활성화 여부")
 
 
-class ResumeParseData(BaseModel):
-    """POST /resumes/{resume_id}/parse 응답 데이터"""
-
-    resume_id: int = Field(..., description="이력서 ID")
-    status: ResumeStatus = Field(..., description="처리 상태")
-    result: ResumeResult | None = Field(default=None, description="추출 결과 (완료 시)")
-    error: ErrorDetail | None = Field(default=None, description="에러 정보 (실패 시)")
-
-
-class ResumeGetData(BaseModel):
-    """GET /resumes/{resume_id} 응답 데이터"""
+class ResumeData(BaseModel):
+    """이력서 응답 데이터 (파싱/조회 공통)"""
 
     resume_id: int = Field(..., description="이력서 ID")
     status: ResumeStatus = Field(..., description="처리 상태")
