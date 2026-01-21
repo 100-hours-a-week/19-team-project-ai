@@ -194,7 +194,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: ai-service-${{ needs.release.outputs.version }}
-          path: ./dist
+          path: ./
 
       - name: Deploy Wheel to EC2
         uses: appleboy/scp-action@v0.1.7
@@ -226,39 +226,31 @@ jobs:
                 cp -r "$BACKUP_DIR/code_$TIMESTAMP" "$AI_APP_DIR"
               fi
               sudo systemctl restart fastapi
-              sudo truncate -s 0 /etc/caddy/maintenance.conf
-              sudo systemctl reload caddy
               exit 1
             }
 
-            # 1. [Caddy 점검 페이지 ON]
-            sudo cp /etc/caddy/maintenance_pretty.conf /etc/caddy/maintenance.conf
-            sudo systemctl reload caddy
-
-            # 2. [로컬 코드 백업]
+            # 1. [로컬 코드 백업]
             mkdir -p $BACKUP_DIR
             if [ -d "$AI_APP_DIR" ]; then
               cp -r "$AI_APP_DIR" "$BACKUP_DIR/code_$TIMESTAMP"
             fi
 
-            # 3. [패키지 설치 및 업데이트]
+            # 2. [패키지 설치 및 업데이트]
             cd $SERVER_AI_DIR
             source venv/bin/activate
             pip install ./deploy_temp/dist/*.whl --force-reinstall || rollback
             rm -rf ./deploy_temp
 
-            # 4. [서비스 재시작]
+            # 3. [서비스 재시작]
             sudo systemctl restart fastapi
 
-            # 5. [헬스 체크] 5회 재시도
+            # 4. [헬스 체크] 5회 재시도
             echo "최종 확인 중..."
             for i in {1..5}; do
               sleep 5
               HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/health || echo "000")
               if [ "$HTTP_STATUS" = "200" ]; then
-                echo "--- 배포 성공! 점검 페이지 해제 ---"
-                sudo truncate -s 0 /etc/caddy/maintenance.conf
-                sudo systemctl reload caddy
+                echo "--- 배포 성공! ---"
                 ls -dt $BACKUP_DIR/code_* | tail -n +6 | xargs rm -rf || true
                 exit 0
               fi
