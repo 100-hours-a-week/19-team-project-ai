@@ -116,11 +116,11 @@ jobs:
             # 1. 디렉토리 준비
             mkdir -p $BACKUP_DIR $LOG_DIR
             
-            # 2. 환경 변수 체크
+            # 2. 환경 변수 체크 (선택사항)
             if [ ! -f "$SERVER_AI_DIR/.env" ]; then
-              echo "에러: .env 파일이 없습니다. 배포를 중단합니다."
-              rm -rf $TEMP_DIR
-              exit 1
+              echo "⚠️  .env 파일이 없습니다. (환경 변수 미사용 시 정상)"
+            else
+              echo "✅ .env 파일 확인됨"
             fi
             
             # 3. 전송된 파일 검증
