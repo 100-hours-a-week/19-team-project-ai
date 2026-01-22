@@ -2,7 +2,7 @@
 name: Bug report template
 about: 버그 해결하기전에 만들 템플릿
 title: ''
-labels: AI, Sprint-Backlog
+labels: ''
 assignees: gyur2
 
 ---

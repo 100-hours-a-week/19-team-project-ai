@@ -2,7 +2,7 @@
 name: issue template
 about: '이슈리포트 '
 title: ''
-labels: AI, Sprint-Backlog
+labels: ''
 assignees: gyur2
 
 ---
