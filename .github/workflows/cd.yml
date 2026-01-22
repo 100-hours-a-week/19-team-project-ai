@@ -1,0 +1,190 @@
+name: Re-Fit AI CD
+
+on:
+  workflow_run:
+    workflows: ['Re-Fit AI CI']
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  PYTHON_VERSION: '3.11'
+  SERVER_AI_DIR: '/home/ubuntu/refit/app/ai'
+
+jobs:
+  deploy:
+    # CI가 성공했을 때만 실행
+    if: |
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success') ||
+      github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    
+    steps:
+      # ===========================================
+      # 1. Artifact 다운로드
+      # ===========================================
+      - name: Download Wheel Package
+        uses: actions/download-artifact@v4
+        with:
+          name: ai-wheel-${{ github.event.workflow_run.head_sha || github.sha }}
+          path: build-output/dist
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ github.event.workflow_run.id }}
+      
+      - name: Download Deployment Files
+        uses: actions/download-artifact@v4
+        with:
+          name: ai-deploy-files-${{ github.event.workflow_run.head_sha || github.sha }}
+          path: build-output
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ github.event.workflow_run.id }}
+      
+      # ===========================================
+      # 2. 다운로드 파일 검증
+      # ===========================================
+      - name: Verify Downloaded Files
+        run: |
+          echo "=== Verifying downloaded files ==="
+          ls -la build-output/
+          
+          if [ -d "build-output/dist" ] && [ -n "$(ls -A build-output/dist/*.whl 2>/dev/null)" ]; then
+            echo "Wheel package found"
+            ls -lh build-output/dist/
+          else
+            echo "Wheel package not found"
+            exit 1
+          fi
+          
+          if [ -f "build-output/ai_app/requirements.txt" ]; then
+            echo "requirements.txt found"
+          else
+            echo "requirements.txt not found"
+            exit 1
+          fi
+      
+      # ===========================================
+      # 3. 서버로 파일 전송 (SCP)
+      # ===========================================
+      - name: Transfer Wheel to Server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USER }}
+          key: ${{ secrets.SSH_KEY }}
+          source: 'build-output/dist/*.whl'
+          target: '${{ env.SERVER_AI_DIR }}/deploy_temp'
+          strip_components: 2
+      
+      # ===========================================
+      # 4. 배포 실행 (SSH)
+      # ===========================================
+      - name: Execute Remote Deployment Script
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USER }}
+          key: ${{ secrets.SSH_KEY }}
+          envs: SERVER_AI_DIR
+          script: |
+            set -e
+            
+            # --- 변수 설정 ---
+            AI_APP_DIR="$SERVER_AI_DIR/ai_app"
+            BACKUP_DIR="/home/ubuntu/refit/backups/ai"
+            LOG_DIR="/home/ubuntu/refit/logs/ai"
+            TEMP_DIR="$SERVER_AI_DIR/deploy_temp"
+            TIMESTAMP=$(date +%Y%m%d%H%M%S)
+            
+            echo "============================================"
+            echo "Re-Fit AI 배포 시작: $(date)"
+            echo "============================================"
+            
+            # --- 롤백 함수 ---
+            rollback() {
+              echo "!!! 배포 실패: 자동 롤백을 시작합니다 !!!"
+              if [ -d "$BACKUP_DIR/code_$TIMESTAMP" ]; then
+                rm -rf "$AI_APP_DIR"
+                cp -r "$BACKUP_DIR/code_$TIMESTAMP" "$AI_APP_DIR"
+                echo "코드 롤백 완료"
+              fi
+              pm2 reload ai-service --update-env
+              echo "배포 실패 - 이전 버전으로 복구되었습니다."
+              rm -rf $TEMP_DIR
+              exit 1
+            }
+            
+            # 1. 디렉토리 준비
+            mkdir -p $BACKUP_DIR $LOG_DIR
+            
+            # 2. 환경 변수 체크
+            if [ ! -f "$SERVER_AI_DIR/.env" ]; then
+              echo "에러: .env 파일이 없습니다. 배포를 중단합니다."
+              rm -rf $TEMP_DIR
+              exit 1
+            fi
+            
+            # 3. 전송된 파일 검증
+            if [ ! -f "$TEMP_DIR"/*.whl ]; then
+              echo "에러: Wheel 패키지가 전송되지 않았습니다."
+              rm -rf $TEMP_DIR
+              exit 1
+            fi
+            
+            # 4. 백업 (기존 ai_app)
+            if [ -d "$AI_APP_DIR" ]; then
+              echo "기존 코드 백업 중..."
+              cp -r "$AI_APP_DIR" "$BACKUP_DIR/code_$TIMESTAMP"
+              echo "백업 완료: $BACKUP_DIR/code_$TIMESTAMP"
+            fi
+            
+            # 5. 패키지 설치 및 업데이트
+            echo "새 패키지 설치 중..."
+            cd $SERVER_AI_DIR
+            source venv/bin/activate
+            
+            pip install "$TEMP_DIR"/*.whl --force-reinstall || rollback
+            
+            echo "패키지 설치 완료"
+            
+            # 6. 임시 디렉토리 정리
+            rm -rf $TEMP_DIR
+            
+            # 7. PM2 무중단 재시작
+            echo "AI 서비스 무중단 재시작 중..."
+            PM2_CONFIG="/home/ubuntu/refit/infra/pm2/ecosystem.ai.config.js"
+            
+            if pm2 describe ai-service > /dev/null 2>&1; then
+              echo "기존 프로세스 무중단 재시작 (Reload)..."
+              pm2 reload ai-service --update-env
+            else
+              echo "신규 프로세스 시작..."
+              pm2 start $PM2_CONFIG --env production
+            fi
+            
+            # 8. 배포 검증 (헬스 체크 - 5회 재시도)
+            echo "배포 검증 중..."
+            for i in {1..5}; do
+              sleep 5
+              HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/health 2>/dev/null || echo "000")
+              
+              if [ "$HTTP_STATUS" = "200" ]; then
+                echo "배포 성공! (HTTP $HTTP_STATUS)"
+                
+                # PM2 상태 저장
+                pm2 save
+                
+                # 오래된 백업 삭제 (7일 이상)
+                find $BACKUP_DIR -name "code_*" -type d -mtime +7 -exec rm -rf {} + 2>/dev/null || true
+                
+                echo "============================================"
+                echo "Re-Fit AI 배포 완료: $(date)"
+                echo "============================================"
+                exit 0
+              fi
+              
+              echo "Health check 시도 중... ($i/5) - HTTP $HTTP_STATUS"
+            done
+            
+            # 모든 재시도 실패 시 롤백
+            echo "⚠️  헬스 체크 실패 - 롤백을 시작합니다."
+            rollback
