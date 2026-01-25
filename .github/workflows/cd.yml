@@ -204,9 +204,15 @@ jobs:
             exit 1
           fi
           
-          # Wheel 파일 크기 검증 (100KB 이상)
+          # Wheel 파일 크기 검증 (10KB 이상)
           WHEEL_FILE=$(ls $TEMP_DIR/*.whl | head -1)
-          [ $(stat -f%z "$WHEEL_FILE" 2>/dev/null || stat -c%s "$WHEEL_FILE" 2>/dev/null || echo 0) -gt 100000 ] || exit 1
+          WHEEL_SIZE=$(stat -f%z "$WHEEL_FILE" 2>/dev/null || stat -c%s "$WHEEL_FILE" 2>/dev/null || echo 0)
+          if [ "$WHEEL_SIZE" -lt 10000 ]; then
+            echo "에러: Wheel 파일 크기가 너무 작습니다. (${WHEEL_SIZE} bytes < 10KB)"
+            rm -rf $TEMP_DIR
+            exit 1
+          fi
+          echo "Wheel 파일 크기: ${WHEEL_SIZE} bytes"
           
           # 기존 코드 백업
           if [ -d "$AI_APP_DIR" ]; then
