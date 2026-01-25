@@ -27,7 +27,6 @@ on:
 
 env:
   PYTHON_VERSION: '3.11'
-  SERVER_AI_DIR: '/home/ubuntu/refit/app/ai'
 
 jobs:
   deploy:
@@ -154,7 +153,7 @@ jobs:
           echo "s3_key=$S3_KEY" >> $GITHUB_OUTPUT
       - name: Deploy via SSM
         env:
-          SERVER_AI_DIR: ${{ env.SERVER_AI_DIR }}
+          SERVER_BASE_PATH: ${{ secrets.SERVER_BASE_PATH }}
           EC2_INSTANCE_ID: ${{ secrets.EC2_INSTANCE_ID }}
           HEALTH_CHECK_URL: ${{ secrets.HEALTH_CHECK_URL }}
           S3_BUCKET: ${{ secrets.S3_ARTIFACTS_BUCKET }}
@@ -162,40 +161,39 @@ jobs:
         run: |
           set -euo pipefail
           
-          SERVER_AI_DIR="$SERVER_AI_DIR"
-          S3_BUCKET="$S3_BUCKET"
-          S3_KEY="$S3_KEY"
-          AWS_REGION="ap-northeast-2"
-          HEALTH_CHECK_URL="$HEALTH_CHECK_URL"
+          BASE_PATH="$SERVER_BASE_PATH"
+          AI_DIR="${BASE_PATH}/app/ai"
+          AI_APP_DIR="${AI_DIR}/ai_app"
+          BACKUP_DIR="${BASE_PATH}/backups/ai"
+          TEMP_DIR="${AI_DIR}/deploy_temp"
+          PM2_CONFIG="${BASE_PATH}/infra/pm2/ecosystem.ai.config.js"
           
           DEPLOY_SCRIPT=$(cat <<'SCRIPT_END'
           set -euo pipefail
-          SERVER_AI_DIR="$1"
-          AI_APP_DIR="$2"
-          BACKUP_DIR="$3"
-          TEMP_DIR="$4"
-          S3_BUCKET="$5"
-          S3_KEY="$6"
-          HEALTH_CHECK_URL="$7"
+          BASE_PATH="$1"
+          AI_DIR="$2"
+          AI_APP_DIR="$3"
+          BACKUP_DIR="$4"
+          TEMP_DIR="$5"
+          PM2_CONFIG="$6"
+          S3_BUCKET="$7"
+          S3_KEY="$8"
+          HEALTH_CHECK_URL="$9"
           
+          APP_NAME="ai-service"
           TIMESTAMP=$(date +%Y%m%d%H%M%S)
-          LOG_DIR="/home/ubuntu/refit/logs/ai"
-          AWS_REGION="ap-northeast-2"
+          
+          trap 'sudo -u ubuntu pm2 status || true; exit $?' ERR
           
           echo "============================================"
           echo "Re-Fit AI 배포 시작: $(date)"
           echo "============================================"
           
-          APP_NAME="ai-service"
-          PM2_CONFIG="/home/ubuntu/refit/infra/pm2/ecosystem.ai.config.js"
-          
-          trap 'sudo -u ubuntu pm2 status || true; exit $?' ERR
-          
-          mkdir -p $BACKUP_DIR $LOG_DIR $TEMP_DIR
+          mkdir -p $BACKUP_DIR $TEMP_DIR
           
           # S3에서 패키지 다운로드
           echo "S3에서 패키지 다운로드 중..."
-          aws s3 cp s3://$S3_BUCKET/$S3_KEY $TEMP_DIR/ --region $AWS_REGION || {
+          aws s3 cp s3://$S3_BUCKET/$S3_KEY $TEMP_DIR/ --region ap-northeast-2 || {
             echo "에러: S3에서 패키지 다운로드 실패"
             exit 1
           }
@@ -219,7 +217,7 @@ jobs:
           
           # 새 패키지 설치
           echo "새 패키지 설치 중..."
-          cd $SERVER_AI_DIR
+          cd $AI_DIR
           source venv/bin/activate
           
           pip install "$WHEEL_FILE" --force-reinstall || {
@@ -295,7 +293,7 @@ jobs:
           
           # SSM 명령 실행 (base64 인코딩으로 특수문자 이스케이프 문제 방지)
           DEPLOY_SCRIPT_ENCODED=$(echo "$DEPLOY_SCRIPT" | base64 -w 0)
-          SSM_COMMAND="bash -c \"echo '$DEPLOY_SCRIPT_ENCODED' | base64 -d | bash -s -- '$SERVER_AI_DIR' '$SERVER_AI_DIR/ai_app' '/home/ubuntu/refit/backups/ai' '$SERVER_AI_DIR/deploy_temp' '$S3_BUCKET' '$S3_KEY' '$HEALTH_CHECK_URL'\""
+          SSM_COMMAND="bash -c \"echo '$DEPLOY_SCRIPT_ENCODED' | base64 -d | bash -s -- '$BASE_PATH' '$AI_DIR' '$AI_APP_DIR' '$BACKUP_DIR' '$TEMP_DIR' '$PM2_CONFIG' '$S3_BUCKET' '$S3_KEY' '$HEALTH_CHECK_URL'\""
           PARAMETERS_JSON=$(jq -n --arg cmd "$SSM_COMMAND" '{commands: [$cmd]}')
           
           COMMAND_ID=$(aws ssm send-command \
@@ -308,6 +306,8 @@ jobs:
             --output text)
           
           [ -n "$COMMAND_ID" ] || exit 1
+          
+          echo "SSM Command ID: $COMMAND_ID"
           
           # SSM 명령 실행 상태 확인 (최대 60회, 5분)
           for i in {1..60}; do
@@ -327,6 +327,15 @@ jobs:
                 --output text
               exit 0
             elif [ "$STATUS" = "Failed" ] || [ "$STATUS" = "Cancelled" ] || [ "$STATUS" = "TimedOut" ]; then
+              echo "SSM Command failed with status: $STATUS"
+              echo "=== Standard Output ==="
+              aws ssm get-command-invocation \
+                --command-id "$COMMAND_ID" \
+                --instance-id "$EC2_INSTANCE_ID" \
+                --region ap-northeast-2 \
+                --query 'StandardOutputContent' \
+                --output text
+              echo "=== Standard Error ==="
               aws ssm get-command-invocation \
                 --command-id "$COMMAND_ID" \
                 --instance-id "$EC2_INSTANCE_ID" \
@@ -335,6 +344,17 @@ jobs:
                 --output text
               exit 1
             fi
+            [ $i -eq 1 ] && echo "Waiting for SSM command to complete..."
+            [ $i -eq 30 ] && echo "Still waiting... (30/60 checks completed)"
             sleep 5
           done
+          
+          echo "SSM Command timeout after 60 checks"
+          echo "=== Final Status ==="
+          aws ssm get-command-invocation \
+            --command-id "$COMMAND_ID" \
+            --instance-id "$EC2_INSTANCE_ID" \
+            --region ap-northeast-2 \
+            --query '[Status, StandardOutputContent, StandardErrorContent]' \
+            --output text
           exit 1
