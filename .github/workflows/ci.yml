@@ -5,7 +5,7 @@ on:
     branches: [develop, main]
     types: [opened, synchronize, reopened]
   push:
-    branches: [feature/*, develop, main]
+    branches: [develop, main]
   workflow_dispatch:
     inputs:
       job_to_run:
@@ -38,22 +38,35 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: 'pip'
+          cache-dependency-path: ${{ env.WORKING_DIRECTORY }}/requirements.txt
       
-      # Lint
-      - name: Run Ruff & MyPy
-        run: |
-          pip install ruff mypy
-          ruff check . --exclude ai_app/main.py
-          ruff format --check . --exclude ai_app/main.py
-          mypy . --ignore-missing-imports || true
+      # Cache pytest cache
+      - name: Cache pytest cache
+        uses: actions/cache@v4
+        with:
+          path: .pytest_cache
+          key: pytest-${{ runner.os }}-${{ hashFiles('**/requirements.txt', '**/test_*.py', '**/tests/**/*.py') }}
+          restore-keys: |
+            pytest-${{ runner.os }}-
       
-      # Unit Tests
-      - name: Run Unit Tests
+      # Install dependencies
+      - name: Install dependencies
         run: |
           if [ -f ${{ env.WORKING_DIRECTORY }}/requirements.txt ]; then 
             pip install -r ${{ env.WORKING_DIRECTORY }}/requirements.txt
           fi
-          pip install pytest pytest-cov pytest-asyncio
+          pip install ruff mypy pytest pytest-cov pytest-asyncio
+      
+      # Lint
+      - name: Run Ruff & MyPy
+        run: |
+          ruff check . --exclude ai_app/main.py
+          ruff format --check . --exclude ai_app/main.py
+          mypy . --ignore-missing-imports || true
+      
+      # Unit Tests with Coverage
+      - name: Run Unit Tests
+        run: |
           if [ -d "tests" ]; then
             pytest tests/ -v --cov=${{ env.WORKING_DIRECTORY }} --cov-report=xml
           elif [ -d "${{ env.WORKING_DIRECTORY }}/tests" ]; then
@@ -65,9 +78,6 @@ jobs:
       # Build Check
       - name: Verify Application Starts
         run: |
-          if [ -f ${{ env.WORKING_DIRECTORY }}/requirements.txt ]; then 
-            pip install -r ${{ env.WORKING_DIRECTORY }}/requirements.txt
-          fi
           export PYTHONPATH=$PYTHONPATH:$(pwd)/${{ env.WORKING_DIRECTORY }}
           timeout 10s python -c "from api.main import app; print('Application loaded successfully')" || true
 
@@ -76,7 +86,6 @@ jobs:
   # ===========================================
   integration:
     if: |
-      (github.event_name == 'pull_request') ||
       (github.event_name == 'push' && github.ref == 'refs/heads/develop') ||
       (github.event_name == 'workflow_dispatch' && (github.event.inputs.job_to_run == 'integration' || github.event.inputs.job_to_run == 'all'))
     runs-on: ubuntu-latest
@@ -88,14 +97,29 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+          cache-dependency-path: ${{ env.WORKING_DIRECTORY }}/requirements.txt
       
-      # SonarCloud Scan
-      - name: Run Tests with Coverage
+      # Cache pytest cache
+      - name: Cache pytest cache
+        uses: actions/cache@v4
+        with:
+          path: .pytest_cache
+          key: pytest-${{ runner.os }}-${{ hashFiles('**/requirements.txt', '**/test_*.py', '**/tests/**/*.py') }}
+          restore-keys: |
+            pytest-${{ runner.os }}-
+      
+      # Install dependencies
+      - name: Install dependencies
         run: |
           if [ -f ${{ env.WORKING_DIRECTORY }}/requirements.txt ]; then 
             pip install -r ${{ env.WORKING_DIRECTORY }}/requirements.txt
           fi
           pip install pytest pytest-cov
+      
+      # Run Tests with Coverage
+      - name: Run Tests with Coverage
+        run: |
           if [ -d "tests" ]; then
             pytest tests/ -v --cov=${{ env.WORKING_DIRECTORY }} --cov-report=xml
           elif [ -d "${{ env.WORKING_DIRECTORY }}/tests" ]; then
@@ -116,7 +140,7 @@ jobs:
   # ===========================================
   release:
     if: |
-      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'push' && (github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main')) ||
       (github.event_name == 'workflow_dispatch' && (github.event.inputs.job_to_run == 'release' || github.event.inputs.job_to_run == 'all'))
     runs-on: ubuntu-latest
     steps:
@@ -127,6 +151,17 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+          cache-dependency-path: ${{ env.WORKING_DIRECTORY }}/requirements.txt
+      
+      # Cache pytest cache
+      - name: Cache pytest cache
+        uses: actions/cache@v4
+        with:
+          path: .pytest_cache
+          key: pytest-${{ runner.os }}-${{ hashFiles('**/requirements.txt', '**/test_*.py', '**/tests/**/*.py') }}
+          restore-keys: |
+            pytest-${{ runner.os }}-
       
       # Get Version
       - name: Get Version
@@ -136,13 +171,17 @@ jobs:
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "Generated version: $VERSION"
       
-      # Full Regression Test
-      - name: Run Full Tests
+      # Install dependencies
+      - name: Install dependencies
         run: |
           if [ -f ${{ env.WORKING_DIRECTORY }}/requirements.txt ]; then 
             pip install -r ${{ env.WORKING_DIRECTORY }}/requirements.txt
           fi
-          pip install pytest pytest-cov pytest-asyncio
+          pip install pytest pytest-cov pytest-asyncio build
+      
+      # Full Regression Test
+      - name: Run Full Tests
+        run: |
           if [ -d "tests" ]; then
             pytest tests/ -v --cov=${{ env.WORKING_DIRECTORY }} --cov-report=xml
           elif [ -d "${{ env.WORKING_DIRECTORY }}/tests" ]; then
@@ -154,7 +193,6 @@ jobs:
       # Production Build (Wheel Package)
       - name: Create Release Package
         run: |
-          pip install build
           python -m build --wheel
       
       # Verify Build Output
@@ -200,3 +238,23 @@ jobs:
           git push origin "$TAG_NAME" || true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      
+      # Trigger CD Workflow
+      - name: Trigger CD Workflow
+        if: success()
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'cd.yml',
+              ref: context.ref,
+              inputs: {
+                run_id: '${{ github.run_id }}',
+                sha: '${{ github.sha }}',
+                branch: '${{ github.ref_name }}'
+              }
+            });
+            console.log('CD workflow triggered successfully');

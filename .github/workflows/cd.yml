@@ -1,11 +1,29 @@
 name: Re-Fit AI CD
 
 on:
-  workflow_run:
-    workflows: ['Re-Fit AI CI']
-    types: [completed]
-    branches: [main]
   workflow_dispatch:
+    inputs:
+      run_id:
+        description: 'CI workflow run ID (자동 입력 또는 직접 입력)'
+        required: false
+        type: string
+      sha:
+        description: 'Commit SHA (자동 입력 또는 직접 입력)'
+        required: false
+        type: string
+      branch:
+        description: 'Branch name'
+        required: true
+        type: choice
+        default: 'develop'
+        options:
+          - develop
+          - main
+      use_latest_artifact:
+        description: 'run_id/sha를 입력하지 않으면 선택한 브랜치의 최신 아티팩트 사용'
+        required: true
+        type: boolean
+        default: true
 
 env:
   PYTHON_VERSION: '3.11'
@@ -13,31 +31,93 @@ env:
 
 jobs:
   deploy:
-    # CI가 성공했을 때만 실행
-    if: |
-      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success') ||
-      github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    
+    environment: ${{ inputs.branch == 'main' && 'production' || 'development' }}
     steps:
+      - name: Find Latest Artifact (if needed)
+        if: inputs.use_latest_artifact == true && (inputs.run_id == '' || inputs.sha == '')
+        id: find-artifact
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const branch = '${{ inputs.branch }}';
+            console.log(`🔍 Finding latest artifact for branch: ${branch}`);
+
+            // CI 워크플로우의 최근 성공한 실행 찾기
+            const runs = await github.rest.actions.listWorkflowRuns({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'ci.yml',
+              branch: branch,
+              status: 'success',
+              per_page: 10
+            });
+
+            if (runs.data.workflow_runs.length === 0) {
+              core.setFailed(`❌ No successful CI runs found for branch: ${branch}`);
+              return;
+            }
+
+            // 아티팩트가 있는 최신 실행 찾기
+            for (const run of runs.data.workflow_runs) {
+              const artifacts = await github.rest.actions.listWorkflowRunArtifacts({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                run_id: run.id
+              });
+
+              const buildArtifact = artifacts.data.artifacts.find(
+                a => a.name.startsWith('ai-wheel-')
+              );
+
+              if (buildArtifact) {
+                const sha = run.head_sha;
+                console.log(`✅ Found artifact from run #${run.run_number}`);
+                console.log(`   Run ID: ${run.id}`);
+                console.log(`   SHA: ${sha}`);
+                console.log(`   Created: ${run.created_at}`);
+
+                core.setOutput('run_id', run.id.toString());
+                core.setOutput('sha', sha);
+                core.setOutput('run_number', run.run_number.toString());
+                return;
+              }
+            }
+
+            core.setFailed(`❌ No artifacts found in recent CI runs for branch: ${branch}`);
+
+      - name: Set Deployment Variables
+        id: deploy-vars
+        run: |
+          if [ "${{ inputs.use_latest_artifact }}" == "true" ] && [ -z "${{ inputs.run_id }}" ]; then
+            echo "run_id=${{ steps.find-artifact.outputs.run_id }}" >> $GITHUB_OUTPUT
+            echo "sha=${{ steps.find-artifact.outputs.sha }}" >> $GITHUB_OUTPUT
+            echo "📦 Using latest artifact from run #${{ steps.find-artifact.outputs.run_number }}"
+          else
+            echo "run_id=${{ inputs.run_id }}" >> $GITHUB_OUTPUT
+            echo "sha=${{ inputs.sha }}" >> $GITHUB_OUTPUT
+            echo "📦 Using manually specified artifact"
+          fi
+
       # ===========================================
       # 1. Artifact 다운로드
       # ===========================================
       - name: Download Wheel Package
         uses: actions/download-artifact@v4
         with:
-          name: ai-wheel-${{ github.event.workflow_run.head_sha || github.sha }}
+          name: ai-wheel-${{ steps.deploy-vars.outputs.sha }}
           path: build-output/dist
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          run-id: ${{ github.event.workflow_run.id }}
+          run-id: ${{ steps.deploy-vars.outputs.run_id }}
       
       - name: Download Deployment Files
         uses: actions/download-artifact@v4
         with:
-          name: ai-deploy-files-${{ github.event.workflow_run.head_sha || github.sha }}
+          name: ai-deploy-files-${{ steps.deploy-vars.outputs.sha }}
           path: build-output
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          run-id: ${{ github.event.workflow_run.id }}
+          run-id: ${{ steps.deploy-vars.outputs.run_id }}
       
       # ===========================================
       # 2. 다운로드 파일 검증
