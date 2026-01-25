@@ -1,0 +1,263 @@
+name: Re-Fit AI CD
+
+on:
+  workflow_run:
+    workflows: ['Re-Fit AI CI']
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  PYTHON_VERSION: '3.11'
+  SERVER_AI_DIR: '/home/ubuntu/refit/app/ai'
+
+jobs:
+  deploy:
+    # CI가 성공했을 때만 실행
+    if: |
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success') ||
+      github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    
+    steps:
+      # ===========================================
+      # 1. Artifact 다운로드
+      # ===========================================
+      - name: Download Wheel Package
+        uses: actions/download-artifact@v4
+        with:
+          name: ai-wheel-${{ github.event.workflow_run.head_sha || github.sha }}
+          path: build-output/dist
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ github.event.workflow_run.id }}
+      
+      - name: Download Deployment Files
+        uses: actions/download-artifact@v4
+        with:
+          name: ai-deploy-files-${{ github.event.workflow_run.head_sha || github.sha }}
+          path: build-output
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ github.event.workflow_run.id }}
+      
+      # ===========================================
+      # 2. 다운로드 파일 검증
+      # ===========================================
+      - name: Verify Downloaded Files
+        run: |
+          echo "=== Verifying downloaded files ==="
+          ls -la build-output/
+          
+          if [ -d "build-output/dist" ] && [ -n "$(ls -A build-output/dist/*.whl 2>/dev/null)" ]; then
+            echo "Wheel package found"
+            ls -lh build-output/dist/
+          else
+            echo "Wheel package not found"
+            exit 1
+          fi
+          
+          if [ -f "build-output/ai_app/requirements.txt" ]; then
+            echo "requirements.txt found"
+          else
+            echo "requirements.txt not found"
+            exit 1
+          fi
+      
+      # ===========================================
+      # 3. AWS 자격 증명 설정
+      # ===========================================
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION || 'ap-northeast-2' }}
+      
+      # ===========================================
+      # 4. S3에 Wheel 패키지 업로드
+      # ===========================================
+      - name: Upload Wheel Package to S3
+        run: |
+          COMMIT_SHA=${{ github.event.workflow_run.head_sha || github.sha }}
+          S3_KEY="ai-deployments/${COMMIT_SHA}/$(basename build-output/dist/*.whl)"
+          
+          echo "Uploading wheel package to s3://${{ secrets.S3_ARTIFACTS_BUCKET }}/$S3_KEY"
+          aws s3 cp build-output/dist/*.whl s3://${{ secrets.S3_ARTIFACTS_BUCKET }}/$S3_KEY
+          
+          echo "S3_KEY=$S3_KEY" >> $GITHUB_ENV
+          echo "COMMIT_SHA=$COMMIT_SHA" >> $GITHUB_ENV
+      
+      # ===========================================
+      # 5. SSM을 통한 배포 실행
+      # ===========================================
+      - name: Execute Deployment via SSM
+        run: |
+          set -e
+          
+          SERVER_AI_DIR="${{ env.SERVER_AI_DIR }}"
+          S3_BUCKET="${{ secrets.S3_ARTIFACTS_BUCKET }}"
+          S3_KEY="${{ env.S3_KEY }}"
+          AWS_REGION="${{ secrets.AWS_REGION || 'ap-northeast-2' }}"
+          HEALTH_CHECK_URL="${{ secrets.HEALTH_CHECK_URL }}"
+          
+          # 배포 스크립트 생성
+          DEPLOY_SCRIPT=$(cat <<DEPLOY_EOF
+          set -e
+          
+          SERVER_AI_DIR="$SERVER_AI_DIR"
+          AI_APP_DIR="$SERVER_AI_DIR/ai_app"
+          BACKUP_DIR="/home/ubuntu/refit/backups/ai"
+          LOG_DIR="/home/ubuntu/refit/logs/ai"
+          TEMP_DIR="$SERVER_AI_DIR/deploy_temp"
+          TIMESTAMP=$(date +%Y%m%d%H%M%S)
+          S3_BUCKET="$S3_BUCKET"
+          S3_KEY="$S3_KEY"
+          AWS_REGION="$AWS_REGION"
+          HEALTH_CHECK_URL="$HEALTH_CHECK_URL"
+          
+          echo "============================================"
+          echo "Re-Fit AI 배포 시작: $(date)"
+          echo "============================================"
+          
+          rollback() {
+            echo "!!! 배포 실패: 자동 롤백을 시작합니다 !!!"
+            if [ -d "$BACKUP_DIR/code_$TIMESTAMP" ]; then
+              rm -rf "$AI_APP_DIR"
+              cp -r "$BACKUP_DIR/code_$TIMESTAMP" "$AI_APP_DIR"
+              echo "코드 롤백 완료"
+            fi
+            pm2 reload ai-service --update-env
+            echo "배포 실패 - 이전 버전으로 복구되었습니다."
+            rm -rf $TEMP_DIR
+            exit 1
+          }
+          
+          mkdir -p $BACKUP_DIR $LOG_DIR $TEMP_DIR
+          
+          if [ ! -f "$SERVER_AI_DIR/.env" ]; then
+            echo ".env 파일이 없습니다. (환경 변수 미사용 시 정상)"
+          else
+            echo ".env 파일 확인됨"
+          fi
+          
+          echo "S3에서 패키지 다운로드 중..."
+          aws s3 cp s3://$S3_BUCKET/$S3_KEY $TEMP_DIR/ --region $AWS_REGION || {
+            echo "에러: S3에서 패키지 다운로드 실패"
+            exit 1
+          }
+          
+          if [ ! -f "$TEMP_DIR"/*.whl ]; then
+            echo "에러: Wheel 패키지가 다운로드되지 않았습니다."
+            rm -rf $TEMP_DIR
+            exit 1
+          fi
+          
+          if [ -d "$AI_APP_DIR" ]; then
+            echo "기존 코드 백업 중..."
+            cp -r "$AI_APP_DIR" "$BACKUP_DIR/code_$TIMESTAMP"
+            echo "백업 완료: $BACKUP_DIR/code_$TIMESTAMP"
+          fi
+          
+          echo "새 패키지 설치 중..."
+          cd $SERVER_AI_DIR
+          source venv/bin/activate
+          
+          pip install "$TEMP_DIR"/*.whl --force-reinstall || rollback
+          
+          echo "패키지 설치 완료"
+          
+          rm -rf $TEMP_DIR
+          
+          echo "AI 서비스 무중단 재시작 중..."
+          PM2_CONFIG="/home/ubuntu/refit/infra/pm2/ecosystem.ai.config.js"
+          
+          if pm2 describe ai-service > /dev/null 2>&1; then
+            echo "기존 프로세스 무중단 재시작 (Reload)..."
+            pm2 reload ai-service --update-env
+          else
+            echo "신규 프로세스 시작..."
+            pm2 start $PM2_CONFIG --env production
+          fi
+          
+          echo "배포 검증 중..."
+          for i in {1..5}; do
+            sleep 5
+            HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" $HEALTH_CHECK_URL 2>/dev/null || echo "000")
+            
+            if [ "$HTTP_STATUS" = "200" ]; then
+              echo "배포 성공! (HTTP $HTTP_STATUS)"
+              
+              pm2 save
+              
+              find $BACKUP_DIR -name "code_*" -type d -mtime +7 -exec rm -rf {} + 2>/dev/null || true
+              
+              echo "============================================"
+              echo "Re-Fit AI 배포 완료: $(date)"
+              echo "============================================"
+              exit 0
+            fi
+            
+            echo "Health check 시도 중... ($i/5) - HTTP $HTTP_STATUS"
+          done
+          
+          echo "헬스 체크 실패 - 롤백을 시작합니다."
+          rollback
+          DEPLOY_EOF
+          )
+          
+          echo "SSM을 통해 배포 명령 실행 중..."
+          
+          # 스크립트를 base64로 인코딩하여 S3에 업로드
+          echo "$DEPLOY_SCRIPT" | base64 > /tmp/deploy_script.b64
+          SCRIPT_S3_KEY="ssm-scripts/ai-deploy-$(date +%s).sh"
+          aws s3 cp /tmp/deploy_script.b64 s3://$S3_BUCKET/$SCRIPT_S3_KEY --region $AWS_REGION
+          
+          # SSM 명령 실행: S3에서 스크립트 다운로드 후 실행
+          PARAMS_JSON="{\"commands\":[\"aws s3 cp s3://$S3_BUCKET/$SCRIPT_S3_KEY /tmp/deploy_script.b64 --region $AWS_REGION\",\"base64 -d /tmp/deploy_script.b64 > /tmp/deploy_script.sh\",\"chmod +x /tmp/deploy_script.sh\",\"bash /tmp/deploy_script.sh\",\"rm -f /tmp/deploy_script.sh /tmp/deploy_script.b64\"]}"
+          
+          COMMAND_ID=$(aws ssm send-command \
+            --instance-ids "${{ secrets.EC2_INSTANCE_ID }}" \
+            --document-name "AWS-RunShellScript" \
+            --parameters "$PARAMS_JSON" \
+            --output-s3-bucket-name "${{ secrets.S3_ARTIFACTS_BUCKET }}" \
+            --output-s3-key-prefix "ssm-outputs/ai-deploy" \
+            --region $AWS_REGION \
+            --query 'Command.CommandId' \
+            --output text)
+          
+          echo "Command ID: $COMMAND_ID"
+          
+          echo "배포 명령 실행 대기 중..."
+          aws ssm wait command-executed \
+            --command-id "$COMMAND_ID" \
+            --instance-id "${{ secrets.EC2_INSTANCE_ID }}" \
+            --region $AWS_REGION \
+            --max-attempts 120 \
+            --delay 5 || {
+            echo "배포 명령 실행 실패 또는 타임아웃"
+            exit 1
+          }
+          
+          OUTPUT=$(aws ssm get-command-invocation \
+            --command-id "$COMMAND_ID" \
+            --instance-id "${{ secrets.EC2_INSTANCE_ID }}" \
+            --region $AWS_REGION \
+            --query '[Status, StandardOutputContent, StandardErrorContent]' \
+            --output text)
+          
+          STATUS=$(echo "$OUTPUT" | cut -f1)
+          STDOUT=$(echo "$OUTPUT" | cut -f2)
+          STDERR=$(echo "$OUTPUT" | cut -f3)
+          
+          echo "=== 배포 결과 ==="
+          echo "Status: $STATUS"
+          echo "=== 표준 출력 ==="
+          echo "$STDOUT"
+          echo "=== 표준 에러 ==="
+          echo "$STDERR"
+          
+          if [ "$STATUS" != "Success" ]; then
+            echo "배포 실패: Status=$STATUS"
+            exit 1
+          fi
+          
+          echo "배포 성공적으로 완료되었습니다."

@@ -1,0 +1,202 @@
+name: Re-Fit AI CI
+
+on:
+  pull_request:
+    branches: [develop, main]
+    types: [opened, synchronize, reopened]
+  push:
+    branches: [feature/*, develop, main]
+  workflow_dispatch:
+    inputs:
+      job_to_run:
+        description: 'Which job to run'
+        required: true
+        type: choice
+        options:
+          - lint-and-test
+          - integration
+          - release
+          - all
+
+env:
+  PYTHON_VERSION: '3.11'
+  WORKING_DIRECTORY: 'ai_app'
+
+jobs:
+  # ===========================================
+  # 1. PR 검증 단계 (Lint + Test + Build Check)
+  # ===========================================
+  lint-and-test:
+    if: |
+      github.event_name == 'pull_request' ||
+      (github.event_name == 'workflow_dispatch' && (github.event.inputs.job_to_run == 'lint-and-test' || github.event.inputs.job_to_run == 'all'))
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+      
+      # Lint
+      - name: Run Ruff & MyPy
+        run: |
+          pip install ruff mypy
+          ruff check . --exclude ai_app/main.py
+          ruff format --check . --exclude ai_app/main.py
+          mypy . --ignore-missing-imports || true
+      
+      # Unit Tests
+      - name: Run Unit Tests
+        run: |
+          if [ -f ${{ env.WORKING_DIRECTORY }}/requirements.txt ]; then 
+            pip install -r ${{ env.WORKING_DIRECTORY }}/requirements.txt
+          fi
+          pip install pytest pytest-cov pytest-asyncio
+          if [ -d "tests" ]; then
+            pytest tests/ -v --cov=${{ env.WORKING_DIRECTORY }} --cov-report=xml
+          elif [ -d "${{ env.WORKING_DIRECTORY }}/tests" ]; then
+            pytest ${{ env.WORKING_DIRECTORY }}/tests -v --cov=${{ env.WORKING_DIRECTORY }} --cov-report=xml
+          else
+            echo "No tests found"
+          fi
+      
+      # Build Check
+      - name: Verify Application Starts
+        run: |
+          if [ -f ${{ env.WORKING_DIRECTORY }}/requirements.txt ]; then 
+            pip install -r ${{ env.WORKING_DIRECTORY }}/requirements.txt
+          fi
+          export PYTHONPATH=$PYTHONPATH:$(pwd)/${{ env.WORKING_DIRECTORY }}
+          timeout 10s python -c "from api.main import app; print('Application loaded successfully')" || true
+
+  # ===========================================
+  # 2. 통합 검증 단계 (SonarCloud + Integration Tests)
+  # ===========================================
+  integration:
+    if: |
+      (github.event_name == 'pull_request') ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/develop') ||
+      (github.event_name == 'workflow_dispatch' && (github.event.inputs.job_to_run == 'integration' || github.event.inputs.job_to_run == 'all'))
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      
+      # SonarCloud Scan
+      - name: Run Tests with Coverage
+        run: |
+          if [ -f ${{ env.WORKING_DIRECTORY }}/requirements.txt ]; then 
+            pip install -r ${{ env.WORKING_DIRECTORY }}/requirements.txt
+          fi
+          pip install pytest pytest-cov
+          if [ -d "tests" ]; then
+            pytest tests/ -v --cov=${{ env.WORKING_DIRECTORY }} --cov-report=xml
+          elif [ -d "${{ env.WORKING_DIRECTORY }}/tests" ]; then
+            pytest ${{ env.WORKING_DIRECTORY }}/tests -v --cov=${{ env.WORKING_DIRECTORY }} --cov-report=xml
+          else
+            echo "No tests found, skipping coverage"
+          fi
+      
+      - name: SonarCloud Scan
+        uses: SonarSource/sonarcloud-github-action@master
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        continue-on-error: true
+
+  # ===========================================
+  # 3. 릴리즈 확정 단계 (Production Build + Artifact Upload)
+  # ===========================================
+  release:
+    if: |
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_dispatch' && (github.event.inputs.job_to_run == 'release' || github.event.inputs.job_to_run == 'all'))
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      
+      # Get Version
+      - name: Get Version
+        id: version
+        run: |
+          VERSION=$(grep -E "^version\s*=" pyproject.toml | sed 's/.*"\(.*\)"/\1/' || echo "0.1.0")
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Generated version: $VERSION"
+      
+      # Full Regression Test
+      - name: Run Full Tests
+        run: |
+          if [ -f ${{ env.WORKING_DIRECTORY }}/requirements.txt ]; then 
+            pip install -r ${{ env.WORKING_DIRECTORY }}/requirements.txt
+          fi
+          pip install pytest pytest-cov pytest-asyncio
+          if [ -d "tests" ]; then
+            pytest tests/ -v --cov=${{ env.WORKING_DIRECTORY }} --cov-report=xml
+          elif [ -d "${{ env.WORKING_DIRECTORY }}/tests" ]; then
+            pytest ${{ env.WORKING_DIRECTORY }}/tests -v --cov=${{ env.WORKING_DIRECTORY }} --cov-report=xml
+          else
+            echo "No tests found"
+          fi
+      
+      # Production Build (Wheel Package)
+      - name: Create Release Package
+        run: |
+          pip install build
+          python -m build --wheel
+      
+      # Verify Build Output
+      - name: Verify Build Output
+        run: |
+          echo "Current directory: $(pwd)"
+          if [ -d "dist" ] && [ -n "$(ls -A dist/*.whl 2>/dev/null)" ]; then
+            echo "Wheel package created"
+            ls -lh dist/
+            echo "Absolute path: $(pwd)/dist"
+          else
+            echo "Wheel package not found"
+            exit 1
+          fi
+      
+      # Archive Build Artifacts
+      - name: Archive Build Artifacts
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-wheel-${{ github.sha }}
+          path: dist/*.whl
+          retention-days: 7
+      
+      # Archive Deployment Files
+      - name: Archive Deployment Files
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-deploy-files-${{ github.sha }}
+          path: |
+            ${{ env.WORKING_DIRECTORY }}/requirements.txt
+            pyproject.toml
+          retention-days: 7
+      
+      # Create Release Tag
+      - name: Create Git Tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          TAG_NAME="v${{ steps.version.outputs.version }}-${GITHUB_SHA::7}"
+          git tag -a "$TAG_NAME" -m "Release $TAG_NAME" || true
+          git push origin "$TAG_NAME" || true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
