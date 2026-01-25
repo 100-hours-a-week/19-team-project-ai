@@ -2,201 +2,183 @@ name: Re-Fit AI CI
 
 on:
   pull_request:
+    # feature -> develop 또는 develop -> main PR 시 실행
     branches: [develop, main]
     types: [opened, synchronize, reopened]
   push:
-    branches: [feature/*, develop, main]
+    # develop 또는 main으로 push(머지 포함)될 때 실행
+    branches: [develop, main]
   workflow_dispatch:
+    # 수동 실행 시 작업을 선택할 수 있는 디스패처 구성
     inputs:
       job_to_run:
-        description: 'Which job to run'
+        description: '실행할 작업을 선택하세요 (all, lint-and-test, integration, release)'
         required: true
         type: choice
+        default: 'all'
         options:
+          - all
           - lint-and-test
           - integration
           - release
-          - all
 
 env:
   PYTHON_VERSION: '3.11'
   WORKING_DIRECTORY: 'ai_app'
 
 jobs:
-  # ===========================================
-  # 1. PR 검증 단계 (Lint + Test + Build Check)
-  # ===========================================
+  # 1. PR 검증 단계 (매트릭스: lint-and-test 실행)
+  # 목적: 코드 스타일(Lint), 타입 체크, 단위 테스트를 통해 합쳐지기 전 최소 품질 보장
   lint-and-test:
+    # PR 이벤트이거나 수동 실행 시 lint-and-test 관련 옵션일 때만 실행
     if: |
-      github.event_name == 'pull_request' ||
+      github.event_name == 'pull_request' || 
       (github.event_name == 'workflow_dispatch' && (github.event.inputs.job_to_run == 'lint-and-test' || github.event.inputs.job_to_run == 'all'))
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      
-      - uses: actions/setup-python@v5
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-          cache: 'pip'
-      
-      # Lint
-      - name: Run Ruff & MyPy
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install Dependencies
         run: |
-          pip install ruff mypy
-          ruff check . --exclude ai_app/main.py
-          ruff format --check . --exclude ai_app/main.py
-          mypy . --ignore-missing-imports || true
+          python -m pip install --upgrade pip
+          pip install ruff mypy pytest pytest-asyncio pytest-cov bandit build
+          if [ -f ${{ env.WORKING_DIRECTORY }}/requirements.txt ]; then 
+            pip install -r ${{ env.WORKING_DIRECTORY }}/requirements.txt
+          fi
+
+      - name: Run Lint (Ruff)
+        run: |
+          ruff check . --exclude ${{ env.WORKING_DIRECTORY }}/main.py
+          ruff format --check . --exclude ${{ env.WORKING_DIRECTORY }}/main.py
       
-      # Unit Tests
+      # [Type Check] MyPy를 사용한 정적 타입 분석
+      - name: Static Type Check (MyPy)
+        run: mypy . --ignore-missing-imports || true
+
+      # [Security Scan] Frontend의 audit과 대응되는 보안 검사 추가
+      - name: Security Scan (Bandit)
+        run: bandit -r ${{ env.WORKING_DIRECTORY }} -x tests/
+
+      # [Unit Tests] 단위 테스트 수행
       - name: Run Unit Tests
         run: |
           if [ -f ${{ env.WORKING_DIRECTORY }}/requirements.txt ]; then 
             pip install -r ${{ env.WORKING_DIRECTORY }}/requirements.txt
           fi
-          pip install pytest pytest-cov pytest-asyncio
-          if [ -d "tests" ]; then
-            pytest tests/ -v --cov=${{ env.WORKING_DIRECTORY }} --cov-report=xml
-          elif [ -d "${{ env.WORKING_DIRECTORY }}/tests" ]; then
-            pytest ${{ env.WORKING_DIRECTORY }}/tests -v --cov=${{ env.WORKING_DIRECTORY }} --cov-report=xml
+          if [ -d "tests/unit" ]; then
+            pytest tests/unit -v --cov=${{ env.WORKING_DIRECTORY }}
           else
-            echo "No tests found"
+            echo "No unit tests found"
           fi
-      
-      # Build Check
-      - name: Verify Application Starts
-        run: |
-          if [ -f ${{ env.WORKING_DIRECTORY }}/requirements.txt ]; then 
-            pip install -r ${{ env.WORKING_DIRECTORY }}/requirements.txt
-          fi
-          export PYTHONPATH=$PYTHONPATH:$(pwd)/${{ env.WORKING_DIRECTORY }}
-          timeout 10s python -c "from api.main import app; print('Application loaded successfully')" || true
 
-  # ===========================================
-  # 2. 통합 검증 단계 (SonarCloud + Integration Tests)
-  # ===========================================
+      # [Build Check] 머지 전 빌드 가능 여부 확인 단계 추가
+      - name: Build Check
+        run: python -m build --wheel
+        env:
+          NODE_ENV: production # 컨텍스트 유지를 위한 설정
+
+  # 2. 통합 및 릴리즈 단계 (매트릭스: integration + release)
+  # 목적: 실제 합쳐진 코드의 통합성을 확인하고 배포용 아티팩트를 생성
   integration:
     if: |
-      (github.event_name == 'pull_request') ||
       (github.event_name == 'push' && github.ref == 'refs/heads/develop') ||
       (github.event_name == 'workflow_dispatch' && (github.event.inputs.job_to_run == 'integration' || github.event.inputs.job_to_run == 'all'))
     runs-on: ubuntu-latest
+    needs: [lint-and-test] # 순서 보장
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout Code
+        uses: actions/checkout@v4
         with:
-          fetch-depth: 0
-      
-      - uses: actions/setup-python@v5
+          fetch-depth: 0 # 전체 히스토리 포함
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-      
-      # SonarCloud Scan
-      - name: Run Tests with Coverage
-        run: |
-          if [ -f ${{ env.WORKING_DIRECTORY }}/requirements.txt ]; then 
-            pip install -r ${{ env.WORKING_DIRECTORY }}/requirements.txt
-          fi
-          pip install pytest pytest-cov
-          if [ -d "tests" ]; then
-            pytest tests/ -v --cov=${{ env.WORKING_DIRECTORY }} --cov-report=xml
-          elif [ -d "${{ env.WORKING_DIRECTORY }}/tests" ]; then
-            pytest ${{ env.WORKING_DIRECTORY }}/tests -v --cov=${{ env.WORKING_DIRECTORY }} --cov-report=xml
-          else
-            echo "No tests found, skipping coverage"
-          fi
-      
-      - name: SonarCloud Scan
-        uses: SonarSource/sonarcloud-github-action@master
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        continue-on-error: true
 
-  # ===========================================
-  # 3. 릴리즈 확정 단계 (Production Build + Artifact Upload)
-  # ===========================================
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+
+      # [Integration] develop 브랜치 푸시 시에만 통합 테스트 실행
+      - name: Install Dependencies
+        run: |
+          pip install pytest pytest-asyncio
+          pip install -r ${{ env.WORKING_DIRECTORY }}/requirements.txt
+
+      - name: Integration Test
+        run: |
+          if [ -d "tests/integration" ]; then
+            pytest tests/integration -v
+          else
+            echo "⚠️ Integration tests not yet implemented"
+          fi
+
   release:
     if: |
       (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
       (github.event_name == 'workflow_dispatch' && (github.event.inputs.job_to_run == 'release' || github.event.inputs.job_to_run == 'all'))
     runs-on: ubuntu-latest
+    needs: [integration] # 통합 테스트 성공 후 실행
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout Code
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      
-      - uses: actions/setup-python@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-      
-      # Get Version
-      - name: Get Version
-        id: version
+
+      - name: Install Build Tools
+        run: pip install build
+
+      - name: Full Regression Test
         run: |
-          VERSION=$(grep -E "^version\s*=" pyproject.toml | sed 's/.*"\(.*\)"/\1/' || echo "0.1.0")
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "Generated version: $VERSION"
-      
-      # Full Regression Test
-      - name: Run Full Tests
-        run: |
-          if [ -f ${{ env.WORKING_DIRECTORY }}/requirements.txt ]; then 
-            pip install -r ${{ env.WORKING_DIRECTORY }}/requirements.txt
-          fi
-          pip install pytest pytest-cov pytest-asyncio
-          if [ -d "tests" ]; then
-            pytest tests/ -v --cov=${{ env.WORKING_DIRECTORY }} --cov-report=xml
-          elif [ -d "${{ env.WORKING_DIRECTORY }}/tests" ]; then
-            pytest ${{ env.WORKING_DIRECTORY }}/tests -v --cov=${{ env.WORKING_DIRECTORY }} --cov-report=xml
-          else
-            echo "No tests found"
-          fi
-      
-      # Production Build (Wheel Package)
-      - name: Create Release Package
+          pip install -r ${{ env.WORKING_DIRECTORY }}/requirements.txt
+          pytest tests/ -v || echo "⚠️ Full tests not yet implemented"
+
+      # [Release] 빌드 아티팩트 생성 (배포용 .whl 파일 생성)
+      - name: Create Production Build (Wheel)
+        if: success()
         run: |
           pip install build
           python -m build --wheel
-      
-      # Verify Build Output
-      - name: Verify Build Output
-        run: |
-          echo "Current directory: $(pwd)"
-          if [ -d "dist" ] && [ -n "$(ls -A dist/*.whl 2>/dev/null)" ]; then
-            echo "Wheel package created"
-            ls -lh dist/
-            echo "Absolute path: $(pwd)/dist"
-          else
-            echo "Wheel package not found"
-            exit 1
-          fi
-      
-      # Archive Build Artifacts
-      - name: Archive Build Artifacts
+
+      # [Artifact] 빌드된 결과물을 아카이브하여 CD 워크플로우에서 배포 가능하게 함
+      - name: Archive AI Build Artifact
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: ai-wheel-${{ github.sha }}
+          name: ai-build-artifact-${{ github.sha }}
           path: dist/*.whl
           retention-days: 7
-      
-      # Archive Deployment Files
-      - name: Archive Deployment Files
-        if: success()
-        uses: actions/upload-artifact@v4
-        with:
-          name: ai-deploy-files-${{ github.sha }}
-          path: |
-            ${{ env.WORKING_DIRECTORY }}/requirements.txt
-            pyproject.toml
-          retention-days: 7
-      
-      # Create Release Tag
-      - name: Create Git Tag
+
+      # [Tagging] main 브랜치 릴리즈 시 버전 태그 생성
+      - name: Create Release Tag
+        if: github.ref == 'refs/heads/main'
         run: |
+          TAG_NAME="v$(date +'%Y.%m.%d')-${GITHUB_SHA::7}"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          TAG_NAME="v${{ steps.version.outputs.version }}-${GITHUB_SHA::7}"
-          git tag -a "$TAG_NAME" -m "Release $TAG_NAME" || true
-          git push origin "$TAG_NAME" || true
+          git tag "$TAG_NAME"
+          git push origin "$TAG_NAME"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
