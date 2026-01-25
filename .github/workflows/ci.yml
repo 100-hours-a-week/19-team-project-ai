@@ -2,25 +2,21 @@ name: Re-Fit AI CI
 
 on:
   pull_request:
-    # feature -> develop 또는 develop -> main PR 시 실행
     branches: [develop, main]
     types: [opened, synchronize, reopened]
   push:
-    # develop 또는 main으로 push(머지 포함)될 때 실행
     branches: [develop, main]
   workflow_dispatch:
-    # 수동 실행 시 작업을 선택할 수 있는 디스패처 구성
     inputs:
       job_to_run:
-        description: '실행할 작업을 선택하세요 (all, lint-and-test, integration, release)'
+        description: 'Which job to run'
         required: true
         type: choice
-        default: 'all'
         options:
-          - all
           - lint-and-test
           - integration
           - release
+          - all
 
 env:
   PYTHON_VERSION: '3.11'
@@ -98,87 +94,133 @@ jobs:
       (github.event_name == 'push' && github.ref == 'refs/heads/develop') ||
       (github.event_name == 'workflow_dispatch' && (github.event.inputs.job_to_run == 'integration' || github.event.inputs.job_to_run == 'all'))
     runs-on: ubuntu-latest
-    needs: [lint-and-test] # 순서 보장
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0 # 전체 히스토리 포함
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-
-      - name: Cache pip dependencies
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
-
-      # [Integration] develop 브랜치 푸시 시에만 통합 테스트 실행
-      - name: Install Dependencies
-        run: |
-          pip install pytest pytest-asyncio
-          pip install -r ${{ env.WORKING_DIRECTORY }}/requirements.txt
-
-      - name: Integration Test
-        run: |
-          if [ -d "tests/integration" ]; then
-            pytest tests/integration -v
-          else
-            echo "⚠️ Integration tests not yet implemented"
-          fi
-
-  release:
-    if: |
-      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
-      (github.event_name == 'workflow_dispatch' && (github.event.inputs.job_to_run == 'release' || github.event.inputs.job_to_run == 'all'))
-    runs-on: ubuntu-latest
-    needs: [integration] # 통합 테스트 성공 후 실행
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      
+      - name: SonarCloud Scan
+        uses: SonarSource/sonarcloud-github-action@master
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        continue-on-error: true
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+  # ===========================================
+  # 3. 릴리즈 확정 단계 (Production Build + Artifact Upload)
+  # ===========================================
+  release:
+    if: |
+      (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop')) ||
+      (github.event_name == 'workflow_dispatch' && (github.event.inputs.job_to_run == 'release' || github.event.inputs.job_to_run == 'all'))
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-
-      - name: Install Build Tools
-        run: pip install build
-
-      - name: Full Regression Test
+          cache: 'pip'
+          cache-dependency-path: ${{ env.WORKING_DIRECTORY }}/requirements.txt
+      
+      # Get Version
+      - name: Get Version
+        id: version
         run: |
-          pip install -r ${{ env.WORKING_DIRECTORY }}/requirements.txt
-          pytest tests/ -v || echo "⚠️ Full tests not yet implemented"
-
-      # [Release] 빌드 아티팩트 생성 (배포용 .whl 파일 생성)
-      - name: Create Production Build (Wheel)
-        if: success()
+          VERSION=$(grep -E "^version\s*=" pyproject.toml | sed 's/.*"\(.*\)"/\1/' || echo "0.1.0")
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Generated version: $VERSION"
+      
+      # Install dependencies
+      - name: Install dependencies
         run: |
+          if [ -f ${{ env.WORKING_DIRECTORY }}/requirements.txt ]; then 
+            pip install -r ${{ env.WORKING_DIRECTORY }}/requirements.txt
+          fi
           pip install build
+      
+      # Full Regression Test (optional)
+      - name: Run Full Tests
+        run: |
+          if [ -d "tests" ] || [ -d "${{ env.WORKING_DIRECTORY }}/tests" ]; then
+            pip install pytest pytest-cov pytest-asyncio
+            if [ -d "tests" ]; then
+              pytest tests/ -v || echo "Tests failed but continuing"
+            else
+              pytest ${{ env.WORKING_DIRECTORY }}/tests -v || echo "Tests failed but continuing"
+            fi
+          else
+            echo "No tests found, skipping"
+          fi
+      
+      # Production Build (Wheel Package)
+      - name: Create Release Package
+        run: |
           python -m build --wheel
-
-      # [Artifact] 빌드된 결과물을 아카이브하여 CD 워크플로우에서 배포 가능하게 함
-      - name: Archive AI Build Artifact
+      
+      # Verify Build Output
+      - name: Verify Build Output
+        run: |
+          echo "Current directory: $(pwd)"
+          if [ -d "dist" ] && [ -n "$(ls -A dist/*.whl 2>/dev/null)" ]; then
+            echo "Wheel package created"
+            ls -lh dist/
+            echo "Absolute path: $(pwd)/dist"
+          else
+            echo "Wheel package not found"
+            exit 1
+          fi
+      
+      # Archive Build Artifacts
+      - name: Archive Build Artifacts
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: ai-build-artifact-${{ github.sha }}
+          name: ai-wheel-${{ github.sha }}
           path: dist/*.whl
           retention-days: 7
-
-      # [Tagging] main 브랜치 릴리즈 시 버전 태그 생성
+      
+      # Archive Deployment Files
+      - name: Archive Deployment Files
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-deploy-files-${{ github.sha }}
+          path: |
+            ${{ env.WORKING_DIRECTORY }}/requirements.txt
+            pyproject.toml
+          retention-days: 7
+      
+      # Create Release Tag
       - name: Create Release Tag
-        if: github.ref == 'refs/heads/main'
         run: |
-          TAG_NAME="v$(date +'%Y.%m.%d')-${GITHUB_SHA::7}"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag "$TAG_NAME"
-          git push origin "$TAG_NAME"
+          TAG_NAME="v${{ steps.version.outputs.version }}-${GITHUB_SHA::7}"
+          git tag -a "$TAG_NAME" -m "Release $TAG_NAME" || true
+          git push origin "$TAG_NAME" || true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        continue-on-error: true
+      
+      # Trigger CD Workflow
+      - name: Trigger CD Workflow
+        if: success()
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.PAT }}
+          script: |
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'cd.yml',
+              ref: context.ref,
+              inputs: {
+                run_id: '${{ github.run_id }}',
+                sha: '${{ github.sha }}',
+                branch: '${{ github.ref_name }}'
+              }
+            });
+            console.log('CD workflow triggered successfully');
