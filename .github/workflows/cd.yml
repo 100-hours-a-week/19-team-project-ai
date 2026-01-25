@@ -146,13 +146,12 @@ jobs:
         run: |
           set -euo pipefail
           COMMIT_SHA=${{ steps.deploy-vars.outputs.sha }}
-          S3_KEY="ai-deployments/${COMMIT_SHA}/$(basename build-output/dist/*.whl)"
+          S3_KEY="artifacts/ai/${COMMIT_SHA}/$(basename build-output/dist/*.whl)"
           
           echo "Uploading wheel package to s3://${{ secrets.S3_ARTIFACTS_BUCKET }}/$S3_KEY"
           aws s3 cp build-output/dist/*.whl s3://${{ secrets.S3_ARTIFACTS_BUCKET }}/$S3_KEY
           
           echo "s3_key=$S3_KEY" >> $GITHUB_OUTPUT
-          echo "COMMIT_SHA=$COMMIT_SHA" >> $GITHUB_ENV
       - name: Deploy via SSM
         env:
           SERVER_AI_DIR: ${{ env.SERVER_AI_DIR }}
@@ -187,27 +186,14 @@ jobs:
           echo "Re-Fit AI 배포 시작: $(date)"
           echo "============================================"
           
-          rollback() {
-            echo "!!! 배포 실패: 자동 롤백을 시작합니다 !!!"
-            if [ -d "$BACKUP_DIR/code_$TIMESTAMP" ]; then
-              rm -rf "$AI_APP_DIR"
-              cp -r "$BACKUP_DIR/code_$TIMESTAMP" "$AI_APP_DIR"
-              echo "코드 롤백 완료"
-            fi
-            pm2 reload ai-service --update-env
-            echo "배포 실패 - 이전 버전으로 복구되었습니다."
-            rm -rf $TEMP_DIR
-            exit 1
-          }
+          APP_NAME="ai-service"
+          PM2_CONFIG="/home/ubuntu/refit/infra/pm2/ecosystem.ai.config.js"
+          
+          trap 'sudo -u ubuntu pm2 status || true; exit $?' ERR
           
           mkdir -p $BACKUP_DIR $LOG_DIR $TEMP_DIR
           
-          if [ ! -f "$SERVER_AI_DIR/.env" ]; then
-            echo ".env 파일이 없습니다. (환경 변수 미사용 시 정상)"
-          else
-            echo ".env 파일 확인됨"
-          fi
-          
+          # S3에서 패키지 다운로드
           echo "S3에서 패키지 다운로드 중..."
           aws s3 cp s3://$S3_BUCKET/$S3_KEY $TEMP_DIR/ --region $AWS_REGION || {
             echo "에러: S3에서 패키지 다운로드 실패"
@@ -220,56 +206,90 @@ jobs:
             exit 1
           fi
           
+          # Wheel 파일 크기 검증 (100KB 이상)
+          WHEEL_FILE=$(ls $TEMP_DIR/*.whl | head -1)
+          [ $(stat -f%z "$WHEEL_FILE" 2>/dev/null || stat -c%s "$WHEEL_FILE" 2>/dev/null || echo 0) -gt 100000 ] || exit 1
+          
+          # 기존 코드 백업
           if [ -d "$AI_APP_DIR" ]; then
             echo "기존 코드 백업 중..."
             cp -r "$AI_APP_DIR" "$BACKUP_DIR/code_$TIMESTAMP"
             echo "백업 완료: $BACKUP_DIR/code_$TIMESTAMP"
           fi
           
+          # 새 패키지 설치
           echo "새 패키지 설치 중..."
           cd $SERVER_AI_DIR
           source venv/bin/activate
           
-          pip install "$TEMP_DIR"/*.whl --force-reinstall || rollback
+          pip install "$WHEEL_FILE" --force-reinstall || {
+            echo "패키지 설치 실패 - 롤백"
+            if [ -d "$BACKUP_DIR/code_$TIMESTAMP" ]; then
+              rm -rf "$AI_APP_DIR"
+              cp -r "$BACKUP_DIR/code_$TIMESTAMP" "$AI_APP_DIR"
+              sudo chown -R ubuntu:ubuntu "$AI_APP_DIR" 2>/dev/null || true
+            fi
+            sudo -u ubuntu pm2 reload ${APP_NAME} --update-env 2>/dev/null || true
+            rm -rf $TEMP_DIR
+            exit 1
+          }
           
           echo "패키지 설치 완료"
-          
           rm -rf $TEMP_DIR
           
-          echo "AI 서비스 무중단 재시작 중..."
-          PM2_CONFIG="/home/ubuntu/refit/infra/pm2/ecosystem.ai.config.js"
+          # 권한 설정
+          sudo chown -R ubuntu:ubuntu "$AI_APP_DIR" 2>/dev/null || true
           
-          if pm2 describe ai-service > /dev/null 2>&1; then
+          # PM2로 애플리케이션 재시작 또는 시작
+          echo "AI 서비스 무중단 재시작 중..."
+          if sudo -u ubuntu pm2 describe ${APP_NAME} > /dev/null 2>&1; then
             echo "기존 프로세스 무중단 재시작 (Reload)..."
-            pm2 reload ai-service --update-env
+            sudo -u ubuntu pm2 reload ${APP_NAME} --update-env || sudo -u ubuntu pm2 delete ${APP_NAME}
           else
             echo "신규 프로세스 시작..."
-            pm2 start $PM2_CONFIG --env production
+            sudo -u ubuntu pm2 start $PM2_CONFIG --only ${APP_NAME} --env production || exit 1
           fi
           
-          echo "배포 검증 중..."
+          sleep 2
+          sudo -u ubuntu pm2 describe ${APP_NAME} > /dev/null || exit 1
+          
+          # Caddy 리로드
+          systemctl is-active --quiet caddy && sudo systemctl reload caddy 2>/dev/null || true
+          sleep 15
+          
+          # 헬스체크 (최대 5회 재시도)
           for i in {1..5}; do
-            sleep 5
-            HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" $HEALTH_CHECK_URL 2>/dev/null || echo "000")
-            
+            HTTP_STATUS=$(timeout 5 curl -s -o /dev/null -w "%{http_code}" "$HEALTH_CHECK_URL" 2>/dev/null || echo "000")
             if [ "$HTTP_STATUS" = "200" ]; then
               echo "배포 성공! (HTTP $HTTP_STATUS)"
-              
-              pm2 save
-              
-              find $BACKUP_DIR -name "code_*" -type d -mtime +7 -exec rm -rf {} + 2>/dev/null || true
-              
+              sudo -u ubuntu pm2 save 2>/dev/null || true
+              (find $BACKUP_DIR -name "code_*" -type d -mtime +7 -exec rm -rf {} + 2>/dev/null) &
               echo "============================================"
               echo "Re-Fit AI 배포 완료: $(date)"
               echo "============================================"
               exit 0
             fi
-            
-            echo "Health check 시도 중... ($i/5) - HTTP $HTTP_STATUS"
+            [ $i -lt 5 ] && sleep 3
           done
           
-          echo "헬스 체크 실패 - 롤백을 시작합니다."
-          rollback
+          # 헬스체크 실패 시 롤백
+          echo "헬스체크 실패, 롤백 시도 중..."
+          BACKUP_DIR_PATH="$BACKUP_DIR/code_$TIMESTAMP"
+          if [ -d "$BACKUP_DIR_PATH" ]; then
+            rm -rf "$AI_APP_DIR"
+            cp -r "$BACKUP_DIR_PATH" "$AI_APP_DIR"
+            sudo chown -R ubuntu:ubuntu "$AI_APP_DIR" 2>/dev/null || true
+            sudo -u ubuntu pm2 reload ${APP_NAME}
+            sleep 5
+            HTTP_STATUS=$(timeout 10 curl -s -o /dev/null -w "%{http_code}" "$HEALTH_CHECK_URL" 2>/dev/null || echo "000")
+            if [ "$HTTP_STATUS" = "200" ]; then
+              echo "롤백 성공"
+              sudo -u ubuntu pm2 save 2>/dev/null || true
+            else
+              echo "롤백 후에도 헬스체크 실패"
+            fi
+          fi
+          exit 1
           SCRIPT_END
           )
           
