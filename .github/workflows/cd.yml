@@ -233,7 +233,10 @@ jobs:
               cp -r "$BACKUP_DIR/code_$TIMESTAMP" "$AI_APP_DIR"
               sudo chown -R ubuntu:ubuntu "$AI_APP_DIR" 2>/dev/null || true
             fi
-            sudo -u ubuntu pm2 reload ${APP_NAME} --update-env 2>/dev/null || true
+            sudo lsof -ti:8000 | xargs -r sudo kill -9 2>/dev/null || true
+            sudo -u ubuntu pm2 stop ${APP_NAME} 2>/dev/null || true
+            sudo -u ubuntu pm2 delete ${APP_NAME} 2>/dev/null || true
+            sudo -u ubuntu pm2 start $PM2_CONFIG --only ${APP_NAME} --env production 2>/dev/null || true
             rm -rf $TEMP_DIR
             exit 1
           }
@@ -244,15 +247,23 @@ jobs:
           # 권한 설정
           sudo chown -R ubuntu:ubuntu "$AI_APP_DIR" 2>/dev/null || true
           
-          # PM2로 애플리케이션 재시작 또는 시작
-          echo "AI 서비스 무중단 재시작 중..."
+          # 8000번 포트를 사용하는 프로세스 종료
+          echo "8000번 포트를 사용하는 프로세스 종료 중..."
+          sudo lsof -ti:8000 | xargs -r sudo kill -9 2>/dev/null || true
+          sleep 1
+          
+          # 기존 PM2 프로세스 정리
+          echo "기존 PM2 프로세스 정리 중..."
           if sudo -u ubuntu pm2 describe ${APP_NAME} > /dev/null 2>&1; then
-            echo "기존 프로세스 무중단 재시작 (Reload)..."
-            sudo -u ubuntu pm2 reload ${APP_NAME} --update-env || sudo -u ubuntu pm2 delete ${APP_NAME}
-          else
-            echo "신규 프로세스 시작..."
-            sudo -u ubuntu pm2 start $PM2_CONFIG --only ${APP_NAME} --env production || exit 1
+            echo "기존 프로세스 중지 및 삭제..."
+            sudo -u ubuntu pm2 stop ${APP_NAME} 2>/dev/null || true
+            sudo -u ubuntu pm2 delete ${APP_NAME} 2>/dev/null || true
+            sleep 1
           fi
+          
+          # PM2로 애플리케이션 시작
+          echo "AI 서비스 시작 중..."
+          sudo -u ubuntu pm2 start $PM2_CONFIG --only ${APP_NAME} --env production || exit 1
           
           sleep 2
           sudo -u ubuntu pm2 describe ${APP_NAME} > /dev/null || exit 1
@@ -283,8 +294,18 @@ jobs:
             rm -rf "$AI_APP_DIR"
             cp -r "$BACKUP_DIR_PATH" "$AI_APP_DIR"
             sudo chown -R ubuntu:ubuntu "$AI_APP_DIR" 2>/dev/null || true
-            sudo -u ubuntu pm2 reload ${APP_NAME}
+            
+            # 8000번 포트를 사용하는 프로세스 종료
+            sudo lsof -ti:8000 | xargs -r sudo kill -9 2>/dev/null || true
+            sleep 1
+            
+            # 기존 PM2 프로세스 정리 후 재시작
+            sudo -u ubuntu pm2 stop ${APP_NAME} 2>/dev/null || true
+            sudo -u ubuntu pm2 delete ${APP_NAME} 2>/dev/null || true
+            sleep 1
+            sudo -u ubuntu pm2 start $PM2_CONFIG --only ${APP_NAME} --env production
             sleep 5
+            
             HTTP_STATUS=$(timeout 10 curl -s -o /dev/null -w "%{http_code}" "$HEALTH_CHECK_URL" 2>/dev/null || echo "000")
             if [ "$HTTP_STATUS" = "200" ]; then
               echo "롤백 성공"
