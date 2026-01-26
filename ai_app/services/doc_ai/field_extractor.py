@@ -51,6 +51,7 @@ class FieldExtractor:
 
         # LLM 호출하여 추출
         import logging
+
         logger = logging.getLogger(__name__)
 
         try:

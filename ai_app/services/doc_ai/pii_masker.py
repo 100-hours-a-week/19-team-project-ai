@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class PIIEntity:
     """마스킹된 PII 엔티티 정보"""
+
     entity_type: str
     start: int
     end: int
@@ -25,6 +26,7 @@ class PIIEntity:
 @dataclass
 class MaskingResult:
     """마스킹 결과"""
+
     masked_text: str
     entities: list[PIIEntity] = field(default_factory=list)
     processing_time: float = 0.0
@@ -86,14 +88,16 @@ class PresidioPIIMasker(PIIMasker):
                 for match in reversed(matches):  # 뒤에서부터 처리 (인덱스 변경 방지)
                     replacement = self.mask_replacements.get(entity_type, "[MASKED]")
                     original = match.group()
-                    entities.append(PIIEntity(
-                        entity_type=entity_type,
-                        start=match.start(),
-                        end=match.end(),
-                        original_text=original,
-                        masked_text=replacement,
-                    ))
-                    masked_text = masked_text[:match.start()] + replacement + masked_text[match.end():]
+                    entities.append(
+                        PIIEntity(
+                            entity_type=entity_type,
+                            start=match.start(),
+                            end=match.end(),
+                            original_text=original,
+                            masked_text=replacement,
+                        )
+                    )
+                    masked_text = masked_text[: match.start()] + replacement + masked_text[match.end() :]
 
             # 2. Presidio로 영어 PII 추가 감지
             try:
@@ -116,13 +120,15 @@ class PresidioPIIMasker(PIIMasker):
                     masked_text = anonymized.text
 
                     for item in anonymized.items:
-                        entities.append(PIIEntity(
-                            entity_type=item.entity_type,
-                            start=item.start,
-                            end=item.end,
-                            original_text=item.text,
-                            masked_text=self.mask_replacements.get(item.entity_type, "[MASKED]"),
-                        ))
+                        entities.append(
+                            PIIEntity(
+                                entity_type=item.entity_type,
+                                start=item.start,
+                                end=item.end,
+                                original_text=item.text,
+                                masked_text=self.mask_replacements.get(item.entity_type, "[MASKED]"),
+                            )
+                        )
             except Exception as presidio_error:
                 logger.warning(f"Presidio 분석 스킵: {presidio_error}")
 
@@ -130,10 +136,7 @@ class PresidioPIIMasker(PIIMasker):
             logger.info(f"PII 마스킹 완료 ({self.name}): {len(entities)}개 엔티티 발견")
 
             return MaskingResult(
-                masked_text=masked_text,
-                entities=entities,
-                processing_time=processing_time,
-                method_name=self.name
+                masked_text=masked_text, entities=entities, processing_time=processing_time, method_name=self.name
             )
 
         except Exception as e:
@@ -153,9 +156,7 @@ class KcBERTPIIMasker(PIIMasker):
 
             # seungkukim/korean-pii-masking 모델 로드
             self.pipeline = pipeline(
-                "token-classification",
-                model="seungkukim/korean-pii-masking",
-                aggregation_strategy="simple"
+                "token-classification", model="seungkukim/korean-pii-masking", aggregation_strategy="simple"
             )
             self.available = True
             print("✅ KcBERT 기반 PII 모델 로드 완료")
@@ -171,10 +172,7 @@ class KcBERTPIIMasker(PIIMasker):
     def mask_text(self, text: str) -> MaskingResult:
         if not self.available:
             return MaskingResult(
-                masked_text=text,
-                entities=[],
-                processing_time=0,
-                method_name=f"{self.name} (사용 불가)"
+                masked_text=text, entities=[], processing_time=0, method_name=f"{self.name} (사용 불가)"
             )
 
         start_time = time.time()
@@ -192,49 +190,48 @@ class KcBERTPIIMasker(PIIMasker):
 
         # 역순으로 처리하여 인덱스 유지
         # results는 dict list 형태
-        for entity in sorted(results, key=lambda x: x['start'], reverse=True):
-            entity_type = entity['entity_group']
+        for entity in sorted(results, key=lambda x: x["start"], reverse=True):
+            entity_type = entity["entity_group"]
 
             # 엔티티 타입 매핑
             type_mapping = {
-                'PS_NAME': 'NAME',
-                'QT_MOBILE': 'PHONE',
-                'QT_PHONE': 'PHONE',
-                'TMI_EMAIL': 'EMAIL',
-                'QT_RESIDENT_NUMBER': 'RRN',
-                'QT_CARD_NUMBER': 'CARD'
+                "PS_NAME": "NAME",
+                "QT_MOBILE": "PHONE",
+                "QT_PHONE": "PHONE",
+                "TMI_EMAIL": "EMAIL",
+                "QT_RESIDENT_NUMBER": "RRN",
+                "QT_CARD_NUMBER": "CARD",
             }
 
             # 마스킹 라벨 생성
             mapped_type = type_mapping.get(entity_type, entity_type)
             korean_labels = {
-                'NAME': '이름',
-                'PHONE': '전화번호',
-                'EMAIL': '이메일',
-                'RRN': '주민번호',
-                'CARD': '카드번호'
+                "NAME": "이름",
+                "PHONE": "전화번호",
+                "EMAIL": "이메일",
+                "RRN": "주민번호",
+                "CARD": "카드번호",
             }
             label_text = korean_labels.get(mapped_type, mapped_type)
             masked_label = f"[{label_text}]"
 
-            detected_entities.append(PIIEntity(
-                entity_type=mapped_type,
-                original_text=entity['word'],
-                start=entity['start'],
-                end=entity['end'],
-                masked_text=masked_label,
-                score=entity['score']
-            ))
+            detected_entities.append(
+                PIIEntity(
+                    entity_type=mapped_type,
+                    original_text=entity["word"],
+                    start=entity["start"],
+                    end=entity["end"],
+                    masked_text=masked_label,
+                    score=entity["score"],
+                )
+            )
 
-            masked_text = masked_text[:entity['start']] + masked_label + masked_text[entity['end']:]
+            masked_text = masked_text[: entity["start"]] + masked_label + masked_text[entity["end"] :]
 
         processing_time = time.time() - start_time
 
         return MaskingResult(
-            masked_text=masked_text,
-            entities=detected_entities,
-            processing_time=processing_time,
-            method_name=self.name
+            masked_text=masked_text, entities=detected_entities, processing_time=processing_time, method_name=self.name
         )
 
 
@@ -247,8 +244,8 @@ def get_pii_masker() -> PIIMasker:
     global _masker
     if _masker is None:
         _masker = KcBERTPIIMasker()
-        if not getattr(_masker, 'available', False):
-             logger.warning("KcBERT 사용 불가, Presidio로 대체합니다.")
-             _masker = PresidioPIIMasker()
+        if not getattr(_masker, "available", False):
+            logger.warning("KcBERT 사용 불가, Presidio로 대체합니다.")
+            _masker = PresidioPIIMasker()
 
     return _masker

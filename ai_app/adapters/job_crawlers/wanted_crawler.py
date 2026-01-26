@@ -35,6 +35,7 @@ class WantedCrawler(BaseJobCrawler):
             return None
 
         import json
+
         try:
             data = json.loads(response)
             job = data.get("job", {})

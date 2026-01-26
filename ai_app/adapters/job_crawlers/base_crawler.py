@@ -73,7 +73,7 @@ class BaseJobCrawler(ABC):
             except (httpx.TimeoutException, httpx.NetworkError):
                 if attempt == self.config.max_retries - 1:
                     raise
-                await asyncio.sleep(2 ** attempt)  # exponential backoff
+                await asyncio.sleep(2**attempt)  # exponential backoff
 
         return None
 

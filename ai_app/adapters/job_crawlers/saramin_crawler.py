@@ -85,15 +85,11 @@ class SaraminCrawler(BaseJobCrawler):
                         deadline = match.group(1).strip()
 
             # JavaScript 변수에서 추가 정보 추출
-            script_match = re.search(
-                r"companyNm\s*=\s*'([^']+)'", main_html
-            )
+            script_match = re.search(r"companyNm\s*=\s*'([^']+)'", main_html)
             if script_match and not company_name:
                 company_name = script_match.group(1)
 
-            category_match = re.search(
-                r"jobCategoryNm\s*=\s*'([^']+)'", main_html
-            )
+            category_match = re.search(r"jobCategoryNm\s*=\s*'([^']+)'", main_html)
             if category_match:
                 categories = category_match.group(1).split(",")
                 job_categories = [c.strip() for c in categories[:5] if c.strip()]
@@ -247,7 +243,28 @@ class SaraminCrawler(BaseJobCrawler):
                     elif not result["deadline_location"].get("location"):
                         # 근무지 키워드 없이 주소가 오는 경우 (이전 줄이 "근무지"였을 때)
                         # 주소 패턴 확인 (서울, 경기 등으로 시작하거나 지역명 포함)
-                        if any(loc in clean_line for loc in ["서울", "경기", "부산", "대구", "인천", "광주", "대전", "울산", "세종", "강원", "충북", "충남", "전북", "전남", "경북", "경남", "제주"]):
+                        if any(
+                            loc in clean_line
+                            for loc in [
+                                "서울",
+                                "경기",
+                                "부산",
+                                "대구",
+                                "인천",
+                                "광주",
+                                "대전",
+                                "울산",
+                                "세종",
+                                "강원",
+                                "충북",
+                                "충남",
+                                "전북",
+                                "전남",
+                                "경북",
+                                "경남",
+                                "제주",
+                            ]
+                        ):
                             result["deadline_location"]["location"] = clean_line
                 elif current_section == "company_intro":
                     # 회사 소개는 스킵

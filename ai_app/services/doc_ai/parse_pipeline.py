@@ -30,6 +30,7 @@ class ExtractedFields(BaseModel):
     certifications: list[str] = Field(default_factory=list, description="자격증 (자격증명 (YYYY))")
     etc: list[str] = Field(default_factory=list, description="대외 활동/기타")
 
+
 # ============== 파싱 결과 ==============
 
 
@@ -208,6 +209,7 @@ class ParsePipeline:
 
             # 마스킹된 텍스트로 임시 ParsedDocument 생성
             from services.doc_ai.pdf_parser import ParsedDocument
+
             masked_doc = ParsedDocument(
                 pages=parsed_doc.pages,
                 total_pages=parsed_doc.total_pages,
