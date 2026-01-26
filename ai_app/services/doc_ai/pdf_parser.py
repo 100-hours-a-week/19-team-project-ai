@@ -1,6 +1,5 @@
 """PDF 파서 - PDF 파일에서 텍스트와 레이아웃 추출"""
 
-import io
 from dataclasses import dataclass
 from pathlib import Path
 

@@ -3,9 +3,9 @@
 import re
 
 from bs4 import BeautifulSoup
+from schemas.jobs import CompanyInfo, JobPosting, JobSource, SalaryInfo
 
 from adapters.job_crawlers.base_crawler import BaseJobCrawler, CrawlerConfig
-from schemas.jobs import JobPosting, JobSource, CompanyInfo, SalaryInfo
 
 
 class SaraminCrawler(BaseJobCrawler):

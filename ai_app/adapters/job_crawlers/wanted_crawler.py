@@ -2,8 +2,9 @@
 
 import re
 
+from schemas.jobs import CompanyInfo, JobPosting, JobSource
+
 from adapters.job_crawlers.base_crawler import BaseJobCrawler, CrawlerConfig
-from schemas.jobs import JobPosting, JobSource, CompanyInfo
 
 
 class WantedCrawler(BaseJobCrawler):
@@ -15,7 +16,7 @@ class WantedCrawler(BaseJobCrawler):
         if config is None:
             config = CrawlerConfig(
                 base_url="https://www.wanted.co.kr",
-                rate_limit_delay=2.0, 
+                rate_limit_delay=2.0,
             )
         super().__init__(config)
 

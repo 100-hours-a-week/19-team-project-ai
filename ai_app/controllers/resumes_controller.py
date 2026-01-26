@@ -1,10 +1,9 @@
 """이력서 컨트롤러 - 이력서 추출 파이프라인"""
 
-import httpx
 from typing import Any
 
+import httpx
 from fastapi import HTTPException
-
 from schemas.common import ErrorDetail, ResponseCode
 from schemas.resumes import (
     ContentJson,
@@ -34,7 +33,7 @@ class ResumesController:
         """ParseResult를 ResumeResult로 변환"""
         fields = parse_result.extracted_fields
 
-        # 경력 여부로 신입 판단 
+        # 경력 여부로 신입 판단
         is_fresher = len(fields.work_experience) == 0 if fields else True
 
         # 학력 수준 추출 (첫번째 학력에서)

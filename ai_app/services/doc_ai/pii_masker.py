@@ -51,14 +51,14 @@ class PresidioPIIMasker(PIIMasker):
         # Analyzer 초기화 (영어 기본)
         self.analyzer = AnalyzerEngine()
         self.anonymizer = AnonymizerEngine()
-        
+
         # 한국어 패턴 정규식 (Presidio 외부에서 직접 처리)
         self.korean_patterns = {
             "PHONE_NUMBER": re.compile(r"(01[016789][-.\s]?\d{3,4}[-.\s]?\d{4})|(\d{2,3}[-.\s]?\d{3,4}[-.\s]?\d{4})"),
             "KR_RRN": re.compile(r"\d{6}[-\s]?[1-4]\d{6}"),
             "EMAIL": re.compile(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}"),
         }
-        
+
         self.mask_replacements = {
             "PHONE_NUMBER": "[전화번호]",
             "KR_RRN": "[주민번호]",
@@ -95,7 +95,7 @@ class PresidioPIIMasker(PIIMasker):
                     ))
                     masked_text = masked_text[:match.start()] + replacement + masked_text[match.end():]
 
-            # 2. Presidio로 영어 PII 추가 감지 
+            # 2. Presidio로 영어 PII 추가 감지
             try:
                 results = self.analyzer.analyze(
                     text=masked_text,
@@ -103,7 +103,7 @@ class PresidioPIIMasker(PIIMasker):
                     entities=["EMAIL_ADDRESS"],  # PERSON 제거
                     score_threshold=0.7,  # 높은 threshold로 오탐 감소
                 )
-                
+
                 if results:
                     anonymized = self.anonymizer.anonymize(
                         text=masked_text,
@@ -114,7 +114,7 @@ class PresidioPIIMasker(PIIMasker):
                         },
                     )
                     masked_text = anonymized.text
-                    
+
                     for item in anonymized.items:
                         entities.append(PIIEntity(
                             entity_type=item.entity_type,
@@ -143,14 +143,14 @@ class PresidioPIIMasker(PIIMasker):
 
 class KcBERTPIIMasker(PIIMasker):
     """KcBERT 기반 한국어 PII 마스킹 (seungkukim/korean-pii-masking)"""
-    
+
     def __init__(self):
         self.pipeline = None
         self.available = False
-        
+
         try:
             from transformers import pipeline
-            
+
             # seungkukim/korean-pii-masking 모델 로드
             self.pipeline = pipeline(
                 "token-classification",
@@ -159,15 +159,15 @@ class KcBERTPIIMasker(PIIMasker):
             )
             self.available = True
             print("✅ KcBERT 기반 PII 모델 로드 완료")
-            
+
         except Exception as e:
             print(f"⚠️  KcBERT 모델 로드 실패: {e}")
             print("   설치: pip install transformers torch")
-    
+
     @property
     def name(self) -> str:
         return "KcBERT (seungkukim/korean-pii-masking)"
-    
+
     def mask_text(self, text: str) -> MaskingResult:
         if not self.available:
             return MaskingResult(
@@ -176,9 +176,9 @@ class KcBERTPIIMasker(PIIMasker):
                 processing_time=0,
                 method_name=f"{self.name} (사용 불가)"
             )
-        
+
         start_time = time.time()
-        
+
         # 텍스트가 너무 길면 잘라서 처리해야 할 수도 있지만, 일단은 그냥 넣습니다.
         # Transformers pipeline은 길이가 길면 자동으로 잘릴 수 있으니 주의.
         try:
@@ -186,15 +186,15 @@ class KcBERTPIIMasker(PIIMasker):
         except Exception as e:
             logger.error(f"KcBERT 추론 실패: {e}")
             return MaskingResult(masked_text=text, entities=[])
-        
+
         detected_entities = []
         masked_text = text
-        
+
         # 역순으로 처리하여 인덱스 유지
         # results는 dict list 형태
         for entity in sorted(results, key=lambda x: x['start'], reverse=True):
             entity_type = entity['entity_group']
-            
+
             # 엔티티 타입 매핑
             type_mapping = {
                 'PS_NAME': 'NAME',
@@ -204,7 +204,7 @@ class KcBERTPIIMasker(PIIMasker):
                 'QT_RESIDENT_NUMBER': 'RRN',
                 'QT_CARD_NUMBER': 'CARD'
             }
-            
+
             # 마스킹 라벨 생성
             mapped_type = type_mapping.get(entity_type, entity_type)
             korean_labels = {
@@ -216,7 +216,7 @@ class KcBERTPIIMasker(PIIMasker):
             }
             label_text = korean_labels.get(mapped_type, mapped_type)
             masked_label = f"[{label_text}]"
-            
+
             detected_entities.append(PIIEntity(
                 entity_type=mapped_type,
                 original_text=entity['word'],
@@ -225,11 +225,11 @@ class KcBERTPIIMasker(PIIMasker):
                 masked_text=masked_label,
                 score=entity['score']
             ))
-            
+
             masked_text = masked_text[:entity['start']] + masked_label + masked_text[entity['end']:]
-        
+
         processing_time = time.time() - start_time
-        
+
         return MaskingResult(
             masked_text=masked_text,
             entities=detected_entities,

@@ -1,7 +1,6 @@
 """채용공고 API 컨트롤러"""
 
 from fastapi import HTTPException
-
 from schemas.common import ResponseCode
 from schemas.jobs import JobPosting
 from services.job_crawler.crawler_service import CrawlerService, get_crawler_service
