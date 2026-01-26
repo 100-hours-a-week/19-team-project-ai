@@ -1,0 +1,387 @@
+name: Re-Fit AI CD
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: 'CI workflow run ID (자동 입력 또는 직접 입력)'
+        required: false
+        type: string
+      sha:
+        description: 'Commit SHA (자동 입력 또는 직접 입력)'
+        required: false
+        type: string
+      branch:
+        description: 'Branch name'
+        required: true
+        type: choice
+        default: 'develop'
+        options:
+          - develop
+          - main
+      use_latest_artifact:
+        description: 'run_id/sha를 입력하지 않으면 선택한 브랜치의 최신 아티팩트 사용'
+        required: true
+        type: boolean
+        default: true
+
+env:
+  PYTHON_VERSION: '3.11'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.branch == 'main' && 'production' || 'development' }}
+    steps:
+      - name: Find Latest Artifact (if needed)
+        if: inputs.use_latest_artifact == true && (inputs.run_id == '' || inputs.sha == '')
+        id: find-artifact
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.PAT }}
+          script: |
+            const branch = '${{ inputs.branch }}';
+            console.log(`Finding latest artifact for branch: ${branch}`);
+
+            // CI 워크플로우의 최근 성공한 실행 찾기
+            const runs = await github.rest.actions.listWorkflowRuns({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'ci.yml',
+              branch: branch,
+              status: 'success',
+              per_page: 10
+            });
+
+            if (runs.data.workflow_runs.length === 0) {
+              core.setFailed(`No successful CI runs found for branch: ${branch}`);
+              return;
+            }
+
+            // 아티팩트가 있는 최신 실행 찾기
+            for (const run of runs.data.workflow_runs) {
+              const artifacts = await github.rest.actions.listWorkflowRunArtifacts({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                run_id: run.id
+              });
+
+              const buildArtifact = artifacts.data.artifacts.find(
+                a => a.name.startsWith('ai-wheel-')
+              );
+
+              if (buildArtifact) {
+                const sha = run.head_sha;
+                console.log(`Found artifact from run #${run.run_number}`);
+                console.log(`   Run ID: ${run.id}`);
+                console.log(`   SHA: ${sha}`);
+                console.log(`   Created: ${run.created_at}`);
+
+                core.setOutput('run_id', run.id.toString());
+                core.setOutput('sha', sha);
+                core.setOutput('run_number', run.run_number.toString());
+                return;
+              }
+            }
+
+            core.setFailed(`No artifacts found in recent CI runs for branch: ${branch}`);
+
+      - name: Set Deployment Variables
+        id: deploy-vars
+        run: |
+          if [ "${{ inputs.use_latest_artifact }}" == "true" ] && [ -z "${{ inputs.run_id }}" ]; then
+            echo "run_id=${{ steps.find-artifact.outputs.run_id }}" >> $GITHUB_OUTPUT
+            echo "sha=${{ steps.find-artifact.outputs.sha }}" >> $GITHUB_OUTPUT
+            echo "Using latest artifact from run #${{ steps.find-artifact.outputs.run_number }}"
+          else
+            echo "run_id=${{ inputs.run_id }}" >> $GITHUB_OUTPUT
+            echo "sha=${{ inputs.sha }}" >> $GITHUB_OUTPUT
+            echo "Using manually specified artifact"
+          fi
+
+      - name: Download Wheel Package
+        uses: actions/download-artifact@v4
+        with:
+          name: ai-wheel-${{ steps.deploy-vars.outputs.sha }}
+          path: build-output/dist
+          github-token: ${{ secrets.PAT }}
+          run-id: ${{ steps.deploy-vars.outputs.run_id }}
+
+      - name: Download Deployment Files
+        uses: actions/download-artifact@v4
+        with:
+          name: ai-deploy-files-${{ steps.deploy-vars.outputs.sha }}
+          path: build-output
+          github-token: ${{ secrets.PAT }}
+          run-id: ${{ steps.deploy-vars.outputs.run_id }}
+
+      - name: Verify Downloaded Files
+        run: |
+          echo "=== Verifying downloaded files ==="
+          ls -la build-output/
+          if [ -d "build-output/dist" ] && [ -n "$(ls -A build-output/dist/*.whl 2>/dev/null)" ]; then
+            echo "Wheel package found"
+            ls -lh build-output/dist/
+          else
+            echo "Wheel package not found"
+            exit 1
+          fi
+          if [ -f "build-output/ai_app/requirements.txt" ]; then
+            echo "requirements.txt found"
+          else
+            echo "requirements.txt not found"
+            exit 1
+          fi
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ap-northeast-2
+
+      - name: Upload Wheel Package to S3
+        id: s3_upload
+        run: |
+          set -euo pipefail
+          COMMIT_SHA=${{ steps.deploy-vars.outputs.sha }}
+          S3_KEY="artifacts/ai/${COMMIT_SHA}/$(basename build-output/dist/*.whl)"
+          
+          echo "Uploading wheel package to s3://${{ secrets.S3_ARTIFACTS_BUCKET }}/$S3_KEY"
+          aws s3 cp build-output/dist/*.whl s3://${{ secrets.S3_ARTIFACTS_BUCKET }}/$S3_KEY
+          
+          echo "s3_key=$S3_KEY" >> $GITHUB_OUTPUT
+      - name: Deploy via SSM
+        env:
+          SERVER_BASE_PATH: ${{ secrets.SERVER_BASE_PATH }}
+          EC2_INSTANCE_ID: ${{ secrets.EC2_INSTANCE_ID }}
+          HEALTH_CHECK_URL: ${{ secrets.HEALTH_CHECK_URL }}
+          S3_BUCKET: ${{ secrets.S3_ARTIFACTS_BUCKET }}
+          S3_KEY: ${{ steps.s3_upload.outputs.s3_key }}
+        run: |
+          set -euo pipefail
+          
+          BASE_PATH="$SERVER_BASE_PATH"
+          AI_DIR="${BASE_PATH}/app/ai"
+          AI_APP_DIR="${AI_DIR}/ai_app"
+          BACKUP_DIR="${BASE_PATH}/backups/ai"
+          TEMP_DIR="${AI_DIR}/deploy_temp"
+          PM2_CONFIG="${BASE_PATH}/infra/pm2/ecosystem.ai.config.js"
+          
+          DEPLOY_SCRIPT=$(cat <<'SCRIPT_END'
+          set -euo pipefail
+          BASE_PATH="$1"
+          AI_DIR="$2"
+          AI_APP_DIR="$3"
+          BACKUP_DIR="$4"
+          TEMP_DIR="$5"
+          PM2_CONFIG="$6"
+          S3_BUCKET="$7"
+          S3_KEY="$8"
+          HEALTH_CHECK_URL="$9"
+          
+          APP_NAME="ai-service"
+          TIMESTAMP=$(date +%Y%m%d%H%M%S)
+          
+          trap 'sudo -u ubuntu pm2 status || true; exit $?' ERR
+          
+          echo "============================================"
+          echo "Re-Fit AI 배포 시작: $(date)"
+          echo "============================================"
+          
+          mkdir -p $BACKUP_DIR $TEMP_DIR
+          
+          # S3에서 패키지 다운로드
+          echo "S3에서 패키지 다운로드 중..."
+          aws s3 cp s3://$S3_BUCKET/$S3_KEY $TEMP_DIR/ --region ap-northeast-2 || {
+            echo "에러: S3에서 패키지 다운로드 실패"
+            exit 1
+          }
+          
+          if [ ! -f "$TEMP_DIR"/*.whl ]; then
+            echo "에러: Wheel 패키지가 다운로드되지 않았습니다."
+            rm -rf $TEMP_DIR
+            exit 1
+          fi
+          
+          # Wheel 파일 크기 검증 (10KB 이상)
+          WHEEL_FILE=$(ls $TEMP_DIR/*.whl | head -1)
+          WHEEL_SIZE=$(stat -f%z "$WHEEL_FILE" 2>/dev/null || stat -c%s "$WHEEL_FILE" 2>/dev/null || echo 0)
+          if [ "$WHEEL_SIZE" -lt 10000 ]; then
+            echo "에러: Wheel 파일 크기가 너무 작습니다. (${WHEEL_SIZE} bytes < 10KB)"
+            rm -rf $TEMP_DIR
+            exit 1
+          fi
+          echo "Wheel 파일 크기: ${WHEEL_SIZE} bytes"
+          
+          # 기존 코드 백업
+          if [ -d "$AI_APP_DIR" ]; then
+            echo "기존 코드 백업 중..."
+            cp -r "$AI_APP_DIR" "$BACKUP_DIR/code_$TIMESTAMP"
+            echo "백업 완료: $BACKUP_DIR/code_$TIMESTAMP"
+          fi
+          
+          # 새 패키지 설치
+          echo "새 패키지 설치 중..."
+          cd $AI_DIR
+          source venv/bin/activate
+          
+          pip install "$WHEEL_FILE" --force-reinstall || {
+            echo "패키지 설치 실패 - 롤백"
+            if [ -d "$BACKUP_DIR/code_$TIMESTAMP" ]; then
+              rm -rf "$AI_APP_DIR"
+              cp -r "$BACKUP_DIR/code_$TIMESTAMP" "$AI_APP_DIR"
+              sudo chown -R ubuntu:ubuntu "$AI_APP_DIR" 2>/dev/null || true
+            fi
+            sudo lsof -ti:8000 | xargs -r sudo kill -9 2>/dev/null || true
+            sudo -u ubuntu pm2 stop ${APP_NAME} 2>/dev/null || true
+            sudo -u ubuntu pm2 delete ${APP_NAME} 2>/dev/null || true
+            sudo -u ubuntu pm2 start $PM2_CONFIG --only ${APP_NAME} --env production 2>/dev/null || true
+            rm -rf $TEMP_DIR
+            exit 1
+          }
+          
+          echo "패키지 설치 완료"
+          rm -rf $TEMP_DIR
+          
+          # 권한 설정
+          sudo chown -R ubuntu:ubuntu "$AI_APP_DIR" 2>/dev/null || true
+          
+          # 8000번 포트를 사용하는 프로세스 종료
+          echo "8000번 포트를 사용하는 프로세스 종료 중..."
+          sudo lsof -ti:8000 | xargs -r sudo kill -9 2>/dev/null || true
+          sleep 1
+          
+          # 기존 PM2 프로세스 정리
+          echo "기존 PM2 프로세스 정리 중..."
+          if sudo -u ubuntu pm2 describe ${APP_NAME} > /dev/null 2>&1; then
+            echo "기존 프로세스 중지 및 삭제..."
+            sudo -u ubuntu pm2 stop ${APP_NAME} 2>/dev/null || true
+            sudo -u ubuntu pm2 delete ${APP_NAME} 2>/dev/null || true
+            sleep 1
+          fi
+          
+          # PM2로 애플리케이션 시작
+          echo "AI 서비스 시작 중..."
+          sudo -u ubuntu pm2 start $PM2_CONFIG --only ${APP_NAME} --env production || exit 1
+          
+          sleep 2
+          sudo -u ubuntu pm2 describe ${APP_NAME} > /dev/null || exit 1
+          
+          # Caddy 리로드
+          systemctl is-active --quiet caddy && sudo systemctl reload caddy 2>/dev/null || true
+          sleep 15
+          
+          # 헬스체크 (최대 5회 재시도)
+          for i in {1..5}; do
+            HTTP_STATUS=$(timeout 5 curl -s -o /dev/null -w "%{http_code}" "$HEALTH_CHECK_URL" 2>/dev/null || echo "000")
+            if [ "$HTTP_STATUS" = "200" ]; then
+              echo "배포 성공! (HTTP $HTTP_STATUS)"
+              sudo -u ubuntu pm2 save 2>/dev/null || true
+              (find $BACKUP_DIR -name "code_*" -type d -mtime +7 -exec rm -rf {} + 2>/dev/null) &
+              echo "============================================"
+              echo "Re-Fit AI 배포 완료: $(date)"
+              echo "============================================"
+              exit 0
+            fi
+            [ $i -lt 5 ] && sleep 3
+          done
+          
+          # 헬스체크 실패 시 롤백
+          echo "헬스체크 실패, 롤백 시도 중..."
+          BACKUP_DIR_PATH="$BACKUP_DIR/code_$TIMESTAMP"
+          if [ -d "$BACKUP_DIR_PATH" ]; then
+            rm -rf "$AI_APP_DIR"
+            cp -r "$BACKUP_DIR_PATH" "$AI_APP_DIR"
+            sudo chown -R ubuntu:ubuntu "$AI_APP_DIR" 2>/dev/null || true
+            
+            # 8000번 포트를 사용하는 프로세스 종료
+            sudo lsof -ti:8000 | xargs -r sudo kill -9 2>/dev/null || true
+            sleep 1
+            
+            # 기존 PM2 프로세스 정리 후 재시작
+            sudo -u ubuntu pm2 stop ${APP_NAME} 2>/dev/null || true
+            sudo -u ubuntu pm2 delete ${APP_NAME} 2>/dev/null || true
+            sleep 1
+            sudo -u ubuntu pm2 start $PM2_CONFIG --only ${APP_NAME} --env production
+            sleep 5
+            
+            HTTP_STATUS=$(timeout 10 curl -s -o /dev/null -w "%{http_code}" "$HEALTH_CHECK_URL" 2>/dev/null || echo "000")
+            if [ "$HTTP_STATUS" = "200" ]; then
+              echo "롤백 성공"
+              sudo -u ubuntu pm2 save 2>/dev/null || true
+            else
+              echo "롤백 후에도 헬스체크 실패"
+            fi
+          fi
+          exit 1
+          SCRIPT_END
+          )
+          
+          # SSM 명령 실행 (base64 인코딩으로 특수문자 이스케이프 문제 방지)
+          DEPLOY_SCRIPT_ENCODED=$(echo "$DEPLOY_SCRIPT" | base64 -w 0)
+          SSM_COMMAND="bash -c \"echo '$DEPLOY_SCRIPT_ENCODED' | base64 -d | bash -s -- '$BASE_PATH' '$AI_DIR' '$AI_APP_DIR' '$BACKUP_DIR' '$TEMP_DIR' '$PM2_CONFIG' '$S3_BUCKET' '$S3_KEY' '$HEALTH_CHECK_URL'\""
+          PARAMETERS_JSON=$(jq -n --arg cmd "$SSM_COMMAND" '{commands: [$cmd]}')
+          
+          COMMAND_ID=$(aws ssm send-command \
+            --instance-ids "$EC2_INSTANCE_ID" \
+            --document-name "AWS-RunShellScript" \
+            --parameters "$PARAMETERS_JSON" \
+            --timeout-seconds 600 \
+            --region ap-northeast-2 \
+            --query 'Command.CommandId' \
+            --output text)
+          
+          [ -n "$COMMAND_ID" ] || exit 1
+          
+          echo "SSM Command ID: $COMMAND_ID"
+          
+          # SSM 명령 실행 상태 확인 (최대 60회, 5분)
+          for i in {1..60}; do
+            STATUS=$(aws ssm get-command-invocation \
+              --command-id "$COMMAND_ID" \
+              --instance-id "$EC2_INSTANCE_ID" \
+              --region ap-northeast-2 \
+              --query 'Status' \
+              --output text 2>/dev/null || echo "InProgress")
+            
+            if [ "$STATUS" = "Success" ]; then
+              aws ssm get-command-invocation \
+                --command-id "$COMMAND_ID" \
+                --instance-id "$EC2_INSTANCE_ID" \
+                --region ap-northeast-2 \
+                --query 'StandardOutputContent' \
+                --output text
+              exit 0
+            elif [ "$STATUS" = "Failed" ] || [ "$STATUS" = "Cancelled" ] || [ "$STATUS" = "TimedOut" ]; then
+              echo "SSM Command failed with status: $STATUS"
+              echo "=== Standard Output ==="
+              aws ssm get-command-invocation \
+                --command-id "$COMMAND_ID" \
+                --instance-id "$EC2_INSTANCE_ID" \
+                --region ap-northeast-2 \
+                --query 'StandardOutputContent' \
+                --output text
+              echo "=== Standard Error ==="
+              aws ssm get-command-invocation \
+                --command-id "$COMMAND_ID" \
+                --instance-id "$EC2_INSTANCE_ID" \
+                --region ap-northeast-2 \
+                --query 'StandardErrorContent' \
+                --output text
+              exit 1
+            fi
+            [ $i -eq 1 ] && echo "Waiting for SSM command to complete..."
+            [ $i -eq 30 ] && echo "Still waiting... (30/60 checks completed)"
+            sleep 5
+          done
+          
+          echo "SSM Command timeout after 60 checks"
+          echo "=== Final Status ==="
+          aws ssm get-command-invocation \
+            --command-id "$COMMAND_ID" \
+            --instance-id "$EC2_INSTANCE_ID" \
+            --region ap-northeast-2 \
+            --query '[Status, StandardOutputContent, StandardErrorContent]' \
+            --output text
+          exit 1
