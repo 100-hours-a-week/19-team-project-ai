@@ -12,6 +12,7 @@ class ResponseCode(str, Enum):
     """응답 코드"""
 
     OK = "OK"
+    BAD_REQUEST = "BAD_REQUEST"
     NOT_FOUND = "NOT_FOUND"
     VALIDATION_ERROR = "VALIDATION_ERROR"
     INTERNAL_SERVER_ERROR = "INTERNAL_SERVER_ERROR"

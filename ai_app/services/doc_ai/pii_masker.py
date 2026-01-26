@@ -246,8 +246,6 @@ def get_pii_masker() -> PIIMasker:
     """PIIMasker 싱글톤 반환 (기본값: KcBERT)"""
     global _masker
     if _masker is None:
-        # 우선 KcBERT 시도, 실패 시 Presidio로 fallback할 수도 있지만
-        # 여기서는 요구사항대로 KcBERT 사용
         _masker = KcBERTPIIMasker()
         if not getattr(_masker, 'available', False):
              logger.warning("KcBERT 사용 불가, Presidio로 대체합니다.")
