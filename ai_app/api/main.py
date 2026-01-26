@@ -7,9 +7,8 @@ load_dotenv()
 
 import logging
 
+from api.endpoints import health_router, jobs_router, resumes_router
 from fastapi import FastAPI
-
-from api.endpoints import health_router, resumes_router, jobs_router
 
 # 로그 레벨 설정 (INFO 이상 출력)
 logging.basicConfig(
