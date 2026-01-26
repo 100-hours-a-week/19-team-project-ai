@@ -4,14 +4,10 @@ import re
 from urllib.parse import urlparse
 
 from adapters.job_crawlers.base_crawler import BaseJobCrawler
-from adapters.job_crawlers.saramin_crawler import SaraminCrawler
 from adapters.job_crawlers.jobkorea_crawler import JobKoreaCrawler
+from adapters.job_crawlers.saramin_crawler import SaraminCrawler
 from adapters.job_crawlers.wanted_crawler import WantedCrawler
-from schemas.jobs import (
-    JobSource,
-    JobPosting,
-)
-
+from schemas.jobs import JobPosting, JobSource
 
 class CrawlerService:
     """채용공고 크롤링 서비스 - 여러 소스 오케스트레이션"""
