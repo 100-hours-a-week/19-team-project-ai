@@ -385,3 +385,43 @@ jobs:
             --query '[Status, StandardOutputContent, StandardErrorContent]' \
             --output text
           exit 1
+
+      - name: Notify Discord on Result
+        if: always()
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+          STATUS: ${{ job.status }}
+          BRANCH: ${{ inputs.branch }}
+          SHA: ${{ steps.deploy-vars.outputs.sha }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          # 상태에 따른 색상 및 이모지 설정
+          if [ "$STATUS" = "success" ]; then
+            COLOR=3066993
+            EMOJI="✅"
+          else
+            COLOR=15158332
+            EMOJI="🚨"
+          fi
+
+          # JSON 페이로드 생성
+          payload=$(cat <<EOF
+          {
+            "embeds": [{
+              "title": "$EMOJI AI 배포 결과: $STATUS",
+              "color": $COLOR,
+              "fields": [
+                {"name": "서비스", "value": "Re-Fit AI", "inline": true},
+                {"name": "브랜치", "value": "\`$BRANCH\`", "inline": true},
+                {"name": "커밋 SHA", "value": "\`$SHA\`", "inline": false},
+                {"name": "워크플로우", "value": "[상세 보기](https://github.com/${{ github.repository }}/actions/runs/$RUN_ID)", "inline": false}
+              ],
+              "footer": { "text": "Re-Fit Deployment System" },
+              "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            }]
+          }
+          EOF
+          )
+
+          # 전송
+          curl -H "Content-Type: application/json" -X POST -d "$payload" "$DISCORD_WEBHOOK"

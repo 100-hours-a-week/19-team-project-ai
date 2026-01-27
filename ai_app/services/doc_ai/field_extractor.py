@@ -4,6 +4,7 @@ from typing import Any
 
 from adapters.llm_client import LLMClient, get_llm_client
 from prompts import get_resume_extraction_prompts
+
 from services.doc_ai.pdf_parser import ParsedDocument
 
 
@@ -50,8 +51,9 @@ class FieldExtractor:
 
         # LLM 호출하여 추출
         import logging
+
         logger = logging.getLogger(__name__)
-        
+
         try:
             raw_response = await self.llm_client.generate_json(
                 prompt=user_prompt,
