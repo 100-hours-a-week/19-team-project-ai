@@ -14,9 +14,9 @@ from pathlib import Path
 def normalize_package_name(pkg: str) -> str:
     """패키지 이름 정규화 (extras 포함, 버전 제외)"""
     # 버전 정보 제거 (>=, <=, ==, !=, >, < 등)
-    pkg = re.split(r'[><=!]+', pkg)[0].strip()
+    pkg = re.split(r"[><=!]+", pkg)[0].strip()
     # 소문자 변환 및 언더스코어를 하이픈으로 통일
-    pkg = pkg.lower().replace('_', '-')
+    pkg = pkg.lower().replace("_", "-")
     return pkg
 
 
@@ -60,7 +60,7 @@ def parse_pyproject_deps(pyproject_file: Path) -> set[str]:
             # 같은 줄에 패키지가 있을 수도 있음
             if '"' in stripped or "'" in stripped:
                 # 인용부호 안의 내용 추출
-                match = re.search(r'["\'](.*?)["\']', stripped)
+                match = re.search(r"""["'](.*?)["']""", stripped)
                 if match:
                     pkg = match.group(1)
                     pkg_name = normalize_package_name(pkg)
@@ -75,7 +75,7 @@ def parse_pyproject_deps(pyproject_file: Path) -> set[str]:
         # dependencies 내부
         if in_dependencies:
             # 인용부호로 둘러싸인 패키지 추출
-            match = re.search(r'["\'](.*?)["\']', stripped)
+            match = re.search(r"""["'](.*?)["']""", stripped)
             if match:
                 pkg = match.group(1)
                 pkg_name = normalize_package_name(pkg)
