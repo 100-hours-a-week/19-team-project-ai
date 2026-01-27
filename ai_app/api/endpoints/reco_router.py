@@ -46,3 +46,21 @@ async def update_all_embeddings(
         code=ResponseCode.OK,
         data={"updated_count": updated_count, "message": f"{updated_count}명의 멘토 임베딩이 업데이트되었습니다."},
     )
+
+
+@router.put(
+    "/embeddings/{user_id}",
+    response_model=ApiResponse[dict],
+    summary="멘토 임베딩 개별 업데이트",
+    description="특정 멘토의 프로필 임베딩을 계산하여 백엔드 API로 전송합니다. 회원가입 또는 프로필(기술스택, 직무) 변경 시 호출하세요.",
+)
+async def update_mentor_embedding(
+    user_id: int,
+    controller: RecoController = Depends(get_reco_controller),
+) -> ApiResponse[dict]:
+    """개별 멘토 임베딩 계산 및 백엔드 전송"""
+    result = await controller.compute_and_send_embedding(user_id)
+    if result["success"]:
+        return ApiResponse(code=ResponseCode.OK, data=result)
+    else:
+        return ApiResponse(code=ResponseCode.NOT_FOUND, data=result)

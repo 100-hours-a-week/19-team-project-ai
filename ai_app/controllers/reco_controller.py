@@ -94,6 +94,58 @@ class RecoController:
             retriever = MentorRetriever(conn)
             return retriever.update_all_expert_embeddings()
 
+    async def compute_and_send_embedding(self, user_id: int) -> dict:
+        """
+        개별 멘토 임베딩 계산 후 백엔드 API로 전송
+
+        회원가입 또는 프로필(기술스택, 직무) 변경 시 호출
+
+        Returns:
+            {"success": bool, "user_id": int, "message": str}
+        """
+        import httpx
+
+        backend_url = os.getenv("BACKEND_API_URL", "http://localhost:8080/api/v1")
+
+        with self.get_connection() as conn:
+            retriever = MentorRetriever(conn)
+            embedding_data = retriever.compute_embedding(user_id)
+
+            if not embedding_data:
+                return {
+                    "success": False,
+                    "user_id": user_id,
+                    "message": "프로필 정보가 없어 임베딩을 생성할 수 없습니다.",
+                }
+
+            # 백엔드 API로 임베딩 전송
+            try:
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    response = await client.post(
+                        f"{backend_url}/experts/embeddings",
+                        json=embedding_data,
+                    )
+                    response.raise_for_status()
+
+                return {
+                    "success": True,
+                    "user_id": user_id,
+                    "message": "임베딩이 계산되어 백엔드로 전송되었습니다.",
+                    "embedding_dim": len(embedding_data["embedding"]),
+                }
+            except httpx.HTTPStatusError as e:
+                return {
+                    "success": False,
+                    "user_id": user_id,
+                    "message": f"백엔드 API 오류: {e.response.status_code}",
+                }
+            except httpx.RequestError as e:
+                return {
+                    "success": False,
+                    "user_id": user_id,
+                    "message": f"백엔드 연결 실패: {e!s}",
+                }
+
     async def evaluate_silver_ground_truth(
         self,
         sample_size: int | None = None,

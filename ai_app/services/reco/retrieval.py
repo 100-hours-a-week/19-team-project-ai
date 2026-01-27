@@ -367,7 +367,7 @@ class MentorRetriever:
         ]
 
     def update_expert_embedding(self, user_id: int) -> bool:
-        """특정 멘토의 임베딩 업데이트"""
+        """특정 멘토의 임베딩 업데이트 (직접 DB에 저장)"""
         profile_text = self.get_user_profile_text(user_id)
         if not profile_text:
             return False
@@ -389,6 +389,31 @@ class MentorRetriever:
 
         logger.info(f"Updated embedding for expert {user_id}")
         return True
+
+    def compute_embedding(self, user_id: int) -> dict[str, Any] | None:
+        """
+        사용자 프로필 임베딩 계산
+
+        Args:
+            user_id: 사용자 ID
+
+        Returns:
+            {"user_id": int, "embedding": list[float]} or None
+        """
+        profile_text = self.get_user_profile_text(user_id)
+        if not profile_text:
+            logger.warning(f"User {user_id} has no profile text")
+            return None
+
+        embedding = self.embedder.embed_text(profile_text)
+        embedding_list = embedding.tolist()
+
+        logger.info(f"Computed embedding for user {user_id}, dim={len(embedding_list)}")
+
+        return {
+            "user_id": user_id,
+            "embedding": embedding_list,
+        }
 
     def update_all_expert_embeddings(self) -> int:
         """모든 멘토 임베딩 일괄 업데이트"""
