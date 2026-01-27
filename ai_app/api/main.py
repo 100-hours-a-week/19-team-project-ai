@@ -1,6 +1,6 @@
 import logging
 
-from api.endpoints import health_router, jobs_router, resumes_router
+from api.endpoints import health_router, jobs_router, reco_router, resumes_router
 from dotenv import load_dotenv
 from fastapi import FastAPI
 
@@ -15,8 +15,9 @@ app = FastAPI(
     title="AI Resume & Mentoring Platform",
     description="AI-powered resume processing and mentor matching service",
     version="0.1.0",
+    prefix="/api/ai",
 )
-
 app.include_router(health_router.router, tags=["Health"])
 app.include_router(resumes_router.router)
 app.include_router(jobs_router.router)
+app.include_router(reco_router.router)
