@@ -235,26 +235,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         continue-on-error: true
       
-      # Trigger CD Workflow
-      - name: Trigger CD Workflow
-        if: success()
-        uses: actions/github-script@v7
-        with:
-          github-token: ${{ secrets.PAT }}
-          script: |
-            await github.rest.actions.createWorkflowDispatch({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              workflow_id: 'cd.yml',
-              ref: context.ref,
-              inputs: {
-                run_id: '${{ github.run_id }}',
-                sha: '${{ github.sha }}',
-                branch: '${{ github.ref_name }}'
-              }
-            });
-            console.log('CD workflow triggered successfully');
-
       # Discord 알림 (성공/실패)
       - name: Notify Discord on Release Result
         if: always()
@@ -265,7 +245,7 @@ jobs:
           if [ "$STATUS" = "success" ]; then
             EMOJI="✅"
             COLOR=3066993
-            TITLE="AI 빌드 성공"
+            TITLE="AI 빌드 완료 (배포 시작)"
           else
             EMOJI="🚨"
             COLOR=15158332
@@ -291,3 +271,23 @@ jobs:
           )
           
           curl -H "Content-Type: application/json" -X POST -d "$payload" "$DISCORD_WEBHOOK"
+
+      # Trigger CD Workflow
+      - name: Trigger CD Workflow
+        if: success()
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.PAT }}
+          script: |
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'cd.yml',
+              ref: context.ref,
+              inputs: {
+                run_id: '${{ github.run_id }}',
+                sha: '${{ github.sha }}',
+                branch: '${{ github.ref_name }}'
+              }
+            });
+            console.log('CD workflow triggered successfully');
