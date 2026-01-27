@@ -69,9 +69,6 @@ jobs:
       # [Unit Tests] 단위 테스트 수행
       - name: Run Unit Tests
         run: |
-          if [ -f ${{ env.WORKING_DIRECTORY }}/requirements.txt ]; then 
-            pip install -r ${{ env.WORKING_DIRECTORY }}/requirements.txt
-          fi
           if [ -d "tests/unit" ]; then
             pytest tests/unit -v --cov=${{ env.WORKING_DIRECTORY }}
           else
@@ -218,7 +215,6 @@ jobs:
         with:
           name: ai-deploy-files-${{ github.sha }}
           path: |
-            ${{ env.WORKING_DIRECTORY }}/requirements.txt
             pyproject.toml
           retention-days: 7
       
