@@ -233,14 +233,16 @@ jobs:
           path: dist/*.whl
           retention-days: 7
       
-      # Archive Deployment Files
+      # Archive Deployment Files (소스 코드 포함)
       - name: Archive Deployment Files
         if: success()
         uses: actions/upload-artifact@v4
         with:
           name: ai-deploy-files-${{ github.sha }}
           path: |
+            ai_app/**/*.py
             pyproject.toml
+            README.md
           retention-days: 7
       
       # Create Release Tag

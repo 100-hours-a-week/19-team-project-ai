@@ -41,6 +41,9 @@ dev = [
     "build>=1.0.0",
 ]
 
+[tool.setuptools]
+include-package-data = true  # MANIFEST.in 사용
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["ai_app*"]
