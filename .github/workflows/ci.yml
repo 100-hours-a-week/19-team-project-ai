@@ -235,43 +235,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         continue-on-error: true
       
-      # Discord 알림 (성공/실패)
-      - name: Notify Discord on Release Result
-        if: always()
-        env:
-          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
-          STATUS: ${{ job.status }}
-        run: |
-          if [ "$STATUS" = "success" ]; then
-            EMOJI="✅"
-            COLOR=3066993
-            TITLE="AI 빌드 완료 (배포 시작)"
-          else
-            EMOJI="🚨"
-            COLOR=15158332
-            TITLE="AI 빌드 실패"
-          fi
-          
-          payload=$(cat <<EOF
-          {
-            "embeds": [{
-              "title": "$EMOJI $TITLE",
-              "color": $COLOR,
-              "fields": [
-                {"name": "서비스", "value": "Re-Fit AI", "inline": true},
-                {"name": "브랜치", "value": "\`${{ github.ref_name }}\`", "inline": true},
-                {"name": "커밋 SHA", "value": "\`${{ github.sha }}\`", "inline": false},
-                {"name": "워크플로우", "value": "[상세 보기](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})", "inline": false}
-              ],
-              "footer": { "text": "Re-Fit CI" },
-              "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-            }]
-          }
-          EOF
-          )
-          
-          curl -H "Content-Type: application/json" -X POST -d "$payload" "$DISCORD_WEBHOOK"
-
       # Trigger CD Workflow
       - name: Trigger CD Workflow
         if: success()
