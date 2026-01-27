@@ -27,9 +27,8 @@ env:
   WORKING_DIRECTORY: 'ai_app'
 
 jobs:
-  # ===========================================
+
   # 1. PR 검증 단계 (Lint + Test + Build Check)
-  # ===========================================
   lint-and-test:
     if: |
       github.event_name == 'pull_request' ||
@@ -60,6 +59,7 @@ jobs:
             pip install -r ${{ env.WORKING_DIRECTORY }}/requirements.txt
           fi
       
+      # Lint
       - name: Run Lint (Ruff)
         run: |
           ruff check . --exclude ${{ env.WORKING_DIRECTORY }}/main.py
@@ -84,7 +84,21 @@ jobs:
           else
             echo "No unit tests found"
           fi
+
+      # [Build Check] 머지 전 빌드 가능 여부 확인 단계 추가
+      - name: Build Check
+        run: python -m build --wheel
+        env:
+          NODE_ENV: production # 컨텍스트 유지를 위한 설정
       
+      # 기존 Application Start 체크 유지
+      - name: Verify Application Starts
+        run: |
+          export PYTHONPATH=$PYTHONPATH:$(pwd)/${{ env.WORKING_DIRECTORY }}
+          timeout 10s python -c "from api.main import app; print('Application loaded successfully')" || true
+
+
+  # 2. 통합 검증 단계 (Integration Tests)
       # [Build Check] 머지 전 빌드 가능 여부 확인 단계 추가
       - name: Build Check
         run: python -m build --wheel
@@ -110,12 +124,14 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
+
       
       - name: Cache pip dependencies
         uses: actions/cache@v4
         with:
           path: ~/.cache/pip
           key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+
       
       # [Integration] develop 브랜치 푸시 시에만 통합 테스트 실행
       - name: Install Dependencies
@@ -136,7 +152,7 @@ jobs:
   # ===========================================
   release:
     if: |
-      (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop')) ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
       (github.event_name == 'workflow_dispatch' && (github.event.inputs.job_to_run == 'release' || github.event.inputs.job_to_run == 'all'))
     runs-on: ubuntu-latest
     needs: [integration] # integration 성공 후 실행
