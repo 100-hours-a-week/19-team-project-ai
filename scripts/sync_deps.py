@@ -25,7 +25,7 @@ def parse_requirements(req_file: Path) -> set[str]:
     packages = set()
     if not req_file.exists():
         return packages
-    
+
     with open(req_file) as f:
         for line in f:
             line = line.strip()
@@ -36,7 +36,7 @@ def parse_requirements(req_file: Path) -> set[str]:
             pkg_name = normalize_package_name(line)
             if pkg_name:
                 packages.add(pkg_name)
-    
+
     return packages
 
 
@@ -45,15 +45,15 @@ def parse_pyproject_deps(pyproject_file: Path) -> set[str]:
     packages = set()
     if not pyproject_file.exists():
         return packages
-    
+
     with open(pyproject_file) as f:
         lines = f.readlines()
-    
+
     # dependencies 섹션 찾기
     in_dependencies = False
     for line in lines:
         stripped = line.strip()
-        
+
         # dependencies 시작
         if 'dependencies' in stripped and '=' in stripped and '[' in stripped:
             in_dependencies = True
@@ -67,11 +67,11 @@ def parse_pyproject_deps(pyproject_file: Path) -> set[str]:
                     if pkg_name:
                         packages.add(pkg_name)
             continue
-        
+
         # dependencies 끝
         if in_dependencies and stripped.startswith(']'):
             break
-        
+
         # dependencies 내부
         if in_dependencies:
             # 인용부호로 둘러싸인 패키지 추출
@@ -81,7 +81,7 @@ def parse_pyproject_deps(pyproject_file: Path) -> set[str]:
                 pkg_name = normalize_package_name(pkg)
                 if pkg_name:
                     packages.add(pkg_name)
-    
+
     return packages
 
 
@@ -90,46 +90,46 @@ def main():
     root = Path(__file__).parent.parent
     req_file = root / "ai_app" / "requirements.txt"
     pyproject_file = root / "pyproject.toml"
-    
+
     if not req_file.exists():
         print(f"❌ {req_file} 파일을 찾을 수 없습니다.")
         sys.exit(1)
-    
+
     if not pyproject_file.exists():
         print(f"❌ {pyproject_file} 파일을 찾을 수 없습니다.")
         sys.exit(1)
-    
+
     req_packages = parse_requirements(req_file)
     pyproject_packages = parse_pyproject_deps(pyproject_file)
-    
+
     # 차이 확인
     missing_in_pyproject = req_packages - pyproject_packages
     extra_in_pyproject = pyproject_packages - req_packages
-    
+
     if not missing_in_pyproject and not extra_in_pyproject:
         print("✅ pyproject.toml과 requirements.txt가 동기화되어 있습니다!")
         sys.exit(0)
-    
+
     print("⚠️  의존성 불일치 발견:")
     print()
-    
+
     if missing_in_pyproject:
         print("📦 pyproject.toml에 누락된 패키지:")
         for pkg in sorted(missing_in_pyproject):
             print(f"  - {pkg}")
         print()
-    
+
     if extra_in_pyproject:
         print("📦 requirements.txt에 누락된 패키지:")
         for pkg in sorted(extra_in_pyproject):
             print(f"  - {pkg}")
         print()
-    
+
     print("💡 해결 방법:")
     print("  1. requirements.txt와 pyproject.toml을 수동으로 동기화")
     print("  2. 또는 python scripts/sync_deps.py --fix 실행 (추후 구현)")
     print()
-    
+
     sys.exit(1)
 
 
