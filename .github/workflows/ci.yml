@@ -59,6 +59,11 @@ jobs:
             pip install -r ${{ env.WORKING_DIRECTORY }}/requirements.txt
           fi
       
+      # [Dependency Validation] pyproject.toml과 requirements.txt 동기화 검증
+      - name: Validate Dependencies Sync
+        run: |
+          python scripts/sync_deps.py
+      
       # Lint
       - name: Run Lint (Ruff)
         run: |
