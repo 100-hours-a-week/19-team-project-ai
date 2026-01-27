@@ -255,14 +255,22 @@ jobs:
           echo "8000번 포트를 사용하는 프로세스 종료 중..."
           sudo lsof -ti:8000 | xargs -r sudo kill -9 2>/dev/null || true
           
-          # 기존 PM2 프로세스 정리
-          echo "기존 PM2 프로세스 정리 중..."
-          if sudo -u ubuntu pm2 describe ${APP_NAME} > /dev/null 2>&1; then
-            echo "기존 프로세스 중지 및 삭제..."
-            sudo -u ubuntu pm2 stop ${APP_NAME} 2>/dev/null || true
-            sudo -u ubuntu pm2 delete ${APP_NAME} 2>/dev/null || true
-            sleep 1
-          fi
+          # 모든 AI 관련 PM2 프로세스 정리 (ai-service, ai-serv 등 모두 정리)
+          echo "모든 AI 관련 PM2 프로세스 정리 중..."
+          sudo -u ubuntu pm2 list | grep -E 'ai-service|ai-serv' | awk '{print $2}' | while read -r process_name; do
+            if [ -n "$process_name" ] && [ "$process_name" != "name" ]; then
+              echo "프로세스 정리: $process_name"
+              sudo -u ubuntu pm2 stop "$process_name" 2>/dev/null || true
+              sudo -u ubuntu pm2 delete "$process_name" 2>/dev/null || true
+            fi
+          done
+          sleep 1
+          
+          # 최종 확인: 혹시 남아있는 AI 관련 프로세스 강제 정리
+          sudo -u ubuntu pm2 list | grep -q 'ai-' && {
+            echo "경고: 아직 AI 관련 프로세스가 남아있음. 전체 정리..."
+            sudo -u ubuntu pm2 delete all 2>/dev/null || true
+          } || true
           
           # PM2로 애플리케이션 시작
           echo "AI 서비스 시작 중..."
@@ -301,10 +309,18 @@ jobs:
             # 8000번 포트를 사용하는 프로세스 종료
             sudo lsof -ti:8000 | xargs -r sudo kill -9 2>/dev/null || true
             
-            # 기존 PM2 프로세스 정리 후 재시작
-            sudo -u ubuntu pm2 stop ${APP_NAME} 2>/dev/null || true
-            sudo -u ubuntu pm2 delete ${APP_NAME} 2>/dev/null || true
+            # 모든 AI 관련 PM2 프로세스 정리 (롤백 시에도 완전 정리)
+            echo "롤백: 모든 AI 관련 PM2 프로세스 정리 중..."
+            sudo -u ubuntu pm2 list | grep -E 'ai-service|ai-serv' | awk '{print $2}' | while read -r process_name; do
+              if [ -n "$process_name" ] && [ "$process_name" != "name" ]; then
+                echo "롤백: 프로세스 정리: $process_name"
+                sudo -u ubuntu pm2 stop "$process_name" 2>/dev/null || true
+                sudo -u ubuntu pm2 delete "$process_name" 2>/dev/null || true
+              fi
+            done
             sleep 1
+            
+            # 깨끗하게 정리 후 재시작
             sudo -u ubuntu pm2 start $PM2_CONFIG --only ${APP_NAME} --env production
             sleep 3
             
