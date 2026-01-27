@@ -30,7 +30,7 @@ def parse_requirements(req_file: Path) -> set[str]:
         for line in f:
             line = line.strip()
             # 주석과 빈 줄 제외
-            if not line or line.startswith('#'):
+            if not line or line.startswith("#"):
                 continue
             # 정규화된 패키지 이름 추가
             pkg_name = normalize_package_name(line)
@@ -55,7 +55,7 @@ def parse_pyproject_deps(pyproject_file: Path) -> set[str]:
         stripped = line.strip()
 
         # dependencies 시작
-        if 'dependencies' in stripped and '=' in stripped and '[' in stripped:
+        if "dependencies" in stripped and "=" in stripped and "[" in stripped:
             in_dependencies = True
             # 같은 줄에 패키지가 있을 수도 있음
             if '"' in stripped or "'" in stripped:
@@ -69,7 +69,7 @@ def parse_pyproject_deps(pyproject_file: Path) -> set[str]:
             continue
 
         # dependencies 끝
-        if in_dependencies and stripped.startswith(']'):
+        if in_dependencies and stripped.startswith("]"):
             break
 
         # dependencies 내부
