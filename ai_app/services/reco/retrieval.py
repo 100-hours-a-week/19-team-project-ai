@@ -182,41 +182,73 @@ class MentorRetriever:
         embedding_list = user_embedding.tolist()
 
         # 후보 멘토 조회 (충분한 후보 확보)
-        verified_filter = "AND ep.verified = true" if only_verified else ""
         candidate_limit = max(top_k * 10, 100)
 
-        query = text(f"""
-            SELECT
-                u.id as user_id,
-                u.nickname,
-                u.introduction,
-                ep.company_name,
-                ep.verified,
-                ep.rating_avg,
-                ep.rating_count,
-                ep.responded_request_count,
-                ep.accepted_request_count,
-                ep.rejected_request_count,
-                ep.last_active_at,
-                1 - (ep.embedding <=> CAST(:query_embedding AS vector)) as embedding_similarity,
-                ARRAY_AGG(DISTINCT s.name) FILTER (WHERE s.name IS NOT NULL) as skills,
-                ARRAY_AGG(DISTINCT j.name) FILTER (WHERE j.name IS NOT NULL) as jobs
-            FROM expert_profiles ep
-            JOIN users u ON ep.user_id = u.id
-            LEFT JOIN user_skills us ON u.id = us.user_id
-            LEFT JOIN skills s ON us.skill_id = s.id
-            LEFT JOIN user_jobs uj ON u.id = uj.user_id
-            LEFT JOIN jobs j ON uj.job_id = j.id
-            WHERE ep.user_id != :user_id
-                AND ep.embedding IS NOT NULL
-                {verified_filter}
-            GROUP BY u.id, u.nickname, u.introduction,
-                     ep.company_name, ep.verified, ep.rating_avg, ep.rating_count,
-                     ep.responded_request_count, ep.accepted_request_count,
-                     ep.rejected_request_count, ep.last_active_at, ep.embedding
-            ORDER BY ep.embedding <=> CAST(:query_embedding AS vector)
-            LIMIT :candidate_limit
-        """)
+        if only_verified:
+            query = text("""
+                SELECT
+                    u.id as user_id,
+                    u.nickname,
+                    u.introduction,
+                    ep.company_name,
+                    ep.verified,
+                    ep.rating_avg,
+                    ep.rating_count,
+                    ep.responded_request_count,
+                    ep.accepted_request_count,
+                    ep.rejected_request_count,
+                    ep.last_active_at,
+                    1 - (ep.embedding <=> CAST(:query_embedding AS vector)) as embedding_similarity,
+                    ARRAY_AGG(DISTINCT s.name) FILTER (WHERE s.name IS NOT NULL) as skills,
+                    ARRAY_AGG(DISTINCT j.name) FILTER (WHERE j.name IS NOT NULL) as jobs
+                FROM expert_profiles ep
+                JOIN users u ON ep.user_id = u.id
+                LEFT JOIN user_skills us ON u.id = us.user_id
+                LEFT JOIN skills s ON us.skill_id = s.id
+                LEFT JOIN user_jobs uj ON u.id = uj.user_id
+                LEFT JOIN jobs j ON uj.job_id = j.id
+                WHERE ep.user_id != :user_id
+                    AND ep.embedding IS NOT NULL
+                    AND ep.verified = true
+                GROUP BY u.id, u.nickname, u.introduction,
+                         ep.company_name, ep.verified, ep.rating_avg, ep.rating_count,
+                         ep.responded_request_count, ep.accepted_request_count,
+                         ep.rejected_request_count, ep.last_active_at, ep.embedding
+                ORDER BY ep.embedding <=> CAST(:query_embedding AS vector)
+                LIMIT :candidate_limit
+            """)
+        else:
+            query = text("""
+                SELECT
+                    u.id as user_id,
+                    u.nickname,
+                    u.introduction,
+                    ep.company_name,
+                    ep.verified,
+                    ep.rating_avg,
+                    ep.rating_count,
+                    ep.responded_request_count,
+                    ep.accepted_request_count,
+                    ep.rejected_request_count,
+                    ep.last_active_at,
+                    1 - (ep.embedding <=> CAST(:query_embedding AS vector)) as embedding_similarity,
+                    ARRAY_AGG(DISTINCT s.name) FILTER (WHERE s.name IS NOT NULL) as skills,
+                    ARRAY_AGG(DISTINCT j.name) FILTER (WHERE j.name IS NOT NULL) as jobs
+                FROM expert_profiles ep
+                JOIN users u ON ep.user_id = u.id
+                LEFT JOIN user_skills us ON u.id = us.user_id
+                LEFT JOIN skills s ON us.skill_id = s.id
+                LEFT JOIN user_jobs uj ON u.id = uj.user_id
+                LEFT JOIN jobs j ON uj.job_id = j.id
+                WHERE ep.user_id != :user_id
+                    AND ep.embedding IS NOT NULL
+                GROUP BY u.id, u.nickname, u.introduction,
+                         ep.company_name, ep.verified, ep.rating_avg, ep.rating_count,
+                         ep.responded_request_count, ep.accepted_request_count,
+                         ep.rejected_request_count, ep.last_active_at, ep.embedding
+                ORDER BY ep.embedding <=> CAST(:query_embedding AS vector)
+                LIMIT :candidate_limit
+            """)
 
         result = self.conn.execute(
             query,
@@ -324,29 +356,49 @@ class MentorRetriever:
         query_embedding = self.embedder.embed_text(query_text)
         embedding_list = query_embedding.tolist()
 
-        verified_filter = "AND ep.verified = true" if only_verified else ""
-
-        query = text(f"""
-            SELECT
-                u.id as user_id,
-                u.nickname,
-                u.introduction,
-                ep.company_name,
-                ep.verified,
-                ep.rating_avg,
-                1 - (ep.embedding <=> CAST(:query_embedding AS vector)) as similarity,
-                ARRAY_AGG(DISTINCT s.name) FILTER (WHERE s.name IS NOT NULL) as skills
-            FROM expert_profiles ep
-            JOIN users u ON ep.user_id = u.id
-            LEFT JOIN user_skills us ON u.id = us.user_id
-            LEFT JOIN skills s ON us.skill_id = s.id
-            WHERE ep.embedding IS NOT NULL
-                {verified_filter}
-            GROUP BY u.id, u.nickname, u.introduction,
-                     ep.company_name, ep.verified, ep.rating_avg, ep.embedding
-            ORDER BY ep.embedding <=> CAST(:query_embedding AS vector)
-            LIMIT :top_k
-        """)
+        if only_verified:
+            query = text("""
+                SELECT
+                    u.id as user_id,
+                    u.nickname,
+                    u.introduction,
+                    ep.company_name,
+                    ep.verified,
+                    ep.rating_avg,
+                    1 - (ep.embedding <=> CAST(:query_embedding AS vector)) as similarity,
+                    ARRAY_AGG(DISTINCT s.name) FILTER (WHERE s.name IS NOT NULL) as skills
+                FROM expert_profiles ep
+                JOIN users u ON ep.user_id = u.id
+                LEFT JOIN user_skills us ON u.id = us.user_id
+                LEFT JOIN skills s ON us.skill_id = s.id
+                WHERE ep.embedding IS NOT NULL
+                    AND ep.verified = true
+                GROUP BY u.id, u.nickname, u.introduction,
+                         ep.company_name, ep.verified, ep.rating_avg, ep.embedding
+                ORDER BY ep.embedding <=> CAST(:query_embedding AS vector)
+                LIMIT :top_k
+            """)
+        else:
+            query = text("""
+                SELECT
+                    u.id as user_id,
+                    u.nickname,
+                    u.introduction,
+                    ep.company_name,
+                    ep.verified,
+                    ep.rating_avg,
+                    1 - (ep.embedding <=> CAST(:query_embedding AS vector)) as similarity,
+                    ARRAY_AGG(DISTINCT s.name) FILTER (WHERE s.name IS NOT NULL) as skills
+                FROM expert_profiles ep
+                JOIN users u ON ep.user_id = u.id
+                LEFT JOIN user_skills us ON u.id = us.user_id
+                LEFT JOIN skills s ON us.skill_id = s.id
+                WHERE ep.embedding IS NOT NULL
+                GROUP BY u.id, u.nickname, u.introduction,
+                         ep.company_name, ep.verified, ep.rating_avg, ep.embedding
+                ORDER BY ep.embedding <=> CAST(:query_embedding AS vector)
+                LIMIT :top_k
+            """)
 
         result = self.conn.execute(
             query,
