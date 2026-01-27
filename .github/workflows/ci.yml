@@ -32,7 +32,6 @@ jobs:
   lint-and-test:
     if: |
       github.event_name == 'pull_request' ||
-      github.event_name == 'push' ||
       (github.event_name == 'workflow_dispatch' && (github.event.inputs.job_to_run == 'lint-and-test' || github.event.inputs.job_to_run == 'all'))
     runs-on: ubuntu-latest
     steps:
