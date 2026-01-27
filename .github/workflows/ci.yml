@@ -103,6 +103,37 @@ jobs:
           export PYTHONPATH=$PYTHONPATH:$(pwd)/${{ env.WORKING_DIRECTORY }}
           timeout 10s python -c "from api.main import app; print('Application loaded successfully')" || true
 
+      # Discord 알림 (실패 시)
+      - name: Notify Discord on Lint/Test Failure
+        if: failure()
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+        run: |
+          SEVERITY="P1"
+          EMOJI="🟡"
+          COLOR=16776960
+          
+          payload=$(cat <<EOF
+          {
+            "embeds": [{
+              "title": "$EMOJI [$SEVERITY] AI CI 빌드 실패",
+              "description": "lint-and-test 단계에서 오류가 발생했습니다.",
+              "color": $COLOR,
+              "fields": [
+                {"name": "서비스", "value": "Re-Fit AI", "inline": true},
+                {"name": "단계", "value": "Lint & Test", "inline": true},
+                {"name": "브랜치", "value": "\`${{ github.ref_name }}\`", "inline": false},
+                {"name": "커밋", "value": "\`${{ github.sha }}\`", "inline": false},
+                {"name": "워크플로우", "value": "[상세 보기](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})", "inline": false}
+              ],
+              "footer": { "text": "Re-Fit CI System" },
+              "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            }]
+          }
+          EOF
+          )
+          
+          curl -H "Content-Type: application/json" -X POST -d "$payload" "$DISCORD_WEBHOOK"
 
   # 2. 통합 검증 단계 (Integration Tests)
       # [Build Check] 머지 전 빌드 가능 여부 확인 단계 추가
@@ -152,6 +183,38 @@ jobs:
           else
             echo "⚠️ Integration tests not yet implemented"
           fi
+
+      # Discord 알림 (실패 시)
+      - name: Notify Discord on Integration Failure
+        if: failure()
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+        run: |
+          SEVERITY="P1"
+          EMOJI="🟡"
+          COLOR=16776960
+          
+          payload=$(cat <<EOF
+          {
+            "embeds": [{
+              "title": "$EMOJI [$SEVERITY] AI 통합 테스트 실패",
+              "description": "integration 단계에서 오류가 발생했습니다.",
+              "color": $COLOR,
+              "fields": [
+                {"name": "서비스", "value": "Re-Fit AI", "inline": true},
+                {"name": "단계", "value": "Integration Test", "inline": true},
+                {"name": "브랜치", "value": "\`${{ github.ref_name }}\`", "inline": false},
+                {"name": "커밋", "value": "\`${{ github.sha }}\`", "inline": false},
+                {"name": "워크플로우", "value": "[상세 보기](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})", "inline": false}
+              ],
+              "footer": { "text": "Re-Fit CI System" },
+              "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            }]
+          }
+          EOF
+          )
+          
+          curl -H "Content-Type: application/json" -X POST -d "$payload" "$DISCORD_WEBHOOK"
 
   # ===========================================
   # 3. 릴리즈 확정 단계 (Production Build + Artifact Upload)
@@ -272,3 +335,68 @@ jobs:
               }
             });
             console.log('CD workflow triggered successfully');
+
+      # Discord 알림 (성공 시)
+      - name: Notify Discord on Release Success
+        if: success()
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+        run: |
+          EMOJI="✅"
+          COLOR=3066993
+          
+          payload=$(cat <<EOF
+          {
+            "embeds": [{
+              "title": "$EMOJI AI 릴리즈 아티팩트 생성 완료",
+              "description": "CI 파이프라인이 성공적으로 완료되었으며, CD 배포가 시작됩니다.",
+              "color": $COLOR,
+              "fields": [
+                {"name": "서비스", "value": "Re-Fit AI", "inline": true},
+                {"name": "브랜치", "value": "\`${{ github.ref_name }}\`", "inline": true},
+                {"name": "커밋", "value": "\`${{ github.sha }}\`", "inline": false},
+                {"name": "아티팩트", "value": "ai-wheel-${{ github.sha }}", "inline": false},
+                {"name": "다음 단계", "value": "CD 배포 자동 시작", "inline": false},
+                {"name": "워크플로우", "value": "[상세 보기](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})", "inline": false}
+              ],
+              "footer": { "text": "Re-Fit CI System" },
+              "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            }]
+          }
+          EOF
+          )
+          
+          curl -H "Content-Type: application/json" -X POST -d "$payload" "$DISCORD_WEBHOOK"
+
+      # Discord 알림 (실패 시)
+      - name: Notify Discord on Release Failure
+        if: failure()
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+        run: |
+          SEVERITY="P1"
+          EMOJI="🔴"
+          COLOR=15158332
+          
+          payload=$(cat <<EOF
+          {
+            "embeds": [{
+              "title": "$EMOJI [$SEVERITY] AI 릴리즈 빌드 실패",
+              "description": "릴리즈 아티팩트 생성에 실패했습니다. 배포가 중단되었습니다.",
+              "color": $COLOR,
+              "fields": [
+                {"name": "서비스", "value": "Re-Fit AI", "inline": true},
+                {"name": "단계", "value": "Release Build", "inline": true},
+                {"name": "브랜치", "value": "\`${{ github.ref_name }}\`", "inline": false},
+                {"name": "커밋", "value": "\`${{ github.sha }}\`", "inline": false},
+                {"name": "조치 필요", "value": "빌드 로그 확인 및 수정 필요", "inline": false},
+                {"name": "워크플로우", "value": "[상세 보기](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})", "inline": false}
+              ],
+              "footer": { "text": "Re-Fit CI System" },
+              "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            }]
+          }
+          EOF
+          )
+          
+          curl -H "Content-Type: application/json" -X POST -d "$payload" "$DISCORD_WEBHOOK"
