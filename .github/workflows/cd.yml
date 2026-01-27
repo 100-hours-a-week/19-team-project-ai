@@ -33,36 +33,6 @@ jobs:
     runs-on: ubuntu-latest
     environment: ${{ inputs.branch == 'main' && 'production' || 'development' }}
     steps:
-      # 배포 시작 알림
-      - name: Notify Discord - Deployment Start
-        env:
-          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
-          BRANCH: ${{ inputs.branch }}
-        run: |
-          EMOJI="🚀"
-          COLOR=3447003
-          ENV_NAME="${BRANCH}"
-          
-          payload=$(cat <<EOF
-          {
-            "embeds": [{
-              "title": "$EMOJI AI 배포 시작",
-              "description": "${ENV_NAME} 환경으로 배포를 시작합니다.",
-              "color": $COLOR,
-              "fields": [
-                {"name": "서비스", "value": "Re-Fit AI", "inline": true},
-                {"name": "환경", "value": "\`${ENV_NAME}\`", "inline": true},
-                {"name": "워크플로우", "value": "[상세 보기](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})", "inline": false}
-              ],
-              "footer": { "text": "Re-Fit CD System" },
-              "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-            }]
-          }
-          EOF
-          )
-          
-          curl -H "Content-Type: application/json" -X POST -d "$payload" "$DISCORD_WEBHOOK"
-
       - name: Find Latest Artifact (if needed)
         if: inputs.use_latest_artifact == true && (inputs.run_id == '' || inputs.sha == '')
         id: find-artifact
@@ -321,24 +291,6 @@ jobs:
             [ $i -lt 5 ] && sleep 3
           done
           
-          # 헬스체크 실패 시 P0 알림
-          echo "헬스체크 실패, P0 알림 전송 중..."
-          curl -H "Content-Type: application/json" -X POST -d '{
-            "embeds": [{
-              "title": "🚨 [P0] AI 서비스 헬스체크 실패",
-              "description": "배포 후 헬스체크에 실패했습니다. 즉시 롤백을 시도합니다.",
-              "color": 15158332,
-              "fields": [
-                {"name": "서비스", "value": "Re-Fit AI", "inline": true},
-                {"name": "심각도", "value": "P0 (Critical)", "inline": true},
-                {"name": "조치", "value": "자동 롤백 시작", "inline": false},
-                {"name": "타임스탬프", "value": "'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'", "inline": false}
-              ],
-              "footer": { "text": "Re-Fit CD System - Auto Rollback" },
-              "timestamp": "'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'"
-            }]
-          }' "${DISCORD_WEBHOOK:-}" 2>/dev/null || true
-          
           # 헬스체크 실패 시 롤백
           echo "헬스체크 실패, 롤백 시도 중..."
           BACKUP_DIR_PATH="$BACKUP_DIR/code_$TIMESTAMP"
@@ -366,16 +318,13 @@ jobs:
               # 롤백 성공 알림
               curl -H "Content-Type: application/json" -X POST -d '{
                 "embeds": [{
-                  "title": "✅ AI 서비스 롤백 성공",
-                  "description": "자동 롤백이 성공적으로 완료되었습니다.",
+                  "title": "✅ AI 롤백 성공",
                   "color": 3066993,
                   "fields": [
                     {"name": "서비스", "value": "Re-Fit AI", "inline": true},
-                    {"name": "조치", "value": "이전 버전으로 롤백 완료", "inline": true},
-                    {"name": "상태", "value": "헬스체크 통과 (HTTP 200)", "inline": false},
-                    {"name": "다음 단계", "value": "원인 분석 및 인시던트 보고서 작성 필요", "inline": false}
+                    {"name": "상태", "value": "롤백 완료", "inline": true}
                   ],
-                  "footer": { "text": "Re-Fit CD System - Rollback" },
+                  "footer": { "text": "Re-Fit CD" },
                   "timestamp": "'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'"
                 }]
               }' "${DISCORD_WEBHOOK:-}" 2>/dev/null || true
@@ -385,17 +334,13 @@ jobs:
               # 롤백 실패 알림
               curl -H "Content-Type: application/json" -X POST -d '{
                 "embeds": [{
-                  "title": "🚨 [P0] AI 서비스 롤백 실패",
-                  "description": "자동 롤백 후에도 헬스체크에 실패했습니다. **즉시 수동 개입 필요**",
-                  "color": 10038562,
+                  "title": "🚨 AI 롤백 실패",
+                  "color": 15158332,
                   "fields": [
                     {"name": "서비스", "value": "Re-Fit AI", "inline": true},
-                    {"name": "심각도", "value": "P0 (Critical)", "inline": true},
-                    {"name": "상태", "value": "롤백 후에도 서비스 불가", "inline": false},
-                    {"name": "조치 필요", "value": "@devops-oncall 즉시 확인 필요", "inline": false},
-                    {"name": "참고", "value": "[롤백 Runbook](https://github.com/'"$GITHUB_REPOSITORY"'/blob/main/docs/runbooks/rollback-ai-service.md)", "inline": false}
+                    {"name": "상태", "value": "롤백 실패", "inline": true}
                   ],
-                  "footer": { "text": "Re-Fit CD System - Emergency" },
+                  "footer": { "text": "Re-Fit CD" },
                   "timestamp": "'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'"
                 }]
               }' "${DISCORD_WEBHOOK:-}" 2>/dev/null || true
@@ -482,65 +427,32 @@ jobs:
           SHA: ${{ steps.deploy-vars.outputs.sha }}
           RUN_ID: ${{ github.run_id }}
         run: |
-          # 상태에 따른 색상, 이모지, 심각도 설정
           if [ "$STATUS" = "success" ]; then
-            COLOR=3066993
             EMOJI="✅"
+            COLOR=3066993
             TITLE="AI 배포 성공"
-            DESCRIPTION="배포가 성공적으로 완료되었습니다."
-            SEVERITY=""
           else
-            COLOR=15158332
             EMOJI="🚨"
-            SEVERITY="[P0]"
-            TITLE="$SEVERITY AI 배포 실패"
-            DESCRIPTION="배포 중 오류가 발생했습니다. 즉시 확인이 필요합니다."
+            COLOR=15158332
+            TITLE="AI 배포 실패"
           fi
 
-          # JSON 페이로드 생성
-          if [ "$STATUS" = "success" ]; then
-            payload=$(cat <<EOF
+          payload=$(cat <<EOF
           {
             "embeds": [{
               "title": "$EMOJI $TITLE",
-              "description": "$DESCRIPTION",
               "color": $COLOR,
               "fields": [
                 {"name": "서비스", "value": "Re-Fit AI", "inline": true},
-                {"name": "환경", "value": "\`$BRANCH\`", "inline": true},
+                {"name": "브랜치", "value": "\`$BRANCH\`", "inline": true},
                 {"name": "커밋 SHA", "value": "\`$SHA\`", "inline": false},
-                {"name": "상태", "value": "서비스 정상 운영 중", "inline": false},
                 {"name": "워크플로우", "value": "[상세 보기](https://github.com/${{ github.repository }}/actions/runs/$RUN_ID)", "inline": false}
               ],
-              "footer": { "text": "Re-Fit CD System" },
+              "footer": { "text": "Re-Fit CD" },
               "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
             }]
           }
           EOF
-            )
-          else
-            payload=$(cat <<EOF
-          {
-            "embeds": [{
-              "title": "$EMOJI $TITLE",
-              "description": "$DESCRIPTION",
-              "color": $COLOR,
-              "fields": [
-                {"name": "서비스", "value": "Re-Fit AI", "inline": true},
-                {"name": "심각도", "value": "P0 (Critical)", "inline": true},
-                {"name": "환경", "value": "\`$BRANCH\`", "inline": false},
-                {"name": "커밋 SHA", "value": "\`$SHA\`", "inline": false},
-                {"name": "조치 필요", "value": "@devops-oncall 즉시 확인", "inline": false},
-                {"name": "참고 문서", "value": "[롤백 Runbook](https://github.com/${{ github.repository }}/blob/main/docs/runbooks/rollback-ai-service.md)", "inline": false},
-                {"name": "워크플로우", "value": "[상세 보기](https://github.com/${{ github.repository }}/actions/runs/$RUN_ID)", "inline": false}
-              ],
-              "footer": { "text": "Re-Fit CD System - Emergency" },
-              "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-            }]
-          }
-          EOF
-            )
-          fi
+          )
 
-          # 전송
           curl -H "Content-Type: application/json" -X POST -d "$payload" "$DISCORD_WEBHOOK"
