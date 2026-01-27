@@ -48,19 +48,10 @@ jobs:
         uses: astral-sh/setup-uv@v4
         with:
           enable-cache: true
-          cache-dependency-glob: "${{ env.WORKING_DIRECTORY }}/requirements.txt"
+          cache-dependency-glob: "pyproject.toml"
       
       - name: Install Dependencies
-        run: |
-          uv pip install --system ruff mypy pytest pytest-asyncio pytest-cov bandit build
-          if [ -f ${{ env.WORKING_DIRECTORY }}/requirements.txt ]; then 
-            uv pip install --system -r ${{ env.WORKING_DIRECTORY }}/requirements.txt
-          fi
-      
-      # [Dependency Validation] pyproject.toml과 requirements.txt 동기화 검증
-      - name: Validate Dependencies Sync
-        run: |
-          python scripts/sync_deps.py
+        run: uv pip install --system -e ".[dev]"
       
       # Lint
       - name: Run Lint (Ruff)
@@ -131,13 +122,11 @@ jobs:
         uses: astral-sh/setup-uv@v4
         with:
           enable-cache: true
-          cache-dependency-glob: "${{ env.WORKING_DIRECTORY }}/requirements.txt"
+          cache-dependency-glob: "pyproject.toml"
       
       # [Integration] develop 브랜치 푸시 시에만 통합 테스트 실행
       - name: Install Dependencies
-        run: |
-          uv pip install --system pytest pytest-asyncio
-          uv pip install --system -r ${{ env.WORKING_DIRECTORY }}/requirements.txt
+        run: uv pip install --system -e ".[dev]"
       
       - name: Integration Test
         run: |
@@ -169,7 +158,7 @@ jobs:
         uses: astral-sh/setup-uv@v4
         with:
           enable-cache: true
-          cache-dependency-glob: "${{ env.WORKING_DIRECTORY }}/requirements.txt"
+          cache-dependency-glob: "pyproject.toml"
       
       # Get Version
       - name: Get Version
@@ -181,17 +170,12 @@ jobs:
       
       # Install dependencies
       - name: Install dependencies
-        run: |
-          if [ -f ${{ env.WORKING_DIRECTORY }}/requirements.txt ]; then 
-            uv pip install --system -r ${{ env.WORKING_DIRECTORY }}/requirements.txt
-          fi
-          uv pip install --system build
+        run: uv pip install --system -e ".[dev]"
       
       # Full Regression Test (optional)
       - name: Run Full Tests
         run: |
           if [ -d "tests" ] || [ -d "${{ env.WORKING_DIRECTORY }}/tests" ]; then
-            uv pip install --system pytest pytest-cov pytest-asyncio
             if [ -d "tests" ]; then
               pytest tests/ -v || echo "Tests failed but continuing"
             else
