@@ -322,7 +322,7 @@ jobs:
             
             # 깨끗하게 정리 후 재시작
             sudo -u ubuntu pm2 start $PM2_CONFIG --only ${APP_NAME} --env production
-            sleep 3
+            sleep 2
             
             HTTP_STATUS=$(timeout 10 curl -s -o /dev/null -w "%{http_code}" "$HEALTH_CHECK_URL" 2>/dev/null || echo "000")
             if [ "$HTTP_STATUS" = "200" ]; then
