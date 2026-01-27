@@ -254,7 +254,6 @@ jobs:
           # 8000번 포트를 사용하는 프로세스 종료
           echo "8000번 포트를 사용하는 프로세스 종료 중..."
           sudo lsof -ti:8000 | xargs -r sudo kill -9 2>/dev/null || true
-          sleep 1
           
           # 기존 PM2 프로세스 정리
           echo "기존 PM2 프로세스 정리 중..."
@@ -274,7 +273,7 @@ jobs:
           
           # Caddy 리로드
           systemctl is-active --quiet caddy && sudo systemctl reload caddy 2>/dev/null || true
-          sleep 15
+          sleep 3
           
           # 헬스체크 (최대 5회 재시도)
           for i in {1..5}; do
@@ -288,7 +287,7 @@ jobs:
               echo "============================================"
               exit 0
             fi
-            [ $i -lt 5 ] && sleep 3
+            [ $i -lt 5 ] && sleep 2
           done
           
           # 헬스체크 실패 시 롤백
@@ -301,14 +300,13 @@ jobs:
             
             # 8000번 포트를 사용하는 프로세스 종료
             sudo lsof -ti:8000 | xargs -r sudo kill -9 2>/dev/null || true
-            sleep 1
             
             # 기존 PM2 프로세스 정리 후 재시작
             sudo -u ubuntu pm2 stop ${APP_NAME} 2>/dev/null || true
             sudo -u ubuntu pm2 delete ${APP_NAME} 2>/dev/null || true
             sleep 1
             sudo -u ubuntu pm2 start $PM2_CONFIG --only ${APP_NAME} --env production
-            sleep 5
+            sleep 3
             
             HTTP_STATUS=$(timeout 10 curl -s -o /dev/null -w "%{http_code}" "$HEALTH_CHECK_URL" 2>/dev/null || echo "000")
             if [ "$HTTP_STATUS" = "200" ]; then
