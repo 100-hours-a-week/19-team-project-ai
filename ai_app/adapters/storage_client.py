@@ -1,7 +1,6 @@
 """Storage client adapter for file operations (local/S3)."""
 
 import os
-import shutil
 import uuid
 from datetime import datetime
 from pathlib import Path

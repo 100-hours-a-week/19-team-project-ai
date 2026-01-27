@@ -1,16 +1,13 @@
 """이력서 라우터 - 이력서 추출 API 엔드포인트"""
 
-import os
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, UploadFile, HTTPException
-
 from controllers.resumes_controller import ResumesController, get_resumes_controller
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from schemas.common import ApiResponse, ResponseCode
 from schemas.resumes import (
     ResumeData,
-    ResumeParseRequest,
     ResumeUploadData,
 )
 
@@ -43,29 +40,29 @@ async def upload_resume(
 ) -> ApiResponse[ResumeUploadData]:
     """[임시] PDF 파일 업로드 - resume_id 반환"""
     global _resume_id_counter
-    
+
     # PDF 파일 검증
     if not file.content_type or "pdf" not in file.content_type.lower():
         raise HTTPException(
             status_code=400,
             detail={"code": ResponseCode.BAD_REQUEST.value, "data": {"message": "PDF 파일만 업로드 가능합니다."}},
         )
-    
+
     # resume_id 생성
     _resume_id_counter += 1
     resume_id = _resume_id_counter
-    
+
     # 파일 저장
     file_name = f"{resume_id}_{uuid.uuid4().hex[:8]}.pdf"
     file_path = UPLOAD_DIR / file_name
-    
+
     content = await file.read()
     with open(file_path, "wb") as f:
         f.write(content)
-    
+
     # 파일 경로 저장
     _uploaded_files[resume_id] = file_path
-    
+
     return ApiResponse(
         code=ResponseCode.OK,
         data=ResumeUploadData(resume_id=resume_id, file_path=str(file_path)),
@@ -96,11 +93,11 @@ async def parse_resume(
             status_code=404,
             detail={"code": ResponseCode.NOT_FOUND.value, "data": {"resource": "resume", "id": resume_id}},
         )
-    
+
     # 파일 읽기
     with open(file_path, "rb") as f:
         pdf_bytes = f.read()
-    
+
     # 파싱 실행
     result = await controller.parse_resume_from_bytes(resume_id, pdf_bytes, enable_pii_masking)
     return ApiResponse(code=ResponseCode.OK, data=result)

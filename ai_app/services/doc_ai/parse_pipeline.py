@@ -4,11 +4,10 @@ import logging
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 from pydantic import BaseModel, Field
-
 from schemas.resumes import Project, WorkExperience
+
 from services.doc_ai.field_extractor import FieldExtractor
 from services.doc_ai.pdf_parser import PDFParser
 from services.doc_ai.pii_masker import PIIMasker, get_pii_masker
@@ -30,6 +29,7 @@ class ExtractedFields(BaseModel):
     awards: list[str] = Field(default_factory=list, description="수상 내역")
     certifications: list[str] = Field(default_factory=list, description="자격증 (자격증명 (YYYY))")
     etc: list[str] = Field(default_factory=list, description="대외 활동/기타")
+
 
 # ============== 파싱 결과 ==============
 
@@ -206,9 +206,10 @@ class ParsePipeline:
             # 3단계: LLM을 통한 필드 추출 (마스킹된 텍스트 사용)
             logger.info("-" * 60)
             logger.info("3단계 LLM 필드 추출 시작...")
-            
+
             # 마스킹된 텍스트로 임시 ParsedDocument 생성
             from services.doc_ai.pdf_parser import ParsedDocument
+
             masked_doc = ParsedDocument(
                 pages=parsed_doc.pages,
                 total_pages=parsed_doc.total_pages,
@@ -216,7 +217,7 @@ class ParsePipeline:
                 text_blocks=parsed_doc.text_blocks,
                 is_text_pdf=parsed_doc.is_text_pdf,
             )
-            
+
             extracted_fields, raw_response = await self.field_extractor.extract(
                 masked_doc,
                 include_layout=True,
