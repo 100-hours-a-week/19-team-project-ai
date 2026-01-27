@@ -158,6 +158,8 @@ jobs:
           HEALTH_CHECK_URL: ${{ secrets.HEALTH_CHECK_URL }}
           S3_BUCKET: ${{ secrets.S3_ARTIFACTS_BUCKET }}
           S3_KEY: ${{ steps.s3_upload.outputs.s3_key }}
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
           
@@ -179,6 +181,8 @@ jobs:
           S3_BUCKET="$7"
           S3_KEY="$8"
           HEALTH_CHECK_URL="$9"
+          DISCORD_WEBHOOK="${10}"
+          GITHUB_REPOSITORY="${11}"
           
           APP_NAME="ai-service"
           TIMESTAMP=$(date +%Y%m%d%H%M%S)
@@ -310,8 +314,36 @@ jobs:
             if [ "$HTTP_STATUS" = "200" ]; then
               echo "롤백 성공"
               sudo -u ubuntu pm2 save 2>/dev/null || true
+              
+              # 롤백 성공 알림
+              curl -H "Content-Type: application/json" -X POST -d '{
+                "embeds": [{
+                  "title": "✅ AI 롤백 성공",
+                  "color": 3066993,
+                  "fields": [
+                    {"name": "서비스", "value": "Re-Fit AI", "inline": true},
+                    {"name": "상태", "value": "롤백 완료", "inline": true}
+                  ],
+                  "footer": { "text": "Re-Fit CD" },
+                  "timestamp": "'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'"
+                }]
+              }' "${DISCORD_WEBHOOK:-}" 2>/dev/null || true
             else
               echo "롤백 후에도 헬스체크 실패"
+              
+              # 롤백 실패 알림
+              curl -H "Content-Type: application/json" -X POST -d '{
+                "embeds": [{
+                  "title": "🚨 AI 롤백 실패",
+                  "color": 15158332,
+                  "fields": [
+                    {"name": "서비스", "value": "Re-Fit AI", "inline": true},
+                    {"name": "상태", "value": "롤백 실패", "inline": true}
+                  ],
+                  "footer": { "text": "Re-Fit CD" },
+                  "timestamp": "'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'"
+                }]
+              }' "${DISCORD_WEBHOOK:-}" 2>/dev/null || true
             fi
           fi
           exit 1
@@ -320,7 +352,7 @@ jobs:
           
           # SSM 명령 실행 (base64 인코딩으로 특수문자 이스케이프 문제 방지)
           DEPLOY_SCRIPT_ENCODED=$(echo "$DEPLOY_SCRIPT" | base64 -w 0)
-          SSM_COMMAND="bash -c \"echo '$DEPLOY_SCRIPT_ENCODED' | base64 -d | bash -s -- '$BASE_PATH' '$AI_DIR' '$AI_APP_DIR' '$BACKUP_DIR' '$TEMP_DIR' '$PM2_CONFIG' '$S3_BUCKET' '$S3_KEY' '$HEALTH_CHECK_URL'\""
+          SSM_COMMAND="bash -c \"echo '$DEPLOY_SCRIPT_ENCODED' | base64 -d | bash -s -- '$BASE_PATH' '$AI_DIR' '$AI_APP_DIR' '$BACKUP_DIR' '$TEMP_DIR' '$PM2_CONFIG' '$S3_BUCKET' '$S3_KEY' '$HEALTH_CHECK_URL' '$DISCORD_WEBHOOK' '$GITHUB_REPOSITORY'\""
           PARAMETERS_JSON=$(jq -n --arg cmd "$SSM_COMMAND" '{commands: [$cmd]}')
           
           COMMAND_ID=$(aws ssm send-command \
@@ -395,20 +427,20 @@ jobs:
           SHA: ${{ steps.deploy-vars.outputs.sha }}
           RUN_ID: ${{ github.run_id }}
         run: |
-          # 상태에 따른 색상 및 이모지 설정
           if [ "$STATUS" = "success" ]; then
-            COLOR=3066993
             EMOJI="✅"
+            COLOR=3066993
+            TITLE="AI 배포 성공"
           else
-            COLOR=15158332
             EMOJI="🚨"
+            COLOR=15158332
+            TITLE="AI 배포 실패"
           fi
 
-          # JSON 페이로드 생성
           payload=$(cat <<EOF
           {
             "embeds": [{
-              "title": "$EMOJI AI 배포 결과: $STATUS",
+              "title": "$EMOJI $TITLE",
               "color": $COLOR,
               "fields": [
                 {"name": "서비스", "value": "Re-Fit AI", "inline": true},
@@ -416,12 +448,11 @@ jobs:
                 {"name": "커밋 SHA", "value": "\`$SHA\`", "inline": false},
                 {"name": "워크플로우", "value": "[상세 보기](https://github.com/${{ github.repository }}/actions/runs/$RUN_ID)", "inline": false}
               ],
-              "footer": { "text": "Re-Fit Deployment System" },
+              "footer": { "text": "Re-Fit CD" },
               "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
             }]
           }
           EOF
           )
 
-          # 전송
           curl -H "Content-Type: application/json" -X POST -d "$payload" "$DISCORD_WEBHOOK"
