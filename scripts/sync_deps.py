@@ -6,6 +6,7 @@ pyproject.toml과 requirements.txt의 의존성 동기화 검증 스크립트
   python scripts/sync_deps.py          # 검증만
   python scripts/sync_deps.py --fix    # 자동 수정
 """
+
 import re
 import sys
 from pathlib import Path
@@ -16,8 +17,7 @@ def normalize_package_name(pkg: str) -> str:
     # 버전 정보 제거 (>=, <=, ==, !=, >, < 등)
     pkg = re.split(r"[><=!]+", pkg)[0].strip()
     # 소문자 변환 및 언더스코어를 하이픈으로 통일
-    pkg = pkg.lower().replace("_", "-")
-    return pkg
+    return pkg.lower().replace("_", "-")
 
 
 def parse_requirements(req_file: Path) -> set[str]:
