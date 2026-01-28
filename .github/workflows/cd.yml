@@ -173,6 +173,10 @@ jobs:
         run: |
           set -euo pipefail
           
+          # AI 헬스체크 URL 수정 (FastAPI prefix 적용)
+          # /health → /api/ai/health
+          AI_HEALTH_URL="${HEALTH_CHECK_URL%/health}/api/ai/health"
+          
           BASE_PATH="$SERVER_BASE_PATH"
           AI_DIR="${BASE_PATH}/app/ai"
           AI_APP_DIR="${AI_DIR}/ai_app"
@@ -385,7 +389,7 @@ jobs:
           
           # SSM 명령 실행 (base64 인코딩으로 특수문자 이스케이프 문제 방지)
           DEPLOY_SCRIPT_ENCODED=$(echo "$DEPLOY_SCRIPT" | base64 -w 0)
-          SSM_COMMAND="bash -c \"echo '$DEPLOY_SCRIPT_ENCODED' | base64 -d | bash -s -- '$BASE_PATH' '$AI_DIR' '$AI_APP_DIR' '$BACKUP_DIR' '$TEMP_DIR' '$PM2_CONFIG' '$S3_BUCKET' '$S3_KEY' '$HEALTH_CHECK_URL' '$DISCORD_WEBHOOK' '$GITHUB_REPOSITORY'\""
+          SSM_COMMAND="bash -c \"echo '$DEPLOY_SCRIPT_ENCODED' | base64 -d | bash -s -- '$BASE_PATH' '$AI_DIR' '$AI_APP_DIR' '$BACKUP_DIR' '$TEMP_DIR' '$PM2_CONFIG' '$S3_BUCKET' '$S3_KEY' '$AI_HEALTH_URL' '$DISCORD_WEBHOOK' '$GITHUB_REPOSITORY'\""
           PARAMETERS_JSON=$(jq -n --arg cmd "$SSM_COMMAND" '{commands: [$cmd]}')
           
           COMMAND_ID=$(aws ssm send-command \
