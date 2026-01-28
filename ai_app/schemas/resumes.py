@@ -58,10 +58,10 @@ class ResumeResult(BaseModel):
 
 
 class ResumeParseRequest(BaseModel):
-    """POST /resumes/{resume_id}/parse 요청"""
+    """POST /resumes/{task_id}/parse 요청"""
 
-    file_url: str = Field(..., description="PDF 파일 URL")
-    enable_pii_masking: bool = Field(default=True, description="PII 마스킹 활성화 여부")
+    file_url: str = Field(..., description="S3 PDF 파일 URL")
+    mode: str = Field(default="sync", description="처리 모드 (sync 또는 async)")
 
 
 class ResumeData(BaseModel):
@@ -71,10 +71,3 @@ class ResumeData(BaseModel):
     status: ResumeStatus = Field(..., description="처리 상태")
     result: ResumeResult | None = Field(default=None, description="추출 결과 (완료 시)")
     error: ErrorDetail | None = Field(default=None, description="에러 정보 (실패 시)")
-
-
-class ResumeUploadData(BaseModel):
-    """[임시] POST /resumes/upload 응답 데이터"""
-
-    resume_id: int = Field(..., description="생성된 이력서 ID")
-    file_path: str = Field(..., description="저장된 파일 경로")
