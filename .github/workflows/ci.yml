@@ -22,6 +22,9 @@ on:
           - integration
           - release
 
+permissions:
+  contents: write  # git-auto-commit-action이 파일을 커밋하고 푸시할 수 있도록 허용
+
 env:
   PYTHON_VERSION: '3.11'
   WORKING_DIRECTORY: 'ai_app'
