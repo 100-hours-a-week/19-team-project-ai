@@ -3,6 +3,7 @@ import logging
 from api.endpoints import health_router, jobs_router, reco_router, resumes_router
 from dotenv import load_dotenv
 from fastapi import FastAPI
+from middleware.cloudwatch_metrics import CloudWatchMetricsMiddleware
 
 load_dotenv()
 
@@ -16,6 +17,9 @@ app = FastAPI(
     description="AI-powered resume processing and mentor matching service",
     version="0.1.0",
 )
+
+# CloudWatch 메트릭 수집 Middleware 등록
+app.add_middleware(CloudWatchMetricsMiddleware)
 
 # Root health check for CD/monitoring
 @app.get("/health")
