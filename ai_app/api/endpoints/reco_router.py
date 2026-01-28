@@ -16,9 +16,9 @@ router = APIRouter(prefix="/mentors", tags=["Mentors"])
 )
 async def recommend_mentors(
     user_id: int,
-    top_k: int = Query(default=5, ge=1, le=20, description="추천 개수"),
+    top_k: int = Query(default=3, ge=1, le=20, description="추천 개수"),
     only_verified: bool = Query(default=False, description="인증 멘토만 추천"),
-    include_eval: bool = Query(default=False, description="평가 결과 포함"),
+    include_eval: bool = Query(default=True, description="평가 결과 포함"),
     controller: RecoController = Depends(get_reco_controller),
 ) -> ApiResponse[MentorRecommendResponse]:
     """사용자에게 멘토 추천"""
