@@ -4,7 +4,8 @@ import json
 import os
 from typing import Any
 
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 from pydantic import BaseModel
 
 
@@ -13,25 +14,16 @@ class LLMClient:
 
     def __init__(self, model_name: str = "gemini-2.0-flash"):
         self.model_name = model_name
-        self._model = None
-        self._configured = False
+        self._client: genai.Client | None = None
 
-    def _configure(self) -> None:
-        """Configure the Gemini API (lazy initialization)."""
-        if self._configured:
-            return
-        api_key = os.getenv("GOOGLE_API_KEY")
-        if not api_key:
-            raise ValueError("GOOGLE_API_KEY environment variable is not set")
-        genai.configure(api_key=api_key)
-        self._model = genai.GenerativeModel(self.model_name)
-        self._configured = True
-
-    @property
-    def model(self):
-        """Get model with lazy initialization."""
-        self._configure()
-        return self._model
+    def _get_client(self) -> genai.Client:
+        """Get or create the Gemini client (lazy initialization)."""
+        if self._client is None:
+            api_key = os.getenv("GOOGLE_API_KEY")
+            if not api_key:
+                raise ValueError("GOOGLE_API_KEY environment variable is not set")
+            self._client = genai.Client(api_key=api_key)
+        return self._client
 
     async def generate(
         self,
@@ -41,22 +33,18 @@ class LLMClient:
         max_tokens: int = 4096,
     ) -> str:
         """Generate text completion."""
-        generation_config = genai.GenerationConfig(
+        client = self._get_client()
+
+        config = types.GenerateContentConfig(
             temperature=temperature,
             max_output_tokens=max_tokens,
+            system_instruction=system_instruction,
         )
 
-        if system_instruction:
-            model = genai.GenerativeModel(
-                self.model_name,
-                system_instruction=system_instruction,
-            )
-        else:
-            model = self.model
-
-        response = await model.generate_content_async(
-            prompt,
-            generation_config=generation_config,
+        response = await client.aio.models.generate_content(
+            model=self.model_name,
+            contents=prompt,
+            config=config,
         )
 
         return response.text
@@ -69,25 +57,21 @@ class LLMClient:
         temperature: float = 0.1,
     ) -> dict[str, Any]:
         """Generate structured JSON output."""
-        generation_config = genai.GenerationConfig(
+        client = self._get_client()
+
+        config = types.GenerateContentConfig(
             temperature=temperature,
             response_mime_type="application/json",
+            system_instruction=system_instruction,
         )
 
         if response_schema:
-            generation_config.response_schema = response_schema
+            config.response_schema = response_schema
 
-        if system_instruction:
-            model = genai.GenerativeModel(
-                self.model_name,
-                system_instruction=system_instruction,
-            )
-        else:
-            model = self.model
-
-        response = await model.generate_content_async(
-            prompt,
-            generation_config=generation_config,
+        response = await client.aio.models.generate_content(
+            model=self.model_name,
+            contents=prompt,
+            config=config,
         )
 
         # 마크다운 코드 블록 제거 (```json ... ``` 또는 ``` ... ```)
