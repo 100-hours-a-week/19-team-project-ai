@@ -85,16 +85,30 @@ class CloudWatchMetricsMiddleware(BaseHTTPMiddleware):
         
         # 동적 경로 패턴 정규화
         # /api/ai/mentors/recommend/123 → /api/ai/mentors/recommend
+        # /api/ai/mentors/recommend/123/docs → /api/ai/mentors/recommend
         # /api/ai/resumes/456/parse → /api/ai/resumes
+        
+        # 패턴 순서가 중요! 긴 패턴부터 매칭
         patterns = [
-            (r'/api/ai/mentors/recommend/\d+', '/api/ai/mentors/recommend'),
+            # 멘토 추천 API (모든 하위 경로 제거)
+            (r'/api/ai/mentors/recommend/.*', '/api/ai/mentors/recommend'),
+            (r'/api/ai/mentors/recommend', '/api/ai/mentors/recommend'),
+            
+            # 이력서 파싱 API
             (r'/api/ai/resumes/\d+/parse', '/api/ai/resumes'),
-            (r'/api/ai/resumes/\d+', '/api/ai/resumes'),
+            (r'/api/ai/resumes/.*', '/api/ai/resumes'),
+            
+            # 채용공고 파싱 API
+            (r'/api/ai/jobs/parse', '/api/ai/jobs/parse'),
+            (r'/api/ai/jobs/.*', '/api/ai/jobs'),
         ]
         
         normalized = endpoint
         for pattern, replacement in patterns:
-            normalized = re.sub(pattern, replacement, normalized)
+            matched = re.match(pattern, normalized)
+            if matched:
+                normalized = replacement
+                break  # 첫 매칭에서 중단
         
         return normalized
 
