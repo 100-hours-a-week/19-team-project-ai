@@ -65,6 +65,9 @@ jobs:
 
           APP_NAME="ai-service"
           TIMESTAMP=$(date +%Y%m%d%H%M%S)
+          
+          # 헬스체크 URL 수정 (/health → /api/ai/health)
+          AI_HEALTH_URL="${HEALTH_CHECK_URL%/health}/api/ai/health"
 
           echo "============================================"
           echo "Re-Fit AI Rollback Operation: ${MODE}"
@@ -286,7 +289,7 @@ jobs:
                 sleep $((2 + i / 2))
               fi
 
-              HTTP_STATUS=$(timeout 10 curl -s -o /dev/null -w "%{http_code}" "${HEALTH_CHECK_URL}" 2>/dev/null || echo "000")
+              HTTP_STATUS=$(timeout 10 curl -s -o /dev/null -w "%{http_code}" "${AI_HEALTH_URL}" 2>/dev/null || echo "000")
               
               if [ "${HTTP_STATUS}" = "200" ]; then
                 echo "✅ Rollback successful! Service is healthy (HTTP ${HTTP_STATUS})"
@@ -343,7 +346,7 @@ jobs:
               sleep 5
               
               # 최종 헬스체크
-              HTTP_STATUS=$(timeout 10 curl -s -o /dev/null -w "%{http_code}" "${HEALTH_CHECK_URL}" 2>/dev/null || echo "000")
+              HTTP_STATUS=$(timeout 10 curl -s -o /dev/null -w "%{http_code}" "${AI_HEALTH_URL}" 2>/dev/null || echo "000")
               if [ "${HTTP_STATUS}" = "200" ]; then
                 echo "✅ Recovered using safety backup!"
                 sudo -u ubuntu pm2 save 2>/dev/null || true
