@@ -225,6 +225,12 @@ jobs:
             echo "백업 완료: $BACKUP_DIR/code_$TIMESTAMP"
           fi
           
+          # Wheel 파일 백업 (롤백용)
+          echo "Wheel 파일 백업 중..."
+          mkdir -p "$BACKUP_DIR/wheel_$TIMESTAMP"
+          cp "$WHEEL_FILE" "$BACKUP_DIR/wheel_$TIMESTAMP/"
+          echo "Wheel 백업 완료: $BACKUP_DIR/wheel_$TIMESTAMP/$(basename $WHEEL_FILE)"
+          
           # 새 패키지 설치
           echo "새 패키지 설치 중..."
           cd $AI_DIR
