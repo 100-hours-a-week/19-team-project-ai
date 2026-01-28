@@ -48,7 +48,7 @@ jobs:
           AI_DIR="${BASE_PATH}/app/ai"
           AI_APP_DIR="${AI_DIR}/ai_app"
           BACKUP_DIR="${BASE_PATH}/backups/ai"
-          PM2_CONFIG="${BASE_PATH}/pm2/ecosystem.ai.config.js"
+          PM2_CONFIG="${BASE_PATH}/infra/pm2/ecosystem.ai.config.js"
 
           SCRIPT=$(cat <<'SCRIPT_END'
           set -euo pipefail
