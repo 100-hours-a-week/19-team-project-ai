@@ -221,13 +221,11 @@ jobs:
             if [ "${RESTORE_DEPS}" = "true" ]; then
               echo ""
               echo "📦 Restoring dependencies..."
-              cd "${AI_DIR}"
-              source venv/bin/activate
-
+              
               WHEEL_FILE=$(ls "${TARGET_WHEEL_BACKUP}"/*.whl 2>/dev/null | head -n 1)
               if [ -n "$WHEEL_FILE" ]; then
                 echo "Installing: $(basename $WHEEL_FILE)"
-                pip install "$WHEEL_FILE" --force-reinstall --no-cache-dir -v 2>&1 | tail -20
+                "${AI_DIR}/venv/bin/pip" install "$WHEEL_FILE" --force-reinstall --no-cache-dir 2>&1 | tail -20
                 echo "✅ Dependencies restored from wheel"
               else
                 echo "⚠️  No wheel file found in backup, using current dependencies"
