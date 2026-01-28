@@ -4,6 +4,7 @@ set -euo pipefail
 MODE=${1:-normal}  # normal 또는 peak
 REGION=${AWS_REGION:-ap-northeast-2}
 NAMESPACE="ReFit/AI"
+ENVIRONMENT=${ENVIRONMENT:-production}
 
 # 시간 범위 설정 (최근 10분)
 END_TIME=$(date -u +%Y-%m-%dT%H:%M:%S)
@@ -55,7 +56,7 @@ get_metric_p95() {
 # 가용성 계산
 calculate_availability() {
   local endpoint=$1
-  local dim="Name=Endpoint,Value=$endpoint"
+  local dim="Name=Endpoint,Value=$endpoint Name=Environment,Value=$ENVIRONMENT"
   
   local success=$(get_metric_stat "RequestCount" "Sum" "$dim Name=StatusCode,Value=2xx")
   local total=$(get_metric_stat "RequestCount" "Sum" "$dim")
@@ -105,7 +106,7 @@ check_latency() {
   local threshold=$2
   local friendly_name=$3
   
-  local dim="Name=Endpoint,Value=$endpoint"
+  local dim="Name=Endpoint,Value=$endpoint Name=Environment,Value=$ENVIRONMENT"
   local actual=$(get_metric_p95 "ResponseTime" "$dim")
 
   if [ "$actual" = "None" ] || [ -z "$actual" ]; then
