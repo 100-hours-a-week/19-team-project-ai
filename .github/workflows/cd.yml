@@ -320,20 +320,86 @@ jobs:
           
           # 헬스체크 (최대 10회 재시도, 점진적 대기)
           echo "헬스체크 시작..."
+          HEALTH_OK=false
           for i in {1..10}; do
             HTTP_STATUS=$(timeout 10 curl -s -o /dev/null -w "%{http_code}" "$HEALTH_CHECK_URL" 2>/dev/null || echo "000")
             if [ "$HTTP_STATUS" = "200" ]; then
-              echo "✅ 배포 성공! (HTTP $HTTP_STATUS)"
+              echo "✅ 기본 헬스체크 성공! (HTTP $HTTP_STATUS)"
+              HEALTH_OK=true
+              break
+            fi
+            echo "⚠️  시도 $i/10: HTTP $HTTP_STATUS (대기 중...)"
+            [ $i -lt 10 ] && sleep $((3 + i / 2))
+          done
+          
+          if [ "$HEALTH_OK" != "true" ]; then
+            echo "❌ 기본 헬스체크 실패"
+            # 헬스체크 실패 로직으로 이동
+          else
+            # 스모크 테스트 실행 (SLI/SLO 기본 검증)
+            echo ""
+            echo "============================================"
+            echo "SLO 스모크 테스트 시작"
+            echo "============================================"
+            
+            SMOKE_TEST_FAILED=false
+            
+            # Test 1: 추천 API (SLO: P95 < 3초, 성공률 > 97%)
+            echo ""
+            echo "📊 Test 1/2: 추천 API 검증..."
+            START_TIME=$(date +%s%3N)
+            RESPONSE=$(timeout 5 curl -s -X POST "$HEALTH_CHECK_URL/../recommendations" \
+              -H "Content-Type: application/json" \
+              -d '{"user_id": "test", "interest": "backend"}' 2>/dev/null || echo "TIMEOUT")
+            END_TIME=$(date +%s%3N)
+            DURATION=$(( (END_TIME - START_TIME) ))
+            DURATION_SEC=$(echo "scale=2; $DURATION / 1000" | bc)
+            
+            if [ "$RESPONSE" = "TIMEOUT" ] || [ -z "$RESPONSE" ]; then
+              echo "  ❌ 추천 API 타임아웃 또는 실패"
+              SMOKE_TEST_FAILED=true
+            elif (( $(echo "$DURATION_SEC > 3.0" | bc -l) )); then
+              echo "  ⚠️  추천 API 응답 시간: ${DURATION_SEC}초 (목표: < 3초, SLO 초과)"
+              echo "  → 경고만 표시, 배포는 계속"
+            else
+              echo "  ✅ 추천 API: ${DURATION_SEC}초 (목표: < 3초, SLO 달성)"
+            fi
+            
+            # Test 2: 헬스체크 상세 응답 확인
+            echo ""
+            echo "📊 Test 2/2: 헬스체크 상세 응답 검증..."
+            HEALTH_RESPONSE=$(timeout 5 curl -s "$HEALTH_CHECK_URL" 2>/dev/null || echo "")
+            
+            if echo "$HEALTH_RESPONSE" | grep -q '"status"'; then
+              echo "  ✅ 헬스체크 응답 형식 정상"
+            else
+              echo "  ⚠️  헬스체크 응답 형식 확인 필요: $HEALTH_RESPONSE"
+            fi
+            
+            echo ""
+            echo "============================================"
+            
+            if [ "$SMOKE_TEST_FAILED" = "true" ]; then
+              echo "❌ 스모크 테스트 실패 - 롤백 필요"
+              echo "============================================"
+              # 헬스체크 실패 로직으로 이동
+            else
+              echo "✅ 스모크 테스트 통과!"
+              echo "============================================"
+              
+              # PM2 상태 저장
               sudo -u ubuntu pm2 save 2>/dev/null || true
+              
+              # 7일 이상 된 백업 정리
               (find $BACKUP_DIR -name "code_*" -type d -mtime +7 -exec rm -rf {} + 2>/dev/null) &
+              
+              echo ""
               echo "============================================"
               echo "Re-Fit AI 배포 완료: $(date)"
               echo "============================================"
               exit 0
             fi
-            echo "⚠️  시도 $i/10: HTTP $HTTP_STATUS (대기 중...)"
-            [ $i -lt 10 ] && sleep $((3 + i / 2))
-          done
+          fi
           
           # 헬스체크 실패 - PM2 로그 확인
           echo ""
