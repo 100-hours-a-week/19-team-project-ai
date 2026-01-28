@@ -246,11 +246,18 @@ jobs:
           cd $AI_DIR
           source venv/bin/activate
           
-          # pip install with verbose mode and timeout
-          pip install "$WHEEL_FILE" --force-reinstall --no-cache-dir -v 2>&1 | tee /tmp/pip_install.log || {
-            echo "패키지 설치 실패 - 전체 로그:"
-            tail -100 /tmp/pip_install.log
-            echo "패키지 설치 실패 - 롤백"
+          # pip install (로그는 파일로, 진행상황만 표시)
+          echo "Installing packages..."
+          pip install "$WHEEL_FILE" --force-reinstall --no-cache-dir > /tmp/pip_install.log 2>&1 && {
+            echo "✅ 패키지 설치 완료"
+            tail -20 /tmp/pip_install.log
+          } || {
+            echo "❌ 패키지 설치 실패"
+            echo ""
+            echo "=== 설치 로그 (마지막 50줄) ==="
+            tail -50 /tmp/pip_install.log
+            echo ""
+            echo "=== 설치 실패 - 롤백 시작 ==="
             if [ -d "$BACKUP_DIR/code_$TIMESTAMP" ]; then
               rm -rf "$AI_APP_DIR"
               cp -r "$BACKUP_DIR/code_$TIMESTAMP" "$AI_APP_DIR"
