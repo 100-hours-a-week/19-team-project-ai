@@ -236,7 +236,7 @@ jobs:
           path: dist/*.whl
           retention-days: 7
       
-      # Archive Deployment Files (소스 코드 포함)
+      # Archive Deployment Files (소스 코드 및 스크립트 포함)
       - name: Archive Deployment Files
         if: success()
         uses: actions/upload-artifact@v4
@@ -246,6 +246,7 @@ jobs:
             ai_app/**/*.py
             pyproject.toml
             README.md
+            scripts/verify-slo-cloudwatch.sh
           retention-days: 7
       
       # Create Release Tag

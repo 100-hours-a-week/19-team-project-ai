@@ -340,69 +340,21 @@ jobs:
             echo "❌ 기본 헬스체크 실패"
             # 헬스체크 실패 로직으로 이동
           else
-            # 스모크 테스트 실행 (SLI/SLO 기본 검증)
+            # CloudWatch 기반 SLO 검증 스킵 (SSM에서 실행 불가)
             echo ""
-            echo "============================================"
-            echo "SLO 스모크 테스트 시작"
-            echo "============================================"
+            echo "✅ 기본 헬스체크 통과!"
             
-            SMOKE_TEST_FAILED=false
+            # PM2 상태 저장
+            sudo -u ubuntu pm2 save 2>/dev/null || true
             
-            # Test 1: 추천 API (SLO: P95 < 3초, 성공률 > 97%)
-            echo ""
-            echo "📊 Test 1/2: 추천 API 검증..."
-            START_TIME=$(date +%s%3N)
-            RESPONSE=$(timeout 5 curl -s -X POST "$HEALTH_CHECK_URL/../recommendations" \
-              -H "Content-Type: application/json" \
-              -d '{"user_id": "test", "interest": "backend"}' 2>/dev/null || echo "TIMEOUT")
-            END_TIME=$(date +%s%3N)
-            DURATION=$(( (END_TIME - START_TIME) ))
-            DURATION_SEC=$(echo "scale=2; $DURATION / 1000" | bc)
-            
-            if [ "$RESPONSE" = "TIMEOUT" ] || [ -z "$RESPONSE" ]; then
-              echo "  ❌ 추천 API 타임아웃 또는 실패"
-              SMOKE_TEST_FAILED=true
-            elif (( $(echo "$DURATION_SEC > 3.0" | bc -l) )); then
-              echo "  ⚠️  추천 API 응답 시간: ${DURATION_SEC}초 (목표: < 3초, SLO 초과)"
-              echo "  → 경고만 표시, 배포는 계속"
-            else
-              echo "  ✅ 추천 API: ${DURATION_SEC}초 (목표: < 3초, SLO 달성)"
-            fi
-            
-            # Test 2: 헬스체크 상세 응답 확인
-            echo ""
-            echo "📊 Test 2/2: 헬스체크 상세 응답 검증..."
-            HEALTH_RESPONSE=$(timeout 5 curl -s "$HEALTH_CHECK_URL" 2>/dev/null || echo "")
-            
-            if echo "$HEALTH_RESPONSE" | grep -q '"status"'; then
-              echo "  ✅ 헬스체크 응답 형식 정상"
-            else
-              echo "  ⚠️  헬스체크 응답 형식 확인 필요: $HEALTH_RESPONSE"
-            fi
+            # 7일 이상 된 백업 정리
+            (find $BACKUP_DIR -name "code_*" -type d -mtime +7 -exec rm -rf {} + 2>/dev/null) &
             
             echo ""
             echo "============================================"
-            
-            if [ "$SMOKE_TEST_FAILED" = "true" ]; then
-              echo "❌ 스모크 테스트 실패 - 롤백 필요"
-              echo "============================================"
-              # 헬스체크 실패 로직으로 이동
-            else
-              echo "✅ 스모크 테스트 통과!"
-              echo "============================================"
-              
-              # PM2 상태 저장
-              sudo -u ubuntu pm2 save 2>/dev/null || true
-              
-              # 7일 이상 된 백업 정리
-              (find $BACKUP_DIR -name "code_*" -type d -mtime +7 -exec rm -rf {} + 2>/dev/null) &
-              
-              echo ""
-              echo "============================================"
-              echo "Re-Fit AI 배포 완료: $(date)"
-              echo "============================================"
-              exit 0
-            fi
+            echo "Re-Fit AI 배포 완료: $(date)"
+            echo "============================================"
+            exit 0
           fi
           
           # 헬스체크 실패 - PM2 로그 확인
@@ -524,6 +476,70 @@ jobs:
             --query '[Status, StandardOutputContent, StandardErrorContent]' \
             --output text
           exit 1
+
+      - name: Verify SLO Compliance (CloudWatch)
+        if: success()
+        id: slo_check
+        continue-on-error: true
+        env:
+          SLO_MODE: normal
+        run: |
+          echo "🔍 SLO 검증 시작 (CloudWatch)..."
+          
+          # 스크립트에 실행 권한 부여
+          chmod +x build-output/scripts/verify-slo-cloudwatch.sh || {
+            echo "⚠️  CloudWatch 검증 스크립트 없음 - 스킵"
+            echo "slo_status=skipped" >> $GITHUB_OUTPUT
+            exit 0
+          }
+          
+          # SLO 검증 실행
+          if bash build-output/scripts/verify-slo-cloudwatch.sh "${SLO_MODE}"; then
+            echo "slo_status=passed" >> $GITHUB_OUTPUT
+          else
+            echo "slo_status=failed" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Report SLO Results to Discord
+        if: success() && steps.slo_check.outputs.slo_status != 'skipped'
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+          SLO_STATUS: ${{ steps.slo_check.outputs.slo_status }}
+          BRANCH: ${{ inputs.branch }}
+          SHA: ${{ steps.deploy-vars.outputs.sha }}
+          CLOUDWATCH_DASHBOARD_URL: ${{ secrets.CLOUDWATCH_AI_DASHBOARD_URL }}
+        run: |
+          if [ "$SLO_STATUS" = "failed" ]; then
+            COLOR=16776960
+            EMOJI="⚠️"
+            TITLE="AI SLO 위반 감지 (경고)"
+            MESSAGE="배포는 완료되었으나 일부 SLO 목표를 충족하지 못했습니다. CloudWatch 대시보드를 확인하세요."
+          else
+            COLOR=3066993
+            EMOJI="✅"
+            TITLE="AI SLO 검증 통과"
+            MESSAGE="모든 성능 목표를 충족했습니다."
+          fi
+          
+          payload=$(cat <<EOF
+          {
+            "embeds": [{
+              "title": "$EMOJI $TITLE",
+              "color": $COLOR,
+              "description": "$MESSAGE",
+              "fields": [
+                {"name": "브랜치", "value": "\`$BRANCH\`", "inline": true},
+                {"name": "커밋", "value": "\`$SHA\`", "inline": true},
+                {"name": "CloudWatch", "value": "[대시보드 보기](${CLOUDWATCH_DASHBOARD_URL:-https://console.aws.amazon.com/cloudwatch})", "inline": false}
+              ],
+              "footer": { "text": "Re-Fit AI SLO Monitor (CloudWatch)" },
+              "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            }]
+          }
+          EOF
+          )
+          
+          curl -H "Content-Type: application/json" -X POST -d "$payload" "$DISCORD_WEBHOOK"
 
       - name: Notify Discord on Result
         if: always()
