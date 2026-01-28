@@ -165,13 +165,13 @@ check_availability "/api/ai/resumes" "$DOC_AVAILABILITY_THRESHOLD" "이력서 �
 
 echo ""
 echo "📊 API 3: 채용공고 파싱 (POST /api/ai/jobs/parse)"
-check_latency "/api/ai/jobs/parse" "$REPORT_LATENCY_THRESHOLD" "채용공고 파싱 API" || FAILED=1
-check_availability "/api/ai/jobs/parse" "$REPORT_AVAILABILITY_THRESHOLD" "채용공고 파싱 API" || FAILED=1
+check_latency "/api/ai/jobs" "$REPORT_LATENCY_THRESHOLD" "채용공고 파싱 API" || FAILED=1
+check_availability "/api/ai/jobs" "$REPORT_AVAILABILITY_THRESHOLD" "채용공고 파싱 API" || FAILED=1
 
 # Error Budget 소진율 확인 (선택적)
 echo ""
 echo "📊 Error Budget 상태:"
-for endpoint in "/api/ai/mentors/recommend" "/api/ai/resumes" "/api/ai/jobs/parse"; do
+for endpoint in "/api/ai/mentors/recommend" "/api/ai/resumes" "/api/ai/jobs"; do
   availability=$(calculate_availability "$endpoint")
   
   if [ "$availability" = "None" ]; then

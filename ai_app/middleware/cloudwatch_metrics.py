@@ -57,7 +57,7 @@ class CloudWatchMetricsMiddleware(BaseHTTPMiddleware):
             # CloudWatch로 메트릭 전송 (비동기, 실패해도 요청은 계속)
             if CLOUDWATCH_ENABLED:
                 self._send_metrics(
-                    endpoint=request.url.path,
+                    endpoint=self._normalize_endpoint(request.url.path),
                     method=request.method,
                     status_code=response.status_code,
                     duration_ms=duration_ms,
@@ -71,7 +71,7 @@ class CloudWatchMetricsMiddleware(BaseHTTPMiddleware):
             # 에러 발생 시 500으로 메트릭 전송
             if CLOUDWATCH_ENABLED:
                 self._send_metrics(
-                    endpoint=request.url.path,
+                    endpoint=self._normalize_endpoint(request.url.path),
                     method=request.method,
                     status_code=500,
                     duration_ms=duration_ms,
