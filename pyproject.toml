@@ -28,6 +28,9 @@ dependencies = [
     "sqlalchemy>=2.0.0",
     "pgvector>=0.2.0",
     "psycopg2-binary>=2.9.0",
+    # 의존성 충돌 방지: grpcio 버전 고정
+    "grpcio>=1.60.0,<1.70.0",
+    "grpcio-status>=1.60.0,<1.70.0",
 ]
 
 [project.optional-dependencies]

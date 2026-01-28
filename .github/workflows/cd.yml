@@ -230,7 +230,10 @@ jobs:
           cd $AI_DIR
           source venv/bin/activate
           
-          pip install "$WHEEL_FILE" --force-reinstall || {
+          # pip install with verbose mode and timeout
+          pip install "$WHEEL_FILE" --force-reinstall --no-cache-dir -v 2>&1 | tee /tmp/pip_install.log || {
+            echo "패키지 설치 실패 - 전체 로그:"
+            tail -100 /tmp/pip_install.log
             echo "패키지 설치 실패 - 롤백"
             if [ -d "$BACKUP_DIR/code_$TIMESTAMP" ]; then
               rm -rf "$AI_APP_DIR"
@@ -373,7 +376,7 @@ jobs:
             --instance-ids "$EC2_INSTANCE_ID" \
             --document-name "AWS-RunShellScript" \
             --parameters "$PARAMETERS_JSON" \
-            --timeout-seconds 600 \
+            --timeout-seconds 1800 \
             --region ap-northeast-2 \
             --query 'Command.CommandId' \
             --output text)
