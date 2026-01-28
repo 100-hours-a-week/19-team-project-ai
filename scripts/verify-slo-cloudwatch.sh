@@ -147,57 +147,58 @@ check_availability() {
   fi
 }
 
-# Tier 1 CUJ별 검증 (SLI/SLO 문서 기준)
+# 실제 구현된 AI API 검증
 FAILED=0
 
 echo ""
-echo "📊 CUJ 1: 현직자 추천 받기"
-check_latency "/api/ai/recommendations" "$RECO_LATENCY_THRESHOLD" "추천 API" || FAILED=1
-check_availability "/api/ai/recommendations" "$RECO_AVAILABILITY_THRESHOLD" "추천 API" || FAILED=1
+echo "📊 API 1: 멘토 추천 (GET /api/ai/mentors/recommend/)"
+# 동적 경로 (/mentors/recommend/{user_id})는 CloudWatch에서 집계하기 어려우므로
+# 전체 /api/ai/mentors로 검증
+check_latency "/api/ai/mentors/recommend" "$RECO_LATENCY_THRESHOLD" "멘토 추천 API" || FAILED=1
+check_availability "/api/ai/mentors/recommend" "$RECO_AVAILABILITY_THRESHOLD" "멘토 추천 API" || FAILED=1
 
 echo ""
-echo "📊 CUJ 2: 문서 피드백 받기"
-check_latency "/api/ai/documents/analyze" "$DOC_LATENCY_THRESHOLD" "문서분석 API" || FAILED=1
-check_availability "/api/ai/documents/analyze" "$DOC_AVAILABILITY_THRESHOLD" "문서분석 API" || FAILED=1
+echo "📊 API 2: 이력서 파싱 (POST /api/ai/resumes/{task_id}/parse)"
+# 동적 경로는 /api/ai/resumes로 집계
+check_latency "/api/ai/resumes" "$DOC_LATENCY_THRESHOLD" "이력서 파싱 API" || FAILED=1
+check_availability "/api/ai/resumes" "$DOC_AVAILABILITY_THRESHOLD" "이력서 파싱 API" || FAILED=1
 
 echo ""
-echo "📊 CUJ 3: 개인화 리포트 받기"
-check_latency "/api/ai/reports/generate" "$REPORT_LATENCY_THRESHOLD" "리포트 API" || FAILED=1
-check_availability "/api/ai/reports/generate" "$REPORT_AVAILABILITY_THRESHOLD" "리포트 API" || FAILED=1
+echo "📊 API 3: 채용공고 파싱 (POST /api/ai/jobs/parse)"
+check_latency "/api/ai/jobs/parse" "$REPORT_LATENCY_THRESHOLD" "채용공고 파싱 API" || FAILED=1
+check_availability "/api/ai/jobs/parse" "$REPORT_AVAILABILITY_THRESHOLD" "채용공고 파싱 API" || FAILED=1
 
 # Error Budget 소진율 확인 (선택적)
 echo ""
 echo "📊 Error Budget 상태:"
-for endpoint in "/api/ai/recommendations" "/api/ai/documents/analyze" "/api/ai/reports/generate"; do
+for endpoint in "/api/ai/mentors/recommend" "/api/ai/resumes" "/api/ai/jobs/parse"; do
   availability=$(calculate_availability "$endpoint")
   
   if [ "$availability" = "None" ]; then
-    echo "  ⚠️  $(basename $endpoint): 데이터 없음"
+    # 엔드포인트 이름 간단하게 표시
+    endpoint_name=$(echo "$endpoint" | sed 's|/api/ai/||g' | sed 's|/.*||g')
+    echo "  ⚠️  $endpoint_name: 데이터 없음"
     continue
   fi
   
-  # SLO에 따른 Error Budget 계산
-  case "$endpoint" in
-    "/api/ai/recommendations"|"/api/ai/documents/analyze")
-      slo=99.0
-      ;;
-    "/api/ai/reports/generate")
-      slo=98.0
-      ;;
-  esac
+  # SLO에 따른 Error Budget 계산 (모두 99% 목표)
+  slo=99.0
   
   # Error Budget 소진율 = (100 - 실제) / (100 - SLO) * 100
   burn_rate=$(awk -v a="$availability" -v s="$slo" 'BEGIN{printf "%.1f", (100-a)/(100-s)*100}')
   
+  # 엔드포인트 이름 간단하게 표시
+  endpoint_name=$(echo "$endpoint" | sed 's|/api/ai/||g' | sed 's|/.*||g')
+  
   if awk -v b="$burn_rate" 'BEGIN{exit !(b > 100)}'; then
-    echo "  🔴 $(basename $endpoint): Error Budget ${burn_rate}% 소진 (초과!)"
+    echo "  🔴 $endpoint_name: Error Budget ${burn_rate}% 소진 (초과!)"
     FAILED=1
   elif awk -v b="$burn_rate" 'BEGIN{exit !(b > 75)}'; then
-    echo "  🟠 $(basename $endpoint): Error Budget ${burn_rate}% 소진 (경고)"
+    echo "  🟠 $endpoint_name: Error Budget ${burn_rate}% 소진 (경고)"
   elif awk -v b="$burn_rate" 'BEGIN{exit !(b > 50)}'; then
-    echo "  🟡 $(basename $endpoint): Error Budget ${burn_rate}% 소진 (주의)"
+    echo "  🟡 $endpoint_name: Error Budget ${burn_rate}% 소진 (주의)"
   else
-    echo "  🟢 $(basename $endpoint): Error Budget ${burn_rate}% 소진 (건강)"
+    echo "  🟢 $endpoint_name: Error Budget ${burn_rate}% 소진 (건강)"
   fi
 done
 

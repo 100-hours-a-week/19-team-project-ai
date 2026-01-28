@@ -79,6 +79,25 @@ class CloudWatchMetricsMiddleware(BaseHTTPMiddleware):
             
             raise  # 원래 에러는 그대로 전파
 
+    def _normalize_endpoint(self, endpoint: str) -> str:
+        """동적 경로를 정규화하여 집계 가능하도록 변환"""
+        import re
+        
+        # 동적 경로 패턴 정규화
+        # /api/ai/mentors/recommend/123 → /api/ai/mentors/recommend
+        # /api/ai/resumes/456/parse → /api/ai/resumes
+        patterns = [
+            (r'/api/ai/mentors/recommend/\d+', '/api/ai/mentors/recommend'),
+            (r'/api/ai/resumes/\d+/parse', '/api/ai/resumes'),
+            (r'/api/ai/resumes/\d+', '/api/ai/resumes'),
+        ]
+        
+        normalized = endpoint
+        for pattern, replacement in patterns:
+            normalized = re.sub(pattern, replacement, normalized)
+        
+        return normalized
+
     def _send_metrics(
         self,
         endpoint: str,
@@ -88,6 +107,9 @@ class CloudWatchMetricsMiddleware(BaseHTTPMiddleware):
     ):
         """CloudWatch로 메트릭 전송"""
         try:
+            # 동적 경로 정규화
+            normalized_endpoint = self._normalize_endpoint(endpoint)
+            
             # StatusCode를 2xx, 4xx, 5xx 형식으로 변환
             status_class = f"{status_code // 100}xx"
             
@@ -98,7 +120,7 @@ class CloudWatchMetricsMiddleware(BaseHTTPMiddleware):
                     "Value": duration_ms,
                     "Unit": "Milliseconds",
                     "Dimensions": [
-                        {"Name": "Endpoint", "Value": endpoint},
+                        {"Name": "Endpoint", "Value": normalized_endpoint},
                         {"Name": "Environment", "Value": ENVIRONMENT},
                     ],
                     "StorageResolution": 60,  # 1분 단위 고해상도
@@ -109,7 +131,7 @@ class CloudWatchMetricsMiddleware(BaseHTTPMiddleware):
                     "Value": 1,
                     "Unit": "Count",
                     "Dimensions": [
-                        {"Name": "Endpoint", "Value": endpoint},
+                        {"Name": "Endpoint", "Value": normalized_endpoint},
                         {"Name": "StatusCode", "Value": status_class},
                         {"Name": "Environment", "Value": ENVIRONMENT},
                     ],
@@ -121,7 +143,7 @@ class CloudWatchMetricsMiddleware(BaseHTTPMiddleware):
                     "Value": 1,
                     "Unit": "Count",
                     "Dimensions": [
-                        {"Name": "Endpoint", "Value": endpoint},
+                        {"Name": "Endpoint", "Value": normalized_endpoint},
                         {"Name": "Environment", "Value": ENVIRONMENT},
                     ],
                     "StorageResolution": 60,
@@ -135,7 +157,7 @@ class CloudWatchMetricsMiddleware(BaseHTTPMiddleware):
                     "Value": 1,
                     "Unit": "Count",
                     "Dimensions": [
-                        {"Name": "Endpoint", "Value": endpoint},
+                        {"Name": "Endpoint", "Value": normalized_endpoint},
                         {"Name": "Environment", "Value": ENVIRONMENT},
                     ],
                     "StorageResolution": 60,
@@ -148,7 +170,7 @@ class CloudWatchMetricsMiddleware(BaseHTTPMiddleware):
             )
             
             logger.debug(
-                f"CloudWatch 메트릭 전송: {endpoint} {status_code} {duration_ms:.2f}ms"
+                f"CloudWatch 메트릭 전송: {normalized_endpoint} {status_code} {duration_ms:.2f}ms"
             )
         
         except ClientError as e:
