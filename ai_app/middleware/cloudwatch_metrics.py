@@ -81,36 +81,33 @@ class CloudWatchMetricsMiddleware(BaseHTTPMiddleware):
 
     def _normalize_endpoint(self, endpoint: str) -> str:
         """동적 경로를 정규화하여 집계 가능하도록 변환"""
-        import re
-        
-        # 동적 경로 패턴 정규화
+        # 단순한 문자열 매칭으로 정규화
         # /api/ai/mentors/recommend/123 → /api/ai/mentors/recommend
-        # /api/ai/mentors/recommend/123/docs → /api/ai/mentors/recommend
         # /api/ai/resumes/456/parse → /api/ai/resumes
         
-        # 패턴 순서가 중요! 긴 패턴부터 매칭
-        patterns = [
-            # 멘토 추천 API (모든 하위 경로 제거)
-            (r'/api/ai/mentors/recommend/.*', '/api/ai/mentors/recommend'),
-            (r'/api/ai/mentors/recommend', '/api/ai/mentors/recommend'),
-            
-            # 이력서 파싱 API
-            (r'/api/ai/resumes/\d+/parse', '/api/ai/resumes'),
-            (r'/api/ai/resumes/.*', '/api/ai/resumes'),
-            
-            # 채용공고 파싱 API
-            (r'/api/ai/jobs/parse', '/api/ai/jobs/parse'),
-            (r'/api/ai/jobs/.*', '/api/ai/jobs'),
-        ]
+        # 멘토 추천 API
+        if endpoint.startswith("/api/ai/mentors/recommend/"):
+            normalized = "/api/ai/mentors/recommend"
+            logger.debug(f"경로 정규화: {endpoint} → {normalized}")
+            return normalized
+        elif endpoint == "/api/ai/mentors/recommend":
+            return endpoint
         
-        normalized = endpoint
-        for pattern, replacement in patterns:
-            matched = re.match(pattern, normalized)
-            if matched:
-                normalized = replacement
-                break  # 첫 매칭에서 중단
+        # 이력서 파싱 API
+        if endpoint.startswith("/api/ai/resumes/"):
+            normalized = "/api/ai/resumes"
+            logger.debug(f"경로 정규화: {endpoint} → {normalized}")
+            return normalized
         
-        return normalized
+        # 채용공고 파싱 API
+        if endpoint.startswith("/api/ai/jobs/"):
+            normalized = "/api/ai/jobs"
+            logger.debug(f"경로 정규화: {endpoint} → {normalized}")
+            return normalized
+        
+        # 기타 API (정규화 없음)
+        logger.debug(f"경로 정규화 없음: {endpoint}")
+        return endpoint
 
     def _send_metrics(
         self,
