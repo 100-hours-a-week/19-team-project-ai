@@ -81,30 +81,26 @@ class CloudWatchMetricsMiddleware(BaseHTTPMiddleware):
 
     def _normalize_endpoint(self, endpoint: str) -> str:
         """동적 경로를 정규화하여 집계 가능하도록 변환"""
-        # 단순한 문자열 매칭으로 정규화
-        # /api/ai/mentors/recommend/123 → /api/ai/mentors/recommend
-        # /api/ai/resumes/456/parse → /api/ai/resumes
-        
-        # 멘토 추천 API
-        if endpoint.startswith("/api/ai/mentors/recommend/"):
+        # 더 유연한 매칭을 위해 'in' 키워드 사용
+        # /api/ai/mentors/recommend/123 -> /api/ai/mentors/recommend
+        # /api/ai/resumes/456/parse -> /api/ai/resumes
+        # /api/ai/jobs/parse -> /api/ai/jobs
+
+        if "/api/ai/mentors/recommend" in endpoint:
             normalized = "/api/ai/mentors/recommend"
             logger.debug(f"경로 정규화: {endpoint} → {normalized}")
             return normalized
-        elif endpoint == "/api/ai/mentors/recommend":
-            return endpoint
-        
-        # 이력서 파싱 API
-        if endpoint.startswith("/api/ai/resumes/"):
+
+        if "/api/ai/resumes" in endpoint:
             normalized = "/api/ai/resumes"
             logger.debug(f"경로 정규화: {endpoint} → {normalized}")
             return normalized
-        
-        # 채용공고 파싱 API
-        if endpoint.startswith("/api/ai/jobs/"):
+
+        if "/api/ai/jobs" in endpoint:
             normalized = "/api/ai/jobs"
             logger.debug(f"경로 정규화: {endpoint} → {normalized}")
             return normalized
-        
+
         # 기타 API (정규화 없음)
         logger.debug(f"경로 정규화 없음: {endpoint}")
         return endpoint
