@@ -198,19 +198,23 @@ jobs:
             # 6. 코드 복원
             echo ""
             echo "📁 Restoring code files..."
-            rm -rf "${AI_APP_DIR}"
-            cp -r "${TARGET_CODE_BACKUP}" "${AI_APP_DIR}"
+            sudo rm -rf "${AI_APP_DIR}"
+            sudo cp -r "${TARGET_CODE_BACKUP}" "${AI_APP_DIR}"
             echo "✅ Code files restored"
 
-            # 7. 설정 파일 복원
-            if [ -f "${TARGET_CODE_BACKUP}/../pyproject.toml" ]; then
-              cp "${TARGET_CODE_BACKUP}/../pyproject.toml" "${AI_DIR}/"
-              echo "✅ pyproject.toml restored"
+            # 7. 설정 파일 복원 (백업 내부 또는 AI_DIR에서 찾기)
+            if [ -f "${TARGET_CODE_BACKUP}/pyproject.toml" ]; then
+              sudo cp "${TARGET_CODE_BACKUP}/pyproject.toml" "${AI_DIR}/" 2>/dev/null || true
+              echo "✅ pyproject.toml restored from backup"
+            elif [ -f "${AI_DIR}/pyproject.toml" ]; then
+              echo "ℹ️  Using existing pyproject.toml"
             fi
 
-            if [ -f "${TARGET_CODE_BACKUP}/../requirements.txt" ]; then
-              cp "${TARGET_CODE_BACKUP}/../requirements.txt" "${AI_APP_DIR}/"
-              echo "✅ requirements.txt restored"
+            if [ -f "${TARGET_CODE_BACKUP}/requirements.txt" ]; then
+              sudo cp "${TARGET_CODE_BACKUP}/requirements.txt" "${AI_APP_DIR}/" 2>/dev/null || true
+              echo "✅ requirements.txt restored from backup"
+            elif [ -f "${AI_APP_DIR}/requirements.txt" ]; then
+              echo "ℹ️  Using existing requirements.txt"
             fi
 
             # 8. 의존성 복원 (선택적)
@@ -247,8 +251,8 @@ jobs:
               
               # Safety backup으로 복구 시도
               if [ -d "${SAFETY_BACKUP}/ai_app" ]; then
-                rm -rf "${AI_APP_DIR}"
-                cp -r "${SAFETY_BACKUP}/ai_app" "${AI_APP_DIR}"
+                sudo rm -rf "${AI_APP_DIR}"
+                sudo cp -r "${SAFETY_BACKUP}/ai_app" "${AI_APP_DIR}"
                 sudo chown -R ubuntu:ubuntu "${AI_APP_DIR}"
                 sudo -u ubuntu pm2 start "${PM2_CONFIG}" --only ${APP_NAME} --env production || true
               fi
@@ -327,8 +331,8 @@ jobs:
             
             if [ -d "${SAFETY_BACKUP}/ai_app" ]; then
               # Safety backup으로 완전 복구
-              rm -rf "${AI_APP_DIR}"
-              cp -r "${SAFETY_BACKUP}/ai_app" "${AI_APP_DIR}"
+              sudo rm -rf "${AI_APP_DIR}"
+              sudo cp -r "${SAFETY_BACKUP}/ai_app" "${AI_APP_DIR}"
               sudo chown -R ubuntu:ubuntu "${AI_APP_DIR}"
               
               # PM2 재시작

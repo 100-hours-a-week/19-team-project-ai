@@ -245,6 +245,10 @@ jobs:
           cp "$WHEEL_FILE" "$BACKUP_DIR/wheel_$TIMESTAMP/"
           echo "Wheel 백업 완료: $BACKUP_DIR/wheel_$TIMESTAMP/$(basename $WHEEL_FILE)"
           
+          # 백업 디렉토리 권한 설정 (롤백 시 ubuntu 유저가 접근 가능하도록)
+          sudo chown -R ubuntu:ubuntu "$BACKUP_DIR/code_$TIMESTAMP" 2>/dev/null || true
+          sudo chown -R ubuntu:ubuntu "$BACKUP_DIR/wheel_$TIMESTAMP" 2>/dev/null || true
+          
           # 새 패키지 설치
           echo "새 패키지 설치 중..."
           cd $AI_DIR
