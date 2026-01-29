@@ -61,16 +61,6 @@ jobs:
             echo "changed=true" >> $GITHUB_OUTPUT
           fi
       
-      # 변경사항이 있으면 자동 커밋 (PR일 때만)
-      - name: Auto-commit synced pyproject.toml
-        if: steps.sync-deps.outputs.changed == 'true' && github.event_name == 'pull_request'
-        uses: stefanzweifel/git-auto-commit-action@v5
-        with:
-          commit_message: "chore: requirements.txt → pyproject.toml 자동 동기화 [skip ci]"
-          file_pattern: "pyproject.toml"
-          commit_user_name: "github-actions[bot]"
-          commit_user_email: "github-actions[bot]@users.noreply.github.com"
-      
       - name: Install uv
         uses: astral-sh/setup-uv@v4
         with:
@@ -80,11 +70,35 @@ jobs:
       - name: Install Dependencies
         run: uv pip install --system -e ".[dev]"
       
-      # Lint
-      - name: Run Lint (Ruff)
+      # 린트 및 자동 수정 적용
+      - name: Run Lint and Format (Ruff)
+        id: ruff-fix
         run: |
-          ruff check . --exclude ${{ env.WORKING_DIRECTORY }}/main.py
-          ruff format --check . --exclude ${{ env.WORKING_DIRECTORY }}/main.py
+          cd ${{ env.WORKING_DIRECTORY }}
+          ruff check . --fix
+          ruff format .
+          ruff check .
+          ruff format --check .
+          
+          # 변경사항 확인
+          cd ..
+          if git diff --quiet; then
+            echo "✅ 린트 및 포맷팅 통과 (변경 없음)"
+            echo "changed=false" >> $GITHUB_OUTPUT
+          else
+            echo "🔄 린트/포맷팅 자동 수정됨!"
+            echo "changed=true" >> $GITHUB_OUTPUT
+          fi
+      
+      # 변경사항(pyproject.toml 동기화 + Ruff 자동 수정)이 있으면 자동 커밋 (PR일 때만)
+      - name: Auto-commit changes
+        if: (steps.sync-deps.outputs.changed == 'true' || steps.ruff-fix.outputs.changed == 'true') && github.event_name == 'pull_request'
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "chore: Auto-sync dependencies and lint fixes [skip ci]"
+          file_pattern: "."
+          commit_user_name: "github-actions[bot]"
+          commit_user_email: "github-actions[bot]@users.noreply.github.com"
       
       # [Type Check] MyPy를 사용한 정적 타입 분석
       - name: Static Type Check (MyPy)
