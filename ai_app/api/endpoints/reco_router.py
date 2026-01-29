@@ -7,8 +7,8 @@ from fastapi import APIRouter, Depends, Query
 from controllers.reco_controller import RecoController, get_reco_controller
 from schemas.common import ApiResponse, ResponseCode
 from schemas.reco import MentorRecommendResponse
-
 from ..middleware.cloudwatch_metrics import metrics_service
+
 
 router = APIRouter(prefix="/mentors", tags=["Mentors"])
 
