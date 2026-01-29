@@ -6,11 +6,12 @@ CloudWatch 메트릭 전송 미들웨어
 - ai_app/api/endpoints/*.py (라우터들)
 """
 
-import boto3
+import logging
 import os
 from datetime import datetime
 from typing import Literal
-import logging
+
+import boto3
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +21,7 @@ FeatureType = Literal['DocumentAnalysis', 'Recommendation', 'ReportGeneration']
 
 class CloudWatchMetrics:
     """CloudWatch 메트릭 전송 서비스"""
-    
+
     def __init__(self):
         self.cloudwatch = boto3.client(
             'cloudwatch',
@@ -29,7 +30,7 @@ class CloudWatchMetrics:
         self.namespace = 'ReFit/AI'
         self.environment = os.getenv('ENVIRONMENT', 'production')
         self.enabled = os.getenv('METRICS_ENABLED', 'true').lower() == 'true'
-    
+
     def track_request(
         self,
         feature: FeatureType,
@@ -38,7 +39,7 @@ class CloudWatchMetrics:
     ):
         """
         AI 요청 메트릭 전송
-        
+
         Args:
             feature: AI 기능 타입
                 - 'DocumentAnalysis': 이력서/자소서 분석 (resumes_router.py)
@@ -50,7 +51,7 @@ class CloudWatchMetrics:
         if not self.enabled:
             logger.debug(f"Metrics disabled, skipping: {feature}")
             return
-        
+
         try:
             self.cloudwatch.put_metric_data(
                 Namespace=self.namespace,
@@ -90,7 +91,7 @@ class CloudWatchMetrics:
                 ]
             )
             logger.info(f"✅ Metrics sent: {feature}, success={success}, duration={duration:.2f}s")
-            
+
         except Exception as e:
             # 메트릭 전송 실패해도 API는 계속 동작
             logger.error(f"❌ Failed to send CloudWatch metrics: {e}")

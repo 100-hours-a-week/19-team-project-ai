@@ -1,13 +1,13 @@
 """이력서 라우터 - 이력서 추출 API 엔드포인트"""
 
+import time
+
 import httpx
+from api.middleware.cloudwatch_metrics import metrics_service
 from controllers.resumes_controller import ResumesController, get_resumes_controller
 from fastapi import APIRouter, Depends, HTTPException
 from schemas.common import ApiResponse, ResponseCode
 from schemas.resumes import ResumeData, ResumeParseRequest
-
-from api.middleware.cloudwatch_metrics import metrics_service
-import time
 router = APIRouter(prefix="/resumes", tags=["Resumes"])
 
 
@@ -32,7 +32,7 @@ async def parse_resume(
     # 메트릭 시작
     start_time = time.time()
     success = False
-    
+
     try:
         # S3에서 PDF 다운로드
         try:
@@ -71,13 +71,13 @@ async def parse_resume(
         # 파싱 실행 (mode는 향후 async 처리 구현 시 사용)
         enable_pii_masking = True  # 기본값
         result = await controller.parse_resume_from_bytes(task_id, pdf_bytes, enable_pii_masking)
-        
+
         # 성공 표시
         success = True
-        
+
         return ApiResponse(code=ResponseCode.OK, data=result)
-    
-    # 메트릭 전송 (finally) 
+
+    # 메트릭 전송 (finally)
     finally:
         duration = time.time() - start_time
         metrics_service.track_request(

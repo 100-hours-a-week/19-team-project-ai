@@ -1,12 +1,12 @@
 """멘토 추천 API 라우터"""
 
+import time
+
+from api.middleware.cloudwatch_metrics import metrics_service
 from controllers.reco_controller import RecoController, get_reco_controller
 from fastapi import APIRouter, Depends, Query
 from schemas.common import ApiResponse, ResponseCode
 from schemas.reco import MentorRecommendResponse
-
-from api.middleware.cloudwatch_metrics import metrics_service
-import time
 
 router = APIRouter(prefix="/mentors", tags=["Mentors"])
 
@@ -37,8 +37,8 @@ async def recommend_mentors(
             only_verified=only_verified,
             include_eval=include_eval,
         )
-        
-        # 성공 조건 체크 
+
+        # 성공 조건 체크
         # SLO: 최소 요청한 개수(top_k)의 멘토를 추천해야 함
         if result and hasattr(result, 'recommendations'):
             # 추천된 멘토 수가 요청한 수 이상이면 성공
@@ -48,9 +48,8 @@ async def recommend_mentors(
             # result가 dict 형태일 수도 있음
             success = True
 
-        
         return ApiResponse(code=ResponseCode.OK, data=result)
-    
+
     # 메트릭 전송
     finally:
         duration = time.time() - start_time

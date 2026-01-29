@@ -22,7 +22,7 @@ def parse_requirements(req_file: Path) -> list[str]:
     """requirements.txt에서 dependency spec 목록 추출 (원문 spec 유지)"""
     if not req_file.exists():
         return []
-    
+
     specs: list[str] = []
     with open(req_file) as f:
         for line in f:
@@ -30,11 +30,11 @@ def parse_requirements(req_file: Path) -> list[str]:
             # 주석, 빈 줄, git URL 제외
             if not line or line.startswith('#') or line.startswith('git+'):
                 continue
-            
+
             # 환경 마커(;)는 제거하고 spec만 사용
             spec = line.split(";")[0].strip()
             specs.append(spec)
-    
+
     # 안정적인 결과를 위해 키 기준으로 중복 제거(첫 등장 우선)
     seen: set[str] = set()
     deduped: list[str] = []
@@ -51,7 +51,7 @@ def parse_pyproject_dependencies(pyproject_file: Path) -> list[str]:
     """pyproject.toml에서 현재 dependencies 추출"""
     if not pyproject_file.exists():
         return []
-    
+
     with open(pyproject_file) as f:
         content = f.read()
 
@@ -83,10 +83,10 @@ def update_pyproject_toml(pyproject_file: Path, new_packages: list[str]) -> bool
     if not pyproject_file.exists():
         print(f"❌ {pyproject_file} 파일을 찾을 수 없습니다.")
         return False
-    
+
     with open(pyproject_file) as f:
         content = f.read()
-    
+
     # dependencies 배열 찾기 (닫는 괄호는 라인 시작의 ']'만 인정)
     pattern = r"(?ms)(^[ \t]*dependencies\s*=\s*\[\s*\n)(.*?)(^[ \t]*\]\s*\n)"
     match = re.search(pattern, content)
@@ -94,7 +94,7 @@ def update_pyproject_toml(pyproject_file: Path, new_packages: list[str]) -> bool
         print("❌ pyproject.toml에서 dependencies 섹션을 찾을 수 없습니다.")
         return False
 
-    prefix, block, suffix = match.group(1), match.group(2), match.group(3)
+    block = match.group(2)
 
     # 기존 dependency spec 추출(주석/빈줄 제외, 따옴표 제거)
     existing_specs: list[str] = []
@@ -132,11 +132,11 @@ def update_pyproject_toml(pyproject_file: Path, new_packages: list[str]) -> bool
     new_block = block + insertion
 
     new_content = content[: match.start(2)] + new_block + content[match.end(2) :]
-    
+
     # 파일 쓰기
     with open(pyproject_file, 'w') as f:
         f.write(new_content)
-    
+
     return True
 
 
@@ -146,54 +146,54 @@ def main():
     base_dir = Path(__file__).parent.parent
     req_file = base_dir / "ai_app" / "requirements.txt"
     pyproject_file = base_dir / "pyproject.toml"
-    
+
     print("=" * 50)
     print("requirements.txt → pyproject.toml 동기화")
     print("=" * 50)
-    
+
     # requirements.txt 확인
     if not req_file.exists():
         print(f"✅ {req_file} 없음 - 스킵")
         return 0
-    
+
     print(f"\n📦 requirements.txt 발견: {req_file}")
-    
+
     # 패키지 목록 추출
     req_packages = parse_requirements(req_file)
     pyproject_packages = parse_pyproject_dependencies(pyproject_file)
-    
+
     print(f"\n📋 Requirements.txt 패키지: {len(req_packages)}개")
     print(f"📋 Pyproject.toml 패키지: {len(pyproject_packages)}개")
-    
+
     # 차이 확인
     req_set = {_package_key(s) for s in req_packages}
     pyproject_set = {_package_key(s) for s in pyproject_packages}
-    
+
     missing = req_set - pyproject_set
     extra = pyproject_set - req_set
-    
+
     if missing:
         print(f"\n⚠️  Requirements.txt에만 있는 패키지: {len(missing)}개")
         for pkg in sorted(missing):
             print(f"  + {pkg}")
-    
+
     if extra:
         print(f"\n⚠️  Pyproject.toml에만 있는 패키지: {len(extra)}개")
         for pkg in sorted(extra):
             print(f"  - {pkg}")
-    
+
     if not missing and not extra:
         print("\n✅ 이미 동기화되어 있습니다!")
         return 0
-    
+
     # pyproject.toml 업데이트 (requirements.txt에만 있는 패키지만 추가)
-    print(f"\n🔄 pyproject.toml 업데이트 중(추가만)...")
+    print("\n🔄 pyproject.toml 업데이트 중(추가만)...")
 
     if update_pyproject_toml(pyproject_file, req_packages):
-        print(f"✅ pyproject.toml 업데이트 완료!")
-        print(f"\n📝 다음 단계:")
-        print(f"  git add pyproject.toml")
-        print(f'  git commit -m "chore: requirements.txt와 pyproject.toml 동기화"')
+        print("✅ pyproject.toml 업데이트 완료!")
+        print("\n📝 다음 단계:")
+        print("  git add pyproject.toml")
+        print('  git commit -m "chore: requirements.txt와 pyproject.toml 동기화"')
         return 0
     else:
         print("❌ 업데이트 실패!")
