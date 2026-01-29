@@ -12,7 +12,7 @@ on:
           - restore
         default: 'list'
       backup_id:
-        description: 'Backup ID to restore (required for restore mode, e.g., ai_20240127120000)'
+        description: 'Backup ID to restore (e.g., 20240127120000 or code_20240127120000)'
         required: false
         type: string
       restore_dependencies:
@@ -33,11 +33,11 @@ jobs:
           aws-region: ap-northeast-2
 
       - name: Execute Rollback Operation
+        id: rollback
         env:
           SERVER_BASE_PATH: ${{ secrets.SERVER_BASE_PATH }}
           EC2_INSTANCE_ID: ${{ secrets.EC2_INSTANCE_ID }}
           HEALTH_CHECK_URL: ${{ secrets.HEALTH_CHECK_URL }}
-          S3_BUCKET: ${{ secrets.S3_ARTIFACTS_BUCKET }}
           MODE: ${{ inputs.mode }}
           BACKUP_ID: ${{ inputs.backup_id }}
           RESTORE_DEPS: ${{ inputs.restore_dependencies }}
@@ -60,17 +60,16 @@ jobs:
           MODE="$6"
           BACKUP_ID="$7"
           HEALTH_CHECK_URL="$8"
-          S3_BUCKET="$9"
-          RESTORE_DEPS="${10}"
+          RESTORE_DEPS="$9"
 
           APP_NAME="ai-service"
           TIMESTAMP=$(date +%Y%m%d%H%M%S)
           
-          # 헬스체크 URL 수정 (/health → /api/ai/health)
+          # 헬스체크 URL 수정
           AI_HEALTH_URL="${HEALTH_CHECK_URL%/health}/api/ai/health"
 
           echo "============================================"
-          echo "Re-Fit AI Rollback Operation: ${MODE}"
+          echo "Re-Fit AI Rollback: ${MODE}"
           echo "Time: $(date)"
           echo "============================================"
 
@@ -79,26 +78,44 @@ jobs:
           # ========================================
           if [ "${MODE}" = "list" ]; then
             echo ""
-            echo "📂 Available Code Backups (Latest 10):"
-            if [ -d "${BACKUP_DIR}" ]; then
-              ls -lt "${BACKUP_DIR}" | grep "^d" | grep "code_" | head -n 10 | awk '{print "  -", $9, "(" $6, $7, $8 ")"}'
-            else
-              echo "  No backups directory found."
-            fi
-
+            echo "📂 Available Backups (Latest 10):"
             echo ""
-            echo "📦 Available Wheel Backups (Latest 10):"
+            
             if [ -d "${BACKUP_DIR}" ]; then
-              ls -lt "${BACKUP_DIR}" | grep "^d" | grep "wheel_" | head -n 10 | awk '{print "  -", $9, "(" $6, $7, $8 ")"}'
+              # 타임스탬프별로 그룹화하여 표시
+              ls -t "${BACKUP_DIR}" | grep -E "^(code|wheel)_[0-9]{14}$" | \
+                sed 's/^[^_]*_//' | sort -u -r | head -n 10 | while read -r ts; do
+                
+                CODE_PATH="${BACKUP_DIR}/code_${ts}"
+                WHEEL_PATH="${BACKUP_DIR}/wheel_${ts}"
+                
+                CODE_EXISTS="❌"
+                WHEEL_EXISTS="❌"
+                
+                [ -d "$CODE_PATH" ] && CODE_EXISTS="✅"
+                [ -d "$WHEEL_PATH" ] && WHEEL_EXISTS="✅"
+                
+                # 백업 시간 포맷팅
+                YEAR=${ts:0:4}
+                MONTH=${ts:4:2}
+                DAY=${ts:6:2}
+                HOUR=${ts:8:2}
+                MIN=${ts:10:2}
+                SEC=${ts:12:2}
+                
+                echo "  📦 Backup: ${ts}"
+                echo "     Date: ${YEAR}-${MONTH}-${DAY} ${HOUR}:${MIN}:${SEC}"
+                echo "     Code: ${CODE_EXISTS}  Wheel: ${WHEEL_EXISTS}"
+                echo ""
+              done
             else
-              echo "  No wheel backups found."
+              echo "  No backups found."
             fi
 
             echo ""
             echo "💡 Usage:"
-            echo "  - Code backup ID format: code_20240127120000"
-            echo "  - Wheel backup ID format: wheel_20240127120000"
-            echo "  - Use the same timestamp for code and wheel to ensure compatibility"
+            echo "  - Use timestamp (e.g., 20240127120000) for backup_id"
+            echo "  - Restore with: mode=restore, backup_id=<timestamp>"
             echo ""
             exit 0
           fi
@@ -107,120 +124,88 @@ jobs:
           # MODE: restore - 롤백 실행
           # ========================================
           if [ "${MODE}" = "restore" ]; then
-            TARGET_CODE_BACKUP=""
-            TARGET_WHEEL_BACKUP=""
-
-            # 1. 백업 ID 결정
+            # 1. 백업 ID 결정 및 검증
             if [ -z "${BACKUP_ID}" ]; then
-              # 가장 최신 백업 찾기
-              LATEST_CODE=$(ls -td "${BACKUP_DIR}/code_"* 2>/dev/null | head -n 1)
-              if [ -z "$LATEST_CODE" ]; then
-                echo "❌ Error: No code backup found"
+              # 가장 최신 백업 자동 선택
+              LATEST_BACKUP=$(ls -t "${BACKUP_DIR}" | grep -E "^code_[0-9]{14}$" | head -n 1)
+              if [ -z "$LATEST_BACKUP" ]; then
+                echo "❌ No backups found"
                 exit 1
               fi
-              BACKUP_TIMESTAMP=$(basename "$LATEST_CODE" | sed 's/code_//')
-              TARGET_CODE_BACKUP="$LATEST_CODE"
-              TARGET_WHEEL_BACKUP="${BACKUP_DIR}/wheel_${BACKUP_TIMESTAMP}"
-              echo "⚠️  Backup ID not specified. Using latest: code_${BACKUP_TIMESTAMP}"
+              BACKUP_TIMESTAMP=$(echo "$LATEST_BACKUP" | sed 's/code_//')
+              echo "⚠️  Backup ID not specified. Using latest: ${BACKUP_TIMESTAMP}"
             else
-              # 사용자가 지정한 백업 사용
-              if [[ "$BACKUP_ID" =~ ^code_ ]]; then
-                BACKUP_TIMESTAMP=$(echo "$BACKUP_ID" | sed 's/code_//')
-                TARGET_CODE_BACKUP="${BACKUP_DIR}/code_${BACKUP_TIMESTAMP}"
-                TARGET_WHEEL_BACKUP="${BACKUP_DIR}/wheel_${BACKUP_TIMESTAMP}"
-              elif [[ "$BACKUP_ID" =~ ^wheel_ ]]; then
-                BACKUP_TIMESTAMP=$(echo "$BACKUP_ID" | sed 's/wheel_//')
-                TARGET_CODE_BACKUP="${BACKUP_DIR}/code_${BACKUP_TIMESTAMP}"
-                TARGET_WHEEL_BACKUP="${BACKUP_DIR}/wheel_${BACKUP_TIMESTAMP}"
-              else
-                # timestamp만 입력한 경우
-                BACKUP_TIMESTAMP="$BACKUP_ID"
-                TARGET_CODE_BACKUP="${BACKUP_DIR}/code_${BACKUP_TIMESTAMP}"
-                TARGET_WHEEL_BACKUP="${BACKUP_DIR}/wheel_${BACKUP_TIMESTAMP}"
-              fi
+              # 사용자 지정 백업 ID 파싱
+              BACKUP_TIMESTAMP=$(echo "$BACKUP_ID" | sed -E 's/^(code_|wheel_)//g')
             fi
-
+            
+            TARGET_CODE_BACKUP="${BACKUP_DIR}/code_${BACKUP_TIMESTAMP}"
+            TARGET_WHEEL_BACKUP="${BACKUP_DIR}/wheel_${BACKUP_TIMESTAMP}"
+            
             # 2. 백업 존재 확인
             if [ ! -d "${TARGET_CODE_BACKUP}" ]; then
-              echo "❌ Error: Code backup not found: ${TARGET_CODE_BACKUP}"
+              echo "❌ Code backup not found: ${TARGET_CODE_BACKUP}"
+              echo ""
+              echo "Available backups:"
+              ls -l "${BACKUP_DIR}" | grep "^d" | grep "code_"
               exit 1
             fi
             echo "✅ Code backup found: ${TARGET_CODE_BACKUP}"
-
+            
             if [ "${RESTORE_DEPS}" = "true" ]; then
               if [ ! -d "${TARGET_WHEEL_BACKUP}" ]; then
-                echo "⚠️  Warning: Wheel backup not found: ${TARGET_WHEEL_BACKUP}"
-                echo "⚠️  Continuing with code rollback only..."
+                echo "⚠️  Wheel backup not found: ${TARGET_WHEEL_BACKUP}"
+                echo "⚠️  Continuing with code rollback only"
                 RESTORE_DEPS="false"
               else
                 echo "✅ Wheel backup found: ${TARGET_WHEEL_BACKUP}"
               fi
             fi
-
+            
             echo ""
             echo "🔄 Rollback Plan:"
+            echo "  - Backup: ${BACKUP_TIMESTAMP}"
             echo "  - Code: ${TARGET_CODE_BACKUP}"
             if [ "${RESTORE_DEPS}" = "true" ]; then
               echo "  - Wheel: ${TARGET_WHEEL_BACKUP}"
             else
-              echo "  - Wheel: Skip (current dependencies will be used)"
+              echo "  - Wheel: Skip (keep current dependencies)"
             fi
             echo ""
-
-            # 3. Safety Backup (현재 상태 임시 백업)
+            
+            # 3. Safety Backup (현재 상태 백업)
             SAFETY_BACKUP="${BACKUP_DIR}/safety_before_rollback_${TIMESTAMP}"
             echo "🛡️  Creating safety backup..."
             mkdir -p "${SAFETY_BACKUP}"
             
             if [ -d "${AI_APP_DIR}" ]; then
               cp -r "${AI_APP_DIR}" "${SAFETY_BACKUP}/"
-              echo "✅ Safety backup created: ${SAFETY_BACKUP}"
+              echo "✅ Safety backup: ${SAFETY_BACKUP}"
             fi
-
-            # 현재 설치된 wheel 정보도 백업
-            if [ -f "${AI_DIR}/deploy_temp/current_wheel.txt" ]; then
-              cp "${AI_DIR}/deploy_temp/current_wheel.txt" "${SAFETY_BACKUP}/"
-            fi
-
-            # 4. PM2 프로세스 완전 정리
+            
+            # 4. PM2 프로세스 정리
             echo ""
-            echo "🧹 Stopping all AI-related PM2 processes..."
-            sudo -u ubuntu pm2 list | grep -E 'ai-service|ai-serv' | awk '{print $2}' | while read -r process_name; do
-              if [ -n "$process_name" ] && [ "$process_name" != "name" ]; then
-                echo "  - Stopping: $process_name"
-                sudo -u ubuntu pm2 stop "$process_name" 2>/dev/null || true
-                sudo -u ubuntu pm2 delete "$process_name" 2>/dev/null || true
+            echo "🧹 Stopping AI services..."
+            sudo -u ubuntu pm2 list | grep -E 'ai-service|ai-serv' | awk '{print $2}' | while read -r pname; do
+              if [ -n "$pname" ] && [ "$pname" != "name" ]; then
+                sudo -u ubuntu pm2 stop "$pname" 2>/dev/null || true
+                sudo -u ubuntu pm2 delete "$pname" 2>/dev/null || true
               fi
             done
-
+            
             # 5. 포트 정리
-            echo "🔌 Killing processes on port 8000..."
+            echo "🔌 Cleaning port 8000..."
             sudo lsof -ti:8000 | xargs -r sudo kill -9 2>/dev/null || true
             sleep 1
-
+            
             # 6. 코드 복원
             echo ""
             echo "📁 Restoring code files..."
             sudo rm -rf "${AI_APP_DIR}"
             sudo cp -r "${TARGET_CODE_BACKUP}" "${AI_APP_DIR}"
-            echo "✅ Code files restored"
-
-            # 7. 설정 파일 복원 (백업 내부 또는 AI_DIR에서 찾기)
-            if [ -f "${TARGET_CODE_BACKUP}/pyproject.toml" ]; then
-              sudo cp "${TARGET_CODE_BACKUP}/pyproject.toml" "${AI_DIR}/" 2>/dev/null || true
-              echo "✅ pyproject.toml restored from backup"
-            elif [ -f "${AI_DIR}/pyproject.toml" ]; then
-              echo "ℹ️  Using existing pyproject.toml"
-            fi
-
-            if [ -f "${TARGET_CODE_BACKUP}/requirements.txt" ]; then
-              sudo cp "${TARGET_CODE_BACKUP}/requirements.txt" "${AI_APP_DIR}/" 2>/dev/null || true
-              echo "✅ requirements.txt restored from backup"
-            elif [ -f "${AI_APP_DIR}/requirements.txt" ]; then
-              echo "ℹ️  Using existing requirements.txt"
-            fi
-
-            # 8. 의존성 복원 (선택적)
+            echo "✅ Code restored"
+            
+            # 7. 의존성 복원 (선택적)
             if [ "${RESTORE_DEPS}" = "true" ]; then
               echo ""
               echo "📦 Restoring dependencies..."
@@ -229,29 +214,28 @@ jobs:
               if [ -n "$WHEEL_FILE" ]; then
                 echo "Installing: $(basename $WHEEL_FILE)"
                 "${AI_DIR}/venv/bin/pip" install "$WHEEL_FILE" --force-reinstall --no-cache-dir 2>&1 | tail -20
-                echo "✅ Dependencies restored from wheel"
+                echo "✅ Dependencies restored"
               else
-                echo "⚠️  No wheel file found in backup, using current dependencies"
+                echo "⚠️  No wheel file in backup, using current dependencies"
               fi
             else
               echo ""
-              echo "⚠️  Skipping dependency restoration (current venv will be used)"
+              echo "⚠️  Skipping dependency restoration"
             fi
-
-            # 9. 권한 복구
+            
+            # 8. 권한 복구
             sudo chown -R ubuntu:ubuntu "${AI_APP_DIR}" 2>/dev/null || true
             sudo chown -R ubuntu:ubuntu "${AI_DIR}" 2>/dev/null || true
-
-            # 10. PM2로 서비스 재시작
+            
+            # 9. PM2로 서비스 재시작
             echo ""
             echo "🚀 Starting AI service..."
             sudo -u ubuntu pm2 start "${PM2_CONFIG}" --only ${APP_NAME} --env production || {
-              echo "❌ Failed to start PM2 process"
-              echo ""
-              echo "🔙 Attempting to restore from safety backup..."
+              echo "❌ Failed to start PM2"
               
-              # Safety backup으로 복구 시도
+              # Safety backup 복구 시도
               if [ -d "${SAFETY_BACKUP}/ai_app" ]; then
+                echo "🔙 Restoring from safety backup..."
                 sudo rm -rf "${AI_APP_DIR}"
                 sudo cp -r "${SAFETY_BACKUP}/ai_app" "${AI_APP_DIR}"
                 sudo chown -R ubuntu:ubuntu "${AI_APP_DIR}"
@@ -259,59 +243,57 @@ jobs:
               fi
               exit 1
             }
-
+            
             sleep 3
-
-            # 11. PM2 상태 확인
+            
+            # 10. PM2 상태 확인
             sudo -u ubuntu pm2 describe ${APP_NAME} > /dev/null || {
-              echo "❌ PM2 process not running after start"
+              echo "❌ PM2 process not running"
               exit 1
             }
             echo "✅ PM2 process started"
-
-            # 12. Caddy 리로드
+            
+            # 11. Caddy 리로드
             echo ""
             echo "🔄 Reloading Caddy..."
             systemctl is-active --quiet caddy && sudo systemctl reload caddy 2>/dev/null || true
             sleep 5
-
-            # 13. 헬스체크 (최대 10회 재시도, 점진적 대기)
+            
+            # 12. 헬스체크 (최대 10회)
             echo ""
-            echo "🏥 Running health checks..."
+            echo "🏥 Health check..."
             RETRY_COUNT=0
             MAX_RETRIES=10
             
             for i in $(seq 1 $MAX_RETRIES); do
-              # 대기 시간을 점진적으로 증가 (첫 시도: 2초, 이후: 3-5초)
               if [ $i -eq 1 ]; then
                 sleep 2
               else
                 sleep $((2 + i / 2))
               fi
-
+              
               HTTP_STATUS=$(timeout 10 curl -s -o /dev/null -w "%{http_code}" "${AI_HEALTH_URL}" 2>/dev/null || echo "000")
               
               if [ "${HTTP_STATUS}" = "200" ]; then
-                echo "✅ Rollback successful! Service is healthy (HTTP ${HTTP_STATUS})"
+                echo "✅ Rollback successful! (HTTP ${HTTP_STATUS})"
                 echo ""
                 
-                # PM2 상태 저장
+                # PM2 저장
                 sudo -u ubuntu pm2 save 2>/dev/null || true
                 
-                # 서비스 상태 출력
+                # 서비스 상태
                 echo "📊 Service Status:"
                 sudo -u ubuntu pm2 status ${APP_NAME}
                 echo ""
                 
-                # Safety backup 정리 (성공 시)
-                echo "🗑️  Cleaning up safety backup..."
+                # Safety backup 정리
                 rm -rf "${SAFETY_BACKUP}"
                 
-                # 7일 이상 된 백업 정리 (백그라운드)
+                # 오래된 백업 정리 (7일+)
                 (find "${BACKUP_DIR}" -type d \( -name "code_*" -o -name "wheel_*" -o -name "safety_*" \) -mtime +7 -exec rm -rf {} + 2>/dev/null) &
                 
                 echo "============================================"
-                echo "Re-Fit AI Rollback Complete: $(date)"
+                echo "Rollback Complete: $(date)"
                 echo "============================================"
                 exit 0
               fi
@@ -319,24 +301,22 @@ jobs:
               echo "⚠️  Attempt $i/$MAX_RETRIES: HTTP ${HTTP_STATUS}"
               RETRY_COUNT=$i
             done
-
-            # 14. 헬스체크 실패 - 다단계 복구 시도
+            
+            # 13. 헬스체크 실패 - Safety backup 복구
             echo ""
             echo "❌ Health check failed after ${RETRY_COUNT} attempts"
             echo ""
-            echo "🔍 Checking PM2 logs..."
+            echo "🔍 PM2 Logs:"
             sudo -u ubuntu pm2 logs ${APP_NAME} --lines 30 --nostream || true
             
             echo ""
-            echo "🔙 Final attempt: Restoring from safety backup..."
+            echo "🔙 Restoring from safety backup..."
             
             if [ -d "${SAFETY_BACKUP}/ai_app" ]; then
-              # Safety backup으로 완전 복구
               sudo rm -rf "${AI_APP_DIR}"
               sudo cp -r "${SAFETY_BACKUP}/ai_app" "${AI_APP_DIR}"
               sudo chown -R ubuntu:ubuntu "${AI_APP_DIR}"
               
-              # PM2 재시작
               sudo lsof -ti:8000 | xargs -r sudo kill -9 2>/dev/null || true
               sudo -u ubuntu pm2 list | grep -E 'ai-service|ai-serv' | awk '{print $2}' | while read -r pname; do
                 [ -n "$pname" ] && [ "$pname" != "name" ] && sudo -u ubuntu pm2 delete "$pname" 2>/dev/null || true
@@ -345,10 +325,9 @@ jobs:
               sudo -u ubuntu pm2 start "${PM2_CONFIG}" --only ${APP_NAME} --env production
               sleep 5
               
-              # 최종 헬스체크
               HTTP_STATUS=$(timeout 10 curl -s -o /dev/null -w "%{http_code}" "${AI_HEALTH_URL}" 2>/dev/null || echo "000")
               if [ "${HTTP_STATUS}" = "200" ]; then
-                echo "✅ Recovered using safety backup!"
+                echo "✅ Recovered using safety backup"
                 sudo -u ubuntu pm2 save 2>/dev/null || true
                 exit 0
               fi
@@ -356,13 +335,11 @@ jobs:
             
             echo ""
             echo "❌ All recovery attempts failed"
-            echo "🚨 Manual intervention required!"
+            echo "🚨 Manual intervention required"
             echo ""
-            echo "Debug Information:"
-            echo "  - Safety backup: ${SAFETY_BACKUP}"
-            echo "  - Code backup: ${TARGET_CODE_BACKUP}"
-            echo "  - Wheel backup: ${TARGET_WHEEL_BACKUP}"
-            echo "  - PM2 config: ${PM2_CONFIG}"
+            echo "Debug Info:"
+            echo "  - Safety: ${SAFETY_BACKUP}"
+            echo "  - Target: ${TARGET_CODE_BACKUP}"
             echo ""
             exit 1
           fi
@@ -371,7 +348,7 @@ jobs:
           
           # SSM 명령 실행
           SCRIPT_ENCODED=$(echo "$SCRIPT" | base64 -w 0)
-          SSM_COMMAND="bash -c \"echo '$SCRIPT_ENCODED' | base64 -d | bash -s -- '$BASE_PATH' '$AI_DIR' '$AI_APP_DIR' '$BACKUP_DIR' '$PM2_CONFIG' '$MODE' '$BACKUP_ID' '$HEALTH_CHECK_URL' '$S3_BUCKET' '$RESTORE_DEPS'\""
+          SSM_COMMAND="bash -c \"echo '$SCRIPT_ENCODED' | base64 -d | bash -s -- '$BASE_PATH' '$AI_DIR' '$AI_APP_DIR' '$BACKUP_DIR' '$PM2_CONFIG' '$MODE' '$BACKUP_ID' '$HEALTH_CHECK_URL' '$RESTORE_DEPS'\""
           
           PARAMETERS_JSON=$(jq -n --arg cmd "$SSM_COMMAND" '{commands: [$cmd]}')
           
@@ -387,7 +364,7 @@ jobs:
           [ -n "$COMMAND_ID" ] || exit 1
           
           echo "SSM Command ID: $COMMAND_ID"
-          echo "Waiting for rollback operation to complete..."
+          echo "Waiting for operation..."
           
           # 실행 상태 확인
           for i in {1..120}; do
@@ -400,82 +377,111 @@ jobs:
             
             if [ "$STATUS" = "Success" ]; then
               echo ""
-              echo "=== Rollback Output ==="
+              echo "=== Operation Output ==="
               aws ssm get-command-invocation \
                 --command-id "$COMMAND_ID" \
                 --instance-id "$EC2_INSTANCE_ID" \
                 --region ap-northeast-2 \
                 --query 'StandardOutputContent' \
                 --output text
+              echo "success=true" >> $GITHUB_OUTPUT
               exit 0
             elif [ "$STATUS" = "Failed" ] || [ "$STATUS" = "Cancelled" ] || [ "$STATUS" = "TimedOut" ]; then
               echo ""
-              echo "=== Rollback Error ==="
+              echo "=== Operation Error ==="
               aws ssm get-command-invocation \
                 --command-id "$COMMAND_ID" \
                 --instance-id "$EC2_INSTANCE_ID" \
                 --region ap-northeast-2 \
                 --query 'StandardErrorContent' \
                 --output text
+              echo "success=false" >> $GITHUB_OUTPUT
               exit 1
             fi
             
-            # 진행 상황 표시
             if [ $((i % 10)) -eq 0 ]; then
-              echo "Still in progress... (${i}s elapsed)"
+              echo "Progress: ${i}s elapsed..."
             fi
             sleep 3
           done
           
-          echo "Timeout waiting for rollback operation"
+          echo "Timeout after 360s"
+          echo "success=false" >> $GITHUB_OUTPUT
           exit 1
 
-      - name: Notify Discord on Result
+      # 롤백 후 SLO 검증 (restore 모드일 때만)
+      - name: Verify SLO After Rollback
+        if: inputs.mode == 'restore' && steps.rollback.outputs.success == 'true'
+        env:
+          ENVIRONMENT: production
+        run: |
+          echo "🔍 롤백 후 SLO 검증 (5분 대기)"
+          
+          # 메트릭 안정화 대기
+          sleep 300
+          
+          END_TIME=$(date -u +%Y-%m-%dT%H:%M:%S)
+          START_TIME=$(date -u -d '10 minutes ago' +%Y-%m-%dT%H:%M:%S)
+          
+          echo "📊 측정 기간: $START_TIME ~ $END_TIME"
+          
+          # 기본 성공률만 확인
+          DOC_SUCCESS=$(aws cloudwatch get-metric-statistics \
+            --namespace "ReFit/AI" \
+            --metric-name "DocumentAnalysisSuccessRate" \
+            --dimensions Name=Environment,Value=$ENVIRONMENT \
+            --start-time $START_TIME \
+            --end-time $END_TIME \
+            --period 600 \
+            --statistics Average \
+            --query 'Datapoints[0].Average' \
+            --output text)
+          
+          if [ "$DOC_SUCCESS" != "None" ] && [ -n "$DOC_SUCCESS" ]; then
+            echo "✅ 롤백 후 서비스 정상 (성공률: ${DOC_SUCCESS}%)"
+          else
+            echo "ℹ️  아직 충분한 데이터 없음"
+          fi
+
+      - name: Notify Discord
         if: always() && inputs.mode == 'restore'
         env:
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
-          STATUS: ${{ job.status }}
+          STATUS: ${{ steps.rollback.outputs.success }}
           BACKUP_ID: ${{ inputs.backup_id }}
           RESTORE_DEPS: ${{ inputs.restore_dependencies }}
           RUN_ID: ${{ github.run_id }}
         run: |
-          # 상태에 따른 색상 및 이모지 설정
-          if [ "$STATUS" = "success" ]; then
+          if [ "$STATUS" = "true" ]; then
             COLOR=3066993
             EMOJI="🔄"
-            TITLE="Rollback Successful"
+            TITLE="AI 롤백 성공"
           else
             COLOR=15158332
             EMOJI="🚨"
-            TITLE="Rollback Failed"
+            TITLE="AI 롤백 실패"
           fi
 
-          # Backup ID 표시
           BACKUP_TEXT="${BACKUP_ID:-최신 백업}"
-          
-          # 의존성 복원 여부
           DEPS_TEXT="No"
-          [ "$RESTORE_DEPS" = "true" ] && DEPS_TEXT="Yes (wheel package restored)"
+          [ "$RESTORE_DEPS" = "true" ] && DEPS_TEXT="Yes"
 
-          # JSON 페이로드 생성
           payload=$(cat <<EOF
           {
             "embeds": [{
-              "title": "$EMOJI AI 롤백 결과: $TITLE",
+              "title": "$EMOJI $TITLE",
               "color": $COLOR,
               "fields": [
                 {"name": "서비스", "value": "Re-Fit AI", "inline": true},
-                {"name": "상태", "value": "\`$STATUS\`", "inline": true},
-                {"name": "롤백 대상", "value": "\`$BACKUP_TEXT\`", "inline": false},
+                {"name": "백업 ID", "value": "\`$BACKUP_TEXT\`", "inline": true},
                 {"name": "의존성 복원", "value": "$DEPS_TEXT", "inline": true},
                 {"name": "워크플로우", "value": "[상세 보기](https://github.com/${{ github.repository }}/actions/runs/$RUN_ID)", "inline": false}
               ],
-              "footer": { "text": "Re-Fit AI Rollback System" },
+              "footer": { "text": "Re-Fit AI Rollback" },
               "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
             }]
           }
           EOF
           )
 
-          # 전송
           curl -H "Content-Type: application/json" -X POST -d "$payload" "$DISCORD_WEBHOOK"
