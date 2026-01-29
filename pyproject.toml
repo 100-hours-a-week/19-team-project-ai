@@ -11,7 +11,7 @@ readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     "beautifulsoup4>=4.12.0",
-    "boto3>=1.34.0",
+    "boto3>=1.28.0",
     "fastapi>=0.109.0",
     "google-genai>=1.0.0",
     "httpx>=0.27.0",
@@ -29,6 +29,7 @@ dependencies = [
     "torch>=2.0.0",
     "transformers>=4.30.0",
     "uvicorn[standard]>=0.27.0",
+]>=0.27.0",
     # 의존성 충돌 방지: grpcio 버전 고정
     "grpcio>=1.60.0,<1.70.0",
     "grpcio-status>=1.60.0,<1.70.0",
