@@ -29,7 +29,6 @@ dependencies = [
     "torch>=2.0.0",
     "transformers>=4.30.0",
     "uvicorn[standard]>=0.27.0",
-]>=0.27.0",
     # 의존성 충돌 방지: grpcio 버전 고정
     "grpcio>=1.60.0,<1.70.0",
     "grpcio-status>=1.60.0,<1.70.0",
