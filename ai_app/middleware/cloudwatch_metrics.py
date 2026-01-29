@@ -16,27 +16,19 @@ import boto3
 logger = logging.getLogger(__name__)
 
 # Feature 타입 정의 (현재 프로젝트 기준)
-FeatureType = Literal['DocumentAnalysis', 'Recommendation', 'ReportGeneration']
+FeatureType = Literal["DocumentAnalysis", "Recommendation", "ReportGeneration"]
 
 
 class CloudWatchMetrics:
     """CloudWatch 메트릭 전송 서비스"""
 
     def __init__(self):
-        self.cloudwatch = boto3.client(
-            'cloudwatch',
-            region_name=os.getenv('AWS_REGION', 'ap-northeast-2')
-        )
-        self.namespace = 'ReFit/AI'
-        self.environment = os.getenv('ENVIRONMENT', 'production')
-        self.enabled = os.getenv('METRICS_ENABLED', 'true').lower() == 'true'
+        self.cloudwatch = boto3.client("cloudwatch", region_name=os.getenv("AWS_REGION", "ap-northeast-2"))
+        self.namespace = "ReFit/AI"
+        self.environment = os.getenv("ENVIRONMENT", "production")
+        self.enabled = os.getenv("METRICS_ENABLED", "true").lower() == "true"
 
-    def track_request(
-        self,
-        feature: FeatureType,
-        success: bool,
-        duration: float
-    ):
+    def track_request(self, feature: FeatureType, success: bool, duration: float):
         """
         AI 요청 메트릭 전송
 
@@ -58,37 +50,33 @@ class CloudWatchMetrics:
                 MetricData=[
                     # 성공률 메트릭
                     {
-                        'MetricName': f'{feature}SuccessRate',
-                        'Value': 100.0 if success else 0.0,
-                        'Unit': 'Percent',
-                        'Timestamp': datetime.utcnow(),
-                        'Dimensions': [
-                            {'Name': 'Environment', 'Value': self.environment}
-                        ]
+                        "MetricName": f"{feature}SuccessRate",
+                        "Value": 100.0 if success else 0.0,
+                        "Unit": "Percent",
+                        "Timestamp": datetime.utcnow(),
+                        "Dimensions": [{"Name": "Environment", "Value": self.environment}],
                     },
                     # 지연시간 메트릭
                     {
-                        'MetricName': f'{feature}Latency',
-                        'Value': duration,
-                        'Unit': 'Seconds',
-                        'Timestamp': datetime.utcnow(),
-                        'Dimensions': [
-                            {'Name': 'Environment', 'Value': self.environment}
-                        ],
-                        'StorageResolution': 1  # 1분 해상도
+                        "MetricName": f"{feature}Latency",
+                        "Value": duration,
+                        "Unit": "Seconds",
+                        "Timestamp": datetime.utcnow(),
+                        "Dimensions": [{"Name": "Environment", "Value": self.environment}],
+                        "StorageResolution": 1,  # 1분 해상도
                     },
                     # 요청 카운트
                     {
-                        'MetricName': f'{feature}RequestCount',
-                        'Value': 1,
-                        'Unit': 'Count',
-                        'Timestamp': datetime.utcnow(),
-                        'Dimensions': [
-                            {'Name': 'Environment', 'Value': self.environment},
-                            {'Name': 'Status', 'Value': 'Success' if success else 'Failure'}
-                        ]
-                    }
-                ]
+                        "MetricName": f"{feature}RequestCount",
+                        "Value": 1,
+                        "Unit": "Count",
+                        "Timestamp": datetime.utcnow(),
+                        "Dimensions": [
+                            {"Name": "Environment", "Value": self.environment},
+                            {"Name": "Status", "Value": "Success" if success else "Failure"},
+                        ],
+                    },
+                ],
             )
             logger.info(f"✅ Metrics sent: {feature}, success={success}, duration={duration:.2f}s")
 

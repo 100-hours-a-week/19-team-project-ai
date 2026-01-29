@@ -1,13 +1,14 @@
 """이력서 라우터 - 이력서 추출 API 엔드포인트"""
 
 import time
+
 import httpx
-from fastapi import APIRouter, Depends, HTTPException
 from controllers.resumes_controller import ResumesController, get_resumes_controller
+from fastapi import APIRouter, Depends, HTTPException
 from schemas.common import ApiResponse, ResponseCode
 from schemas.resumes import ResumeData, ResumeParseRequest
-from ..middleware.cloudwatch_metrics import metrics_service
 
+from ..middleware.cloudwatch_metrics import metrics_service
 
 router = APIRouter(prefix="/resumes", tags=["Resumes"])
 
@@ -81,8 +82,4 @@ async def parse_resume(
     # 메트릭 전송 (finally)
     finally:
         duration = time.time() - start_time
-        metrics_service.track_request(
-            feature='DocumentAnalysis',
-            success=success,
-            duration=duration
-        )
+        metrics_service.track_request(feature="DocumentAnalysis", success=success, duration=duration)
