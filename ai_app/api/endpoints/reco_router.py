@@ -1,9 +1,7 @@
 """멘토 추천 API 라우터"""
 
 import time
-
 from fastapi import APIRouter, Depends, Query
-
 from controllers.reco_controller import RecoController, get_reco_controller
 from schemas.common import ApiResponse, ResponseCode
 from schemas.reco import MentorRecommendResponse

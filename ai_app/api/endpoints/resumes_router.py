@@ -1,10 +1,8 @@
 """이력서 라우터 - 이력서 추출 API 엔드포인트"""
 
 import time
-
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
-
 from controllers.resumes_controller import ResumesController, get_resumes_controller
 from schemas.common import ApiResponse, ResponseCode
 from schemas.resumes import ResumeData, ResumeParseRequest
