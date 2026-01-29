@@ -5,10 +5,11 @@ import time
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
 
-from ..middleware.cloudwatch_metrics import metrics_service
 from controllers.resumes_controller import ResumesController, get_resumes_controller
 from schemas.common import ApiResponse, ResponseCode
 from schemas.resumes import ResumeData, ResumeParseRequest
+
+from ..middleware.cloudwatch_metrics import metrics_service
 
 router = APIRouter(prefix="/resumes", tags=["Resumes"])
 
