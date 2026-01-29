@@ -40,6 +40,9 @@ jobs:
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
       
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -97,6 +100,7 @@ jobs:
         with:
           commit_message: "chore: Auto-sync dependencies and lint fixes [skip ci]"
           file_pattern: "."
+          branch: ${{ github.event.pull_request.head.ref }}
           commit_user_name: "github-actions[bot]"
           commit_user_email: "github-actions[bot]@users.noreply.github.com"
       
