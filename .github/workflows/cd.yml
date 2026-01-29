@@ -82,6 +82,17 @@ jobs:
             --query 'Datapoints[0].Average' \
             --output text)
           
+          # 리포트 성공률
+          REPORT_SUCCESS_RATE=$(aws cloudwatch get-metric-statistics \
+            --namespace "ReFit/AI" \
+            --metric-name "ReportGenerationSuccessRate" \
+            --dimensions Name=Environment,Value=$ENVIRONMENT \
+            --start-time $START_TIME \
+            --end-time $END_TIME \
+            --period 3600 \
+            --statistics Average \
+            --query 'Datapoints[0].Average' \
+            --output text)
           
           # 데이터가 없으면 100으로 간주 (신규 환경)
           DOC_SUCCESS_RATE=${DOC_SUCCESS_RATE:-100}
@@ -406,26 +417,36 @@ jobs:
           sleep 3
           sudo -u ubuntu pm2 describe ${APP_NAME} > /dev/null || exit 1
           
-          # 서비스 초기화 대기
-          echo "서비스 초기화 대기 중... (10초)"
-          sleep 10
+          # 서비스 초기화 대기 (AI 모델 로딩 고려)
+          echo "서비스 초기화 대기 중... (30초)"
+          echo "AI 모델 로딩 중... (시간이 걸릴 수 있습니다)"
+          sleep 30
           
           # Caddy 리로드
           systemctl is-active --quiet caddy && sudo systemctl reload caddy 2>/dev/null || true
           sleep 2
           
-          # 헬스체크 (최대 10회 재시도)
+          # 헬스체크 (최대 15회 재시도, 간격 증가)
           echo "헬스체크 시작..."
           HEALTH_OK=false
-          for i in {1..10}; do
+          for i in {1..15}; do
             HTTP_STATUS=$(timeout 10 curl -s -o /dev/null -w "%{http_code}" "$HEALTH_CHECK_URL" 2>/dev/null || echo "000")
             if [ "$HTTP_STATUS" = "200" ]; then
-              echo "✅ 헬스체크 성공! (HTTP $HTTP_STATUS)"
+              echo "✅ 헬스체크 성공! (HTTP $HTTP_STATUS) - 시도 $i/15"
               HEALTH_OK=true
               break
             fi
-            echo "⚠️  시도 $i/10: HTTP $HTTP_STATUS"
-            [ $i -lt 10 ] && sleep $((3 + i / 2))
+            echo "⚠️  시도 $i/15: HTTP $HTTP_STATUS (AI 모델 로딩 중일 수 있음)"
+            
+            # 점진적 대기 시간 증가 (처음엔 짧게, 나중엔 길게)
+            if [ $i -le 5 ]; then
+              WAIT_TIME=5
+            elif [ $i -le 10 ]; then
+              WAIT_TIME=8
+            else
+              WAIT_TIME=10
+            fi
+            [ $i -lt 15 ] && sleep $WAIT_TIME
           done
           
           if [ "$HEALTH_OK" = "true" ]; then
@@ -554,26 +575,135 @@ jobs:
         id: initial_sli
         env:
           ENVIRONMENT: ${{ inputs.branch == 'main' && 'production' || 'development' }}
-          HEALTH_CHECK_URL: ${{ secrets.HEALTH_CHECK_URL }}
+          EC2_INSTANCE_ID: ${{ secrets.EC2_INSTANCE_ID }}
         run: |
-          echo "🔍 배포 후 초기 SLI 확인 (5분 대기)"
+          echo "🔍 배포 후 초기 SLI 확인"
           
-          AI_HEALTH_URL="${HEALTH_CHECK_URL%/health}/api/ai/health"
+          # AI 모델 로딩 대기 (중요!)
+          echo "⏳ AI 모델 로딩 대기 중... (60초)"
+          sleep 60
           
-          # 5분간 1분마다 헬스체크
+          # 5분간 1분마다 헬스체크 (SSM을 통해 EC2 내부에서 실행)
+          FAIL_COUNT=0
+          SUCCESS_COUNT=0
+          
           for i in {1..5}; do
             echo ""
             echo "[$i/5] 헬스체크 중... ($(date))"
             
-            HTTP_STATUS=$(timeout 10 curl -s -o /dev/null -w "%{http_code}" "$AI_HEALTH_URL" 2>/dev/null || echo "000")
+            # SSM을 통해 EC2 내부에서 curl 실행
+            COMMAND_ID=$(aws ssm send-command \
+              --instance-ids "$EC2_INSTANCE_ID" \
+              --document-name "AWS-RunShellScript" \
+              --parameters 'commands=["curl -s -o /dev/null -w \"%{http_code}\" http://localhost:8000/api/ai/health 2>/dev/null || echo \"000\""]' \
+              --region ap-northeast-2 \
+              --output text \
+              --query 'Command.CommandId')
+            
+            # 명령 완료 대기
+            sleep 3
+            
+            # 결과 가져오기
+            HTTP_STATUS=$(aws ssm get-command-invocation \
+              --command-id "$COMMAND_ID" \
+              --instance-id "$EC2_INSTANCE_ID" \
+              --region ap-northeast-2 \
+              --query 'StandardOutputContent' \
+              --output text 2>/dev/null | tr -d '\n' || echo "000")
             
             if [ "$HTTP_STATUS" = "200" ]; then
               echo "✅ 헬스체크 성공 (HTTP $HTTP_STATUS)"
+              FAIL_COUNT=0
+              SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
+              
+              # 2회 연속 성공하면 조기 종료
+              if [ $SUCCESS_COUNT -ge 2 ]; then
+                echo ""
+                echo "🎉 2회 연속 성공 - 조기 검증 완료!"
+                break
+              fi
             else
               echo "⚠️  헬스체크 실패 (HTTP $HTTP_STATUS)"
+              FAIL_COUNT=$((FAIL_COUNT + 1))
+              SUCCESS_COUNT=0
+              echo "⚠️  헬스체크 실패 (HTTP $HTTP_STATUS)"
+              FAIL_COUNT=$((FAIL_COUNT + 1))
               
-              if [ $i -ge 3 ]; then
-                echo "❌ 3회 이상 연속 실패 - 배포 검증 실패"
+              # 실패 시 상세 디버깅
+              if [ $i -ge 2 ] && [ $FAIL_COUNT -ge 2 ]; then
+                echo ""
+                echo "🔍 디버깅 정보 수집 중..."
+                
+                # PM2 상태 확인
+                echo "📊 PM2 상태:"
+                PM2_CMD=$(aws ssm send-command \
+                  --instance-ids "$EC2_INSTANCE_ID" \
+                  --document-name "AWS-RunShellScript" \
+                  --parameters 'commands=["sudo -u ubuntu pm2 jlist | jq -r \".[] | select(.name==\\\"ai-service\\\")\""]' \
+                  --region ap-northeast-2 \
+                  --output text \
+                  --query 'Command.CommandId')
+                
+                sleep 3
+                
+                aws ssm get-command-invocation \
+                  --command-id "$PM2_CMD" \
+                  --instance-id "$EC2_INSTANCE_ID" \
+                  --region ap-northeast-2 \
+                  --query 'StandardOutputContent' \
+                  --output text || echo "PM2 상태 조회 실패"
+                
+                # 최근 에러 로그
+                echo ""
+                echo "📋 최근 에러 로그:"
+                LOGS_CMD=$(aws ssm send-command \
+                  --instance-ids "$EC2_INSTANCE_ID" \
+                  --document-name "AWS-RunShellScript" \
+                  --parameters 'commands=["sudo -u ubuntu pm2 logs ai-service --lines 30 --err --nostream"]' \
+                  --region ap-northeast-2 \
+                  --output text \
+                  --query 'Command.CommandId')
+                
+                sleep 3
+                
+                aws ssm get-command-invocation \
+                  --command-id "$LOGS_CMD" \
+                  --instance-id "$EC2_INSTANCE_ID" \
+                  --region ap-northeast-2 \
+                  --query 'StandardOutputContent' \
+                  --output text || echo "로그 조회 실패"
+                
+                # 포트 확인
+                echo ""
+                echo "🔌 포트 8000 확인:"
+                PORT_CMD=$(aws ssm send-command \
+                  --instance-ids "$EC2_INSTANCE_ID" \
+                  --document-name "AWS-RunShellScript" \
+                  --parameters 'commands=["sudo netstat -tlnp | grep 8000"]' \
+                  --region ap-northeast-2 \
+                  --output text \
+                  --query 'Command.CommandId')
+                
+                sleep 2
+                
+                aws ssm get-command-invocation \
+                  --command-id "$PORT_CMD" \
+                  --instance-id "$EC2_INSTANCE_ID" \
+                  --region ap-northeast-2 \
+                  --query 'StandardOutputContent' \
+                  --output text || echo "포트 확인 실패"
+              fi
+              
+              if [ $FAIL_COUNT -ge 3 ]; then
+                echo ""
+                echo "❌ 3회 연속 실패 - 배포 검증 실패"
+                echo ""
+                echo "📌 문제 해결 가이드:"
+                echo "1. SSH 접속: ssh ubuntu@ec2-instance"
+                echo "2. PM2 상태: pm2 status"
+                echo "3. 로그 확인: pm2 logs ai-service --lines 100"
+                echo "4. 포트 확인: sudo netstat -tlnp | grep 8000"
+                echo "5. 헬스체크: curl http://localhost:8000/api/ai/health"
                 exit 1
               fi
             fi
