@@ -21,11 +21,13 @@ app = FastAPI(
 # CloudWatch 메트릭 수집 Middleware 등록
 app.add_middleware(CloudWatchMetricsMiddleware)
 
+
 # Root health check for CD/monitoring
 @app.get("/health")
 async def root_health():
     """Simple health check at root level for deployment monitoring"""
     return {"status": "ok"}
+
 
 app.include_router(health_router.router, prefix="/api/ai", tags=["Health"])
 app.include_router(resumes_router.router, prefix="/api/ai")

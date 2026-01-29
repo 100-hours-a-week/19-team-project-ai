@@ -1,187 +1,89 @@
 """
-CloudWatch 메트릭 전송 Middleware
-SLI/SLO 문서 기준에 맞춰 AI API 성능 지표를 CloudWatch로 전송
+CloudWatch 메트릭 전송 미들웨어
+
+현재 프로젝트 구조:
+- ai_app/api/middleware/cloudwatch_metrics.py (이 파일)
+- ai_app/api/endpoints/*.py (라우터들)
 """
+
 import logging
 import os
-import time
-from typing import Callable
+from datetime import datetime
+from typing import Literal
 
 import boto3
-from botocore.exceptions import ClientError
-from fastapi import Request, Response
-from starlette.middleware.base import BaseHTTPMiddleware
 
 logger = logging.getLogger(__name__)
 
-# CloudWatch 클라이언트 초기화
-try:
-    cloudwatch = boto3.client(
-        "cloudwatch",
-        region_name=os.getenv("AWS_REGION", "ap-northeast-2"),
-    )
-    CLOUDWATCH_ENABLED = os.getenv("CLOUDWATCH_METRICS_ENABLED", "false").lower() == "true"
-except Exception as e:
-    logger.warning(f"CloudWatch 클라이언트 초기화 실패: {e}")
-    CLOUDWATCH_ENABLED = False
-
-NAMESPACE = "ReFit/AI"
-ENVIRONMENT = os.getenv("ENVIRONMENT", "production")
+# Feature 타입 정의 (현재 프로젝트 기준)
+FeatureType = Literal["DocumentAnalysis", "Recommendation", "ReportGeneration"]
 
 
-class CloudWatchMetricsMiddleware(BaseHTTPMiddleware):
-    """
-    AI API 요청의 성능 지표를 CloudWatch로 전송하는 Middleware
-    
-    수집 메트릭:
-    - ResponseTime: API 응답 시간 (밀리초)
-    - RequestCount: 요청 수 (StatusCode별)
-    - ErrorCount: 에러 요청 수 (5xx)
-    """
+class CloudWatchMetrics:
+    """CloudWatch 메트릭 전송 서비스"""
 
-    async def dispatch(self, request: Request, call_next: Callable) -> Response:
-        # AI API 경로만 측정 (/api/ai/*)
-        if not request.url.path.startswith("/api/ai/"):
-            return await call_next(request)
-        
-        # Health check는 제외
-        if request.url.path == "/api/ai/health":
-            return await call_next(request)
+    def __init__(self):
+        self.cloudwatch = boto3.client("cloudwatch", region_name=os.getenv("AWS_REGION", "ap-northeast-2"))
+        self.namespace = "ReFit/AI"
+        self.environment = os.getenv("ENVIRONMENT", "production")
+        self.enabled = os.getenv("METRICS_ENABLED", "true").lower() == "true"
 
-        start_time = time.time()
-        
+    def track_request(self, feature: FeatureType, success: bool, duration: float):
+        """
+        AI 요청 메트릭 전송
+
+        Args:
+            feature: AI 기능 타입
+                - 'DocumentAnalysis': 이력서/자소서 분석 (resumes_router.py)
+                - 'Recommendation': 현직자 추천 (reco_router.py)
+                - 'ReportGeneration': 리포트 생성 (해당 라우터)
+            success: 성공 여부
+            duration: 처리 시간 (초)
+        """
+        if not self.enabled:
+            logger.debug(f"Metrics disabled, skipping: {feature}")
+            return
+
         try:
-            response = await call_next(request)
-            duration_ms = (time.time() - start_time) * 1000  # 밀리초
-            
-            # CloudWatch로 메트릭 전송 (비동기, 실패해도 요청은 계속)
-            if CLOUDWATCH_ENABLED:
-                self._send_metrics(
-                    endpoint=self._normalize_endpoint(request.url.path),
-                    method=request.method,
-                    status_code=response.status_code,
-                    duration_ms=duration_ms,
-                )
-            
-            return response
-        
-        except Exception as e:
-            duration_ms = (time.time() - start_time) * 1000
-            
-            # 에러 발생 시 500으로 메트릭 전송
-            if CLOUDWATCH_ENABLED:
-                self._send_metrics(
-                    endpoint=self._normalize_endpoint(request.url.path),
-                    method=request.method,
-                    status_code=500,
-                    duration_ms=duration_ms,
-                )
-            
-            raise  # 원래 에러는 그대로 전파
-
-    def _normalize_endpoint(self, endpoint: str) -> str:
-        """동적 경로를 정규화하여 집계 가능하도록 변환"""
-        # 더 유연한 매칭을 위해 'in' 키워드 사용
-        # /api/ai/mentors/recommend/123 -> /api/ai/mentors/recommend
-        # /api/ai/resumes/456/parse -> /api/ai/resumes
-        # /api/ai/jobs/parse -> /api/ai/jobs
-
-        if "/api/ai/mentors/recommend" in endpoint:
-            normalized = "/api/ai/mentors/recommend"
-            logger.debug(f"경로 정규화: {endpoint} → {normalized}")
-            return normalized
-
-        if "/api/ai/resumes" in endpoint:
-            normalized = "/api/ai/resumes"
-            logger.debug(f"경로 정규화: {endpoint} → {normalized}")
-            return normalized
-
-        if "/api/ai/jobs" in endpoint:
-            normalized = "/api/ai/jobs"
-            logger.debug(f"경로 정규화: {endpoint} → {normalized}")
-            return normalized
-
-        # 기타 API (정규화 없음)
-        logger.debug(f"경로 정규화 없음: {endpoint}")
-        return endpoint
-
-    def _send_metrics(
-        self,
-        endpoint: str,
-        method: str,
-        status_code: int,
-        duration_ms: float,
-    ):
-        """CloudWatch로 메트릭 전송"""
-        try:
-            # 동적 경로 정규화
-            normalized_endpoint = self._normalize_endpoint(endpoint)
-            
-            # StatusCode를 2xx, 4xx, 5xx 형식으로 변환
-            status_class = f"{status_code // 100}xx"
-            
-            metric_data = [
-                # 1. 응답 시간 (P95 계산용)
-                {
-                    "MetricName": "ResponseTime",
-                    "Value": duration_ms,
-                    "Unit": "Milliseconds",
-                    "Dimensions": [
-                        {"Name": "Endpoint", "Value": normalized_endpoint},
-                        {"Name": "Environment", "Value": ENVIRONMENT},
-                    ],
-                    "StorageResolution": 60,  # 1분 단위 고해상도
-                },
-                # 2. 요청 수 (가용성 계산용)
-                {
-                    "MetricName": "RequestCount",
-                    "Value": 1,
-                    "Unit": "Count",
-                    "Dimensions": [
-                        {"Name": "Endpoint", "Value": normalized_endpoint},
-                        {"Name": "StatusCode", "Value": status_class},
-                        {"Name": "Environment", "Value": ENVIRONMENT},
-                    ],
-                    "StorageResolution": 60,
-                },
-                # 3. 전체 요청 수 (Rate Limit 포함)
-                {
-                    "MetricName": "RequestCount",
-                    "Value": 1,
-                    "Unit": "Count",
-                    "Dimensions": [
-                        {"Name": "Endpoint", "Value": normalized_endpoint},
-                        {"Name": "Environment", "Value": ENVIRONMENT},
-                    ],
-                    "StorageResolution": 60,
-                },
-            ]
-            
-            # 4. 에러 카운트 (5xx만)
-            if status_code >= 500:
-                metric_data.append({
-                    "MetricName": "ErrorCount",
-                    "Value": 1,
-                    "Unit": "Count",
-                    "Dimensions": [
-                        {"Name": "Endpoint", "Value": normalized_endpoint},
-                        {"Name": "Environment", "Value": ENVIRONMENT},
-                    ],
-                    "StorageResolution": 60,
-                })
-            
-            # CloudWatch로 전송 (비동기)
-            cloudwatch.put_metric_data(
-                Namespace=NAMESPACE,
-                MetricData=metric_data,
+            self.cloudwatch.put_metric_data(
+                Namespace=self.namespace,
+                MetricData=[
+                    # 성공률 메트릭
+                    {
+                        "MetricName": f"{feature}SuccessRate",
+                        "Value": 100.0 if success else 0.0,
+                        "Unit": "Percent",
+                        "Timestamp": datetime.utcnow(),
+                        "Dimensions": [{"Name": "Environment", "Value": self.environment}],
+                    },
+                    # 지연시간 메트릭
+                    {
+                        "MetricName": f"{feature}Latency",
+                        "Value": duration,
+                        "Unit": "Seconds",
+                        "Timestamp": datetime.utcnow(),
+                        "Dimensions": [{"Name": "Environment", "Value": self.environment}],
+                        "StorageResolution": 1,  # 1분 해상도
+                    },
+                    # 요청 카운트
+                    {
+                        "MetricName": f"{feature}RequestCount",
+                        "Value": 1,
+                        "Unit": "Count",
+                        "Timestamp": datetime.utcnow(),
+                        "Dimensions": [
+                            {"Name": "Environment", "Value": self.environment},
+                            {"Name": "Status", "Value": "Success" if success else "Failure"},
+                        ],
+                    },
+                ],
             )
-            
-            logger.debug(
-                f"CloudWatch 메트릭 전송: {normalized_endpoint} {status_code} {duration_ms:.2f}ms"
-            )
-        
-        except ClientError as e:
-            # CloudWatch 전송 실패는 로그만 남기고 계속
-            logger.error(f"CloudWatch 메트릭 전송 실패: {e}")
+            logger.info(f"✅ Metrics sent: {feature}, success={success}, duration={duration:.2f}s")
+
         except Exception as e:
-            logger.error(f"메트릭 처리 중 예외 발생: {e}")
+            # 메트릭 전송 실패해도 API는 계속 동작
+            logger.error(f"❌ Failed to send CloudWatch metrics: {e}")
+
+
+# 싱글톤 인스턴스 (전역에서 재사용)
+metrics_service = CloudWatchMetrics()
