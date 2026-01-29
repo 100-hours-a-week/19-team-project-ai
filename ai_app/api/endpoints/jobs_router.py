@@ -1,7 +1,6 @@
 """채용공고 API 라우터"""
 
 from fastapi import APIRouter, Depends
-
 from controllers.jobs_controller import JobsController, get_jobs_controller
 from schemas.common import ApiResponse, ResponseCode
 from schemas.jobs import JobParseRequest, JobPosting
