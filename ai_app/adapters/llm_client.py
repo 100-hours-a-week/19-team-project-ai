@@ -109,7 +109,7 @@ class LLMClient:
         for model in models_to_try:
             for attempt in range(self.max_retries):
                 try:
-                    # Vertex AI는 'gemini-2.0-flash' 같은 짧은 이름 대신 
+                    # Vertex AI는 'gemini-2.0-flash' 같은 짧은 이름 대신
                     # 'publishers/google/models/...' 형식을 기대할 수 있으나 SDK가 변환함
                     response = await client.aio.models.generate_content(
                         model=model,
@@ -147,7 +147,7 @@ class LLMClient:
                         )
                         await asyncio.sleep(wait_time)
                         continue
-                    
+
                     # 그 외의 에러 (예: 404 모델 없음)는 즉시 다음 모델로 전환
                     logger.error(f"❌ 모델 {model} 호출 중 예상치 못한 에러 발생: {e}")
                     break
