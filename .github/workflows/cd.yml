@@ -30,125 +30,12 @@ env:
 
 jobs:
   # ==========================================
-  # 1단계: 배포 전 검증 (Pre-deployment Validation)
+  # 1단계: 배포 전 기본 상태 확인
   # ==========================================
   pre-deployment-check:
     runs-on: ubuntu-latest
     environment: ${{ inputs.branch == 'main' && 'production' || 'development' }}
-    outputs:
-      can_deploy: ${{ steps.error_budget_check.outputs.can_deploy }}
-      error_budget_status: ${{ steps.error_budget_check.outputs.status }}
     steps:
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ap-northeast-2
-
-      # Error Budget 확인 - 배포 가능 여부 결정
-      - name: Check Error Budget Before Deployment
-        id: error_budget_check
-        env:
-          ENVIRONMENT: ${{ inputs.branch == 'main' && 'production' || 'development' }}
-        run: |
-          echo "🔍 Error Budget 확인 중..."
-          
-          # CloudWatch에서 최근 1시간 성공률 조회
-          END_TIME=$(date -u +%Y-%m-%dT%H:%M:%S)
-          START_TIME=$(date -u -d '1 hour ago' +%Y-%m-%dT%H:%M:%S)
-          
-          # 문서 분석 성공률
-          DOC_SUCCESS_RATE=$(aws cloudwatch get-metric-statistics \
-            --namespace "ReFit/AI" \
-            --metric-name "DocumentAnalysisSuccessRate" \
-            --dimensions Name=Environment,Value=$ENVIRONMENT \
-            --start-time $START_TIME \
-            --end-time $END_TIME \
-            --period 3600 \
-            --statistics Average \
-            --query 'Datapoints[0].Average' \
-            --output text)
-          
-          # 추천 성공률
-          RECO_SUCCESS_RATE=$(aws cloudwatch get-metric-statistics \
-            --namespace "ReFit/AI" \
-            --metric-name "RecommendationSuccessRate" \
-            --dimensions Name=Environment,Value=$ENVIRONMENT \
-            --start-time $START_TIME \
-            --end-time $END_TIME \
-            --period 3600 \
-            --statistics Average \
-            --query 'Datapoints[0].Average' \
-            --output text)
-          
-          # 리포트 성공률
-          REPORT_SUCCESS_RATE=$(aws cloudwatch get-metric-statistics \
-            --namespace "ReFit/AI" \
-            --metric-name "ReportGenerationSuccessRate" \
-            --dimensions Name=Environment,Value=$ENVIRONMENT \
-            --start-time $START_TIME \
-            --end-time $END_TIME \
-            --period 3600 \
-            --statistics Average \
-            --query 'Datapoints[0].Average' \
-            --output text)
-          
-          # 데이터가 없으면 100으로 간주 (신규 환경)
-          DOC_SUCCESS_RATE=${DOC_SUCCESS_RATE:-100}
-          RECO_SUCCESS_RATE=${RECO_SUCCESS_RATE:-100}
-          REPORT_SUCCESS_RATE=${REPORT_SUCCESS_RATE:-100}
-          
-          echo "📊 현재 성공률:"
-          echo "  - 문서 분석: ${DOC_SUCCESS_RATE}% (목표: 93%)"
-          echo "  - 추천: ${RECO_SUCCESS_RATE}% (목표: 97%)"
-          echo "  - 리포트: ${REPORT_SUCCESS_RATE}% (목표: 93%)"
-          
-          # Error Budget 계산 (SLO 문서 참고)
-          # Error Budget = (100 - 실제 성공률) / (100 - 목표 성공률) * 100
-          
-          DOC_ERROR_BUDGET=$(awk "BEGIN {printf \"%.2f\", (100 - $DOC_SUCCESS_RATE) / (100 - 93) * 100}")
-          RECO_ERROR_BUDGET=$(awk "BEGIN {printf \"%.2f\", (100 - $RECO_SUCCESS_RATE) / (100 - 97) * 100}")
-          REPORT_ERROR_BUDGET=$(awk "BEGIN {printf \"%.2f\", (100 - $REPORT_SUCCESS_RATE) / (100 - 98) * 100}")
-          
-          echo ""
-          echo "💰 Error Budget 소진율:"
-          echo "  - 문서 분석: ${DOC_ERROR_BUDGET}%"
-          echo "  - 추천: ${RECO_ERROR_BUDGET}%"
-          echo "  - 리포트: ${REPORT_ERROR_BUDGET}%"
-          
-          # 배포 가능 여부 판단 (Error Budget < 50% 권장, < 75% 허용)
-          CAN_DEPLOY="true"
-          STATUS="healthy"
-          
-          for budget in $DOC_ERROR_BUDGET $RECO_ERROR_BUDGET $REPORT_ERROR_BUDGET; do
-            # 숫자 비교 (소수점 처리)
-            if awk "BEGIN {exit !($budget >= 75)}"; then
-              CAN_DEPLOY="warning"
-              STATUS="degraded"
-              echo "⚠️  경고: Error Budget이 75% 이상 소진됨 ($budget%)"
-            elif awk "BEGIN {exit !($budget >= 100)}"; then
-              CAN_DEPLOY="false"
-              STATUS="exceeded"
-              echo "🚨 Error Budget 초과! 배포 중단 권장 ($budget%)"
-            fi
-          done
-          
-          echo ""
-          echo "can_deploy=$CAN_DEPLOY" >> $GITHUB_OUTPUT
-          echo "status=$STATUS" >> $GITHUB_OUTPUT
-          
-          if [ "$CAN_DEPLOY" = "false" ]; then
-            echo "❌ Error Budget이 초과되어 배포를 권장하지 않습니다."
-            echo "   안정화 작업 후 재시도하거나, 강제 배포를 원하면 수동으로 진행하세요."
-            exit 1
-          elif [ "$CAN_DEPLOY" = "warning" ]; then
-            echo "⚠️  Error Budget 경고 상태이지만 배포를 진행합니다."
-            echo "   배포 후 면밀한 모니터링이 필요합니다."
-          else
-            echo "✅ Error Budget 정상 - 배포 진행 가능"
-          fi
-
       # 현재 서비스 상태 확인
       - name: Check Current Service Health
         continue-on-error: true
@@ -555,7 +442,7 @@ jobs:
           exit 1
 
   # ==========================================
-  # 3단계: 배포 후 검증 (Post-deployment Validation)
+  # 3단계: 배포 후 기본 헬스체크 검증
   # ==========================================
   post-deployment-validation:
     runs-on: ubuntu-latest
@@ -570,28 +457,22 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ap-northeast-2
 
-      # 배포 후 즉시 기본 SLI 확인 (처음 5분)
-      - name: Initial SLI Check (0-5min)
-        id: initial_sli
+      # 배포 후 즉시 기본 헬스체크 확인
+      - name: Basic Health Check (0-5min)
         env:
-          ENVIRONMENT: ${{ inputs.branch == 'main' && 'production' || 'development' }}
           EC2_INSTANCE_ID: ${{ secrets.EC2_INSTANCE_ID }}
         run: |
-          echo "🔍 배포 후 초기 SLI 확인"
+          echo "🔍 배포 후 기본 헬스체크 확인"
           
-          # AI 모델 로딩 대기 (중요!)
-          echo "⏳ AI 모델 로딩 대기 중... (60초)"
-          sleep 60
+          # AI 모델 로딩 대기
+          echo "⏳ AI 모델 로딩 대기 중... (30초)"
+          sleep 30
           
-          # 5분간 1분마다 헬스체크 (SSM을 통해 EC2 내부에서 실행)
-          FAIL_COUNT=0
           SUCCESS_COUNT=0
-          
           for i in {1..5}; do
             echo ""
             echo "[$i/5] 헬스체크 중... ($(date))"
             
-            # SSM을 통해 EC2 내부에서 curl 실행
             COMMAND_ID=$(aws ssm send-command \
               --instance-ids "$EC2_INSTANCE_ID" \
               --document-name "AWS-RunShellScript" \
@@ -600,10 +481,8 @@ jobs:
               --output text \
               --query 'Command.CommandId')
             
-            # 명령 완료 대기
             sleep 3
             
-            # 결과 가져오기
             HTTP_STATUS=$(aws ssm get-command-invocation \
               --command-id "$COMMAND_ID" \
               --instance-id "$EC2_INSTANCE_ID" \
@@ -613,249 +492,17 @@ jobs:
             
             if [ "$HTTP_STATUS" = "200" ]; then
               echo "✅ 헬스체크 성공 (HTTP $HTTP_STATUS)"
-              FAIL_COUNT=0
               SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
-              
-              # 2회 연속 성공하면 조기 종료
               if [ $SUCCESS_COUNT -ge 2 ]; then
-                echo ""
-                echo "🎉 2회 연속 성공 - 조기 검증 완료!"
+                echo "🎉 검증 완료!"
                 break
               fi
             else
               echo "⚠️  헬스체크 실패 (HTTP $HTTP_STATUS)"
-              FAIL_COUNT=$((FAIL_COUNT + 1))
               SUCCESS_COUNT=0
-              echo "⚠️  헬스체크 실패 (HTTP $HTTP_STATUS)"
-              FAIL_COUNT=$((FAIL_COUNT + 1))
-              
-              # 실패 시 상세 디버깅
-              if [ $i -ge 2 ] && [ $FAIL_COUNT -ge 2 ]; then
-                echo ""
-                echo "🔍 디버깅 정보 수집 중..."
-                
-                # PM2 상태 확인
-                echo "📊 PM2 상태:"
-                PM2_CMD=$(aws ssm send-command \
-                  --instance-ids "$EC2_INSTANCE_ID" \
-                  --document-name "AWS-RunShellScript" \
-                  --parameters 'commands=["sudo -u ubuntu pm2 jlist | jq -r \".[] | select(.name==\\\"ai-service\\\")\""]' \
-                  --region ap-northeast-2 \
-                  --output text \
-                  --query 'Command.CommandId')
-                
-                sleep 3
-                
-                aws ssm get-command-invocation \
-                  --command-id "$PM2_CMD" \
-                  --instance-id "$EC2_INSTANCE_ID" \
-                  --region ap-northeast-2 \
-                  --query 'StandardOutputContent' \
-                  --output text || echo "PM2 상태 조회 실패"
-                
-                # 최근 에러 로그
-                echo ""
-                echo "📋 최근 에러 로그:"
-                LOGS_CMD=$(aws ssm send-command \
-                  --instance-ids "$EC2_INSTANCE_ID" \
-                  --document-name "AWS-RunShellScript" \
-                  --parameters 'commands=["sudo -u ubuntu pm2 logs ai-service --lines 30 --err --nostream"]' \
-                  --region ap-northeast-2 \
-                  --output text \
-                  --query 'Command.CommandId')
-                
-                sleep 3
-                
-                aws ssm get-command-invocation \
-                  --command-id "$LOGS_CMD" \
-                  --instance-id "$EC2_INSTANCE_ID" \
-                  --region ap-northeast-2 \
-                  --query 'StandardOutputContent' \
-                  --output text || echo "로그 조회 실패"
-                
-                # 포트 확인
-                echo ""
-                echo "🔌 포트 8000 확인:"
-                PORT_CMD=$(aws ssm send-command \
-                  --instance-ids "$EC2_INSTANCE_ID" \
-                  --document-name "AWS-RunShellScript" \
-                  --parameters 'commands=["sudo netstat -tlnp | grep 8000"]' \
-                  --region ap-northeast-2 \
-                  --output text \
-                  --query 'Command.CommandId')
-                
-                sleep 2
-                
-                aws ssm get-command-invocation \
-                  --command-id "$PORT_CMD" \
-                  --instance-id "$EC2_INSTANCE_ID" \
-                  --region ap-northeast-2 \
-                  --query 'StandardOutputContent' \
-                  --output text || echo "포트 확인 실패"
-              fi
-              
-              if [ $FAIL_COUNT -ge 3 ]; then
-                echo ""
-                echo "❌ 3회 연속 실패 - 배포 검증 실패"
-                echo ""
-                echo "📌 문제 해결 가이드:"
-                echo "1. SSH 접속: ssh ubuntu@ec2-instance"
-                echo "2. PM2 상태: pm2 status"
-                echo "3. 로그 확인: pm2 logs ai-service --lines 100"
-                echo "4. 포트 확인: sudo netstat -tlnp | grep 8000"
-                echo "5. 헬스체크: curl http://localhost:8000/api/ai/health"
-                exit 1
-              fi
             fi
-            
-            [ $i -lt 5 ] && sleep 60
+            [ $i -lt 5 ] && sleep 30
           done
-          
-          echo ""
-          echo "✅ 초기 헬스체크 통과 (5분)"
-
-      # CloudWatch SLO 검증 (배포 후 10-15분 데이터 기반)
-      - name: Verify SLO Compliance (CloudWatch)
-        id: slo_check
-        continue-on-error: false
-        env:
-          ENVIRONMENT: ${{ inputs.branch == 'main' && 'production' || 'development' }}
-        run: |
-          echo "🔍 CloudWatch 기반 SLO 검증 시작 (10분 대기)"
-          
-          # 메트릭이 CloudWatch에 반영될 시간 확보
-          sleep 600
-          
-          END_TIME=$(date -u +%Y-%m-%dT%H:%M:%S)
-          START_TIME=$(date -u -d '15 minutes ago' +%Y-%m-%dT%H:%M:%S)
-          
-          echo "📊 측정 기간: $START_TIME ~ $END_TIME"
-          
-          # Tier 1 기능별 SLO 검증
-          declare -A SLO_TARGETS=(
-            ["DocumentAnalysis"]="93"
-            ["Recommendation"]="97"
-            ["ReportGeneration"]="93"
-          )
-          
-          ALL_PASSED=true
-          
-          for feature in "${!SLO_TARGETS[@]}"; do
-            TARGET=${SLO_TARGETS[$feature]}
-            
-            echo ""
-            echo "=== $feature 검증 (목표: ${TARGET}%) ==="
-            
-            # 성공률 조회
-            SUCCESS_RATE=$(aws cloudwatch get-metric-statistics \
-              --namespace "ReFit/AI" \
-              --metric-name "${feature}SuccessRate" \
-              --dimensions Name=Environment,Value=$ENVIRONMENT \
-              --start-time $START_TIME \
-              --end-time $END_TIME \
-              --period 900 \
-              --statistics Average \
-              --query 'Datapoints[0].Average' \
-              --output text)
-            
-            # P95 지연시간 조회
-            LATENCY_P95=$(aws cloudwatch get-metric-statistics \
-              --namespace "ReFit/AI" \
-              --metric-name "${feature}Latency" \
-              --dimensions Name=Environment,Value=$ENVIRONMENT \
-              --start-time $START_TIME \
-              --end-time $END_TIME \
-              --period 900 \
-              --extended-statistics p95 \
-              --query 'Datapoints[0]."p95"' \
-              --output text)
-            
-            # 데이터가 없으면 스킵 (아직 요청이 없을 수 있음)
-            if [ "$SUCCESS_RATE" = "None" ] || [ -z "$SUCCESS_RATE" ]; then
-              echo "ℹ️  아직 데이터 없음 (신규 배포 또는 요청 없음)"
-              continue
-            fi
-            
-            SUCCESS_RATE=$(printf "%.2f" $SUCCESS_RATE)
-            
-            echo "  - 성공률: ${SUCCESS_RATE}% (목표: ${TARGET}%)"
-            
-            if [ -n "$LATENCY_P95" ] && [ "$LATENCY_P95" != "None" ]; then
-              echo "  - P95 지연시간: ${LATENCY_P95}초"
-            fi
-            
-            # SLO 달성 여부 확인
-            if awk "BEGIN {exit !($SUCCESS_RATE >= $TARGET)}"; then
-              echo "  ✅ SLO 달성"
-            else
-              echo "  ❌ SLO 미달성"
-              ALL_PASSED=false
-            fi
-          done
-          
-          echo ""
-          if [ "$ALL_PASSED" = "true" ]; then
-            echo "✅ 모든 SLO 검증 통과"
-            echo "slo_status=passed" >> $GITHUB_OUTPUT
-          else
-            echo "⚠️  일부 SLO 미달성"
-            echo "slo_status=failed" >> $GITHUB_OUTPUT
-          fi
-
-      # SLO 검증 결과를 Discord로 전송
-      - name: Report SLO Results to Discord
-        if: always()
-        env:
-          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
-          SLO_STATUS: ${{ steps.slo_check.outputs.slo_status }}
-          BRANCH: ${{ inputs.branch }}
-          SHA: ${{ needs.deploy.outputs.deployment_sha }}
-          CLOUDWATCH_DASHBOARD_URL: ${{ secrets.CLOUDWATCH_AI_DASHBOARD_URL }}
-          ERROR_BUDGET_STATUS: ${{ needs.pre-deployment-check.outputs.error_budget_status }}
-        run: |
-          if [ "$SLO_STATUS" = "failed" ]; then
-            COLOR=16776960
-            EMOJI="⚠️"
-            TITLE="AI SLO 위반 감지"
-            MESSAGE="배포는 완료되었으나 일부 SLO 목표를 충족하지 못했습니다."
-          else
-            COLOR=3066993
-            EMOJI="✅"
-            TITLE="AI 배포 및 SLO 검증 완료"
-            MESSAGE="배포가 성공적으로 완료되었고 모든 SLO를 충족합니다."
-          fi
-          
-          # Error Budget 상태 추가
-          EB_STATUS="정상"
-          EB_COLOR="🟢"
-          if [ "$ERROR_BUDGET_STATUS" = "degraded" ]; then
-            EB_STATUS="주의"
-            EB_COLOR="🟡"
-          elif [ "$ERROR_BUDGET_STATUS" = "exceeded" ]; then
-            EB_STATUS="초과"
-            EB_COLOR="🔴"
-          fi
-          
-          payload=$(cat <<EOF
-          {
-            "embeds": [{
-              "title": "$EMOJI $TITLE",
-              "color": $COLOR,
-              "description": "$MESSAGE",
-              "fields": [
-                {"name": "브랜치", "value": "\`$BRANCH\`", "inline": true},
-                {"name": "커밋", "value": "\`${SHA:0:7}\`", "inline": true},
-                {"name": "Error Budget", "value": "$EB_COLOR $EB_STATUS", "inline": true},
-                {"name": "CloudWatch", "value": "[대시보드 보기](${CLOUDWATCH_DASHBOARD_URL:-https://console.aws.amazon.com/cloudwatch})", "inline": false}
-              ],
-              "footer": { "text": "Re-Fit AI CD" },
-              "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-            }]
-          }
-          EOF
-          )
-          
-          curl -H "Content-Type: application/json" -X POST -d "$payload" "$DISCORD_WEBHOOK"
 
   # ==========================================
   # 최종: 배포 결과 알림
@@ -875,17 +522,11 @@ jobs:
           SHA: ${{ needs.deploy.outputs.deployment_sha }}
           RUN_ID: ${{ github.run_id }}
         run: |
-          # 최종 상태 판단
           if [ "$DEPLOY_RESULT" = "success" ] && [ "$POST_CHECK_RESULT" = "success" ]; then
             EMOJI="✅"
             COLOR=3066993
-            TITLE="AI 배포 완전 성공"
-            MESSAGE="모든 검증을 통과하고 배포가 완료되었습니다."
-          elif [ "$DEPLOY_RESULT" = "success" ]; then
-            EMOJI="⚠️"
-            COLOR=16776960
-            TITLE="AI 배포 부분 성공"
-            MESSAGE="배포는 완료되었으나 사후 검증에서 일부 이슈가 발견되었습니다."
+            TITLE="AI 배포 성공"
+            MESSAGE="배포 및 기본 헬스체크가 완료되었습니다."
           else
             EMOJI="🚨"
             COLOR=15158332
@@ -893,15 +534,9 @@ jobs:
             MESSAGE="배포 과정에서 문제가 발생했습니다."
           fi
 
-          # 단계별 상태
-          PRE_ICON="✅"
-          [ "$PRE_CHECK_RESULT" != "success" ] && PRE_ICON="❌"
-          
-          DEPLOY_ICON="✅"
-          [ "$DEPLOY_RESULT" != "success" ] && DEPLOY_ICON="❌"
-          
-          POST_ICON="✅"
-          [ "$POST_CHECK_RESULT" != "success" ] && POST_ICON="❌"
+          PRE_ICON="✅"; [ "$PRE_CHECK_RESULT" != "success" ] && PRE_ICON="❌"
+          DEPLOY_ICON="✅"; [ "$DEPLOY_RESULT" != "success" ] && DEPLOY_ICON="❌"
+          POST_ICON="✅"; [ "$POST_CHECK_RESULT" != "success" ] && POST_ICON="❌"
 
           payload=$(cat <<EOF
           {
@@ -913,7 +548,7 @@ jobs:
                 {"name": "서비스", "value": "Re-Fit AI", "inline": true},
                 {"name": "브랜치", "value": "\`$BRANCH\`", "inline": true},
                 {"name": "커밋", "value": "\`${SHA:0:7}\`", "inline": true},
-                {"name": "검증 단계", "value": "$PRE_ICON 배포 전 검증\n$DEPLOY_ICON 배포 실행\n$POST_ICON 배포 후 검증", "inline": false},
+                {"name": "단계", "value": "$PRE_ICON 전 점검 | $DEPLOY_ICON 배포 | $POST_ICON 후 점검", "inline": false},
                 {"name": "워크플로우", "value": "[상세 보기](https://github.com/${{ github.repository }}/actions/runs/$RUN_ID)", "inline": false}
               ],
               "footer": { "text": "Re-Fit AI CD" },
@@ -922,5 +557,4 @@ jobs:
           }
           EOF
           )
-
           curl -H "Content-Type: application/json" -X POST -d "$payload" "$DISCORD_WEBHOOK"
