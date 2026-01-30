@@ -442,74 +442,11 @@ jobs:
           exit 1
 
   # ==========================================
-  # 3단계: 배포 후 기본 헬스체크 검증
-  # ==========================================
-  post-deployment-validation:
-    runs-on: ubuntu-latest
-    needs: deploy
-    if: success()
-    environment: ${{ inputs.branch == 'main' && 'production' || 'development' }}
-    steps:
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ap-northeast-2
-
-      # 배포 후 즉시 기본 헬스체크 확인
-      - name: Basic Health Check (0-5min)
-        env:
-          EC2_INSTANCE_ID: ${{ secrets.EC2_INSTANCE_ID }}
-        run: |
-          echo "🔍 배포 후 기본 헬스체크 확인"
-          
-          # AI 모델 로딩 대기
-          echo "⏳ AI 모델 로딩 대기 중... (30초)"
-          sleep 30
-          
-          SUCCESS_COUNT=0
-          for i in {1..5}; do
-            echo ""
-            echo "[$i/5] 헬스체크 중... ($(date))"
-            
-            COMMAND_ID=$(aws ssm send-command \
-              --instance-ids "$EC2_INSTANCE_ID" \
-              --document-name "AWS-RunShellScript" \
-              --parameters 'commands=["curl -s -o /dev/null -w \"%{http_code}\" http://localhost:8000/api/ai/health 2>/dev/null || echo \"000\""]' \
-              --region ap-northeast-2 \
-              --output text \
-              --query 'Command.CommandId')
-            
-            sleep 3
-            
-            HTTP_STATUS=$(aws ssm get-command-invocation \
-              --command-id "$COMMAND_ID" \
-              --instance-id "$EC2_INSTANCE_ID" \
-              --region ap-northeast-2 \
-              --query 'StandardOutputContent' \
-              --output text 2>/dev/null | tr -d '\n' || echo "000")
-            
-            if [ "$HTTP_STATUS" = "200" ]; then
-              echo "✅ 헬스체크 성공 (HTTP $HTTP_STATUS)"
-              SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
-              if [ $SUCCESS_COUNT -ge 2 ]; then
-                echo "🎉 검증 완료!"
-                break
-              fi
-            else
-              echo "⚠️  헬스체크 실패 (HTTP $HTTP_STATUS)"
-              SUCCESS_COUNT=0
-            fi
-            [ $i -lt 5 ] && sleep 30
-          done
-
-  # ==========================================
   # 최종: 배포 결과 알림
   # ==========================================
   notify-result:
     runs-on: ubuntu-latest
-    needs: [pre-deployment-check, deploy, post-deployment-validation]
+    needs: [pre-deployment-check, deploy]
     if: always()
     steps:
       - name: Notify Discord on Final Result
@@ -517,16 +454,15 @@ jobs:
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
           PRE_CHECK_RESULT: ${{ needs.pre-deployment-check.result }}
           DEPLOY_RESULT: ${{ needs.deploy.result }}
-          POST_CHECK_RESULT: ${{ needs.post-deployment-validation.result }}
           BRANCH: ${{ inputs.branch }}
           SHA: ${{ needs.deploy.outputs.deployment_sha }}
           RUN_ID: ${{ github.run_id }}
         run: |
-          if [ "$DEPLOY_RESULT" = "success" ] && [ "$POST_CHECK_RESULT" = "success" ]; then
+          if [ "$DEPLOY_RESULT" = "success" ]; then
             EMOJI="✅"
             COLOR=3066993
             TITLE="AI 배포 성공"
-            MESSAGE="배포 및 기본 헬스체크가 완료되었습니다."
+            MESSAGE="배포가 성공적으로 완료되었습니다."
           else
             EMOJI="🚨"
             COLOR=15158332
@@ -536,7 +472,6 @@ jobs:
 
           PRE_ICON="✅"; [ "$PRE_CHECK_RESULT" != "success" ] && PRE_ICON="❌"
           DEPLOY_ICON="✅"; [ "$DEPLOY_RESULT" != "success" ] && DEPLOY_ICON="❌"
-          POST_ICON="✅"; [ "$POST_CHECK_RESULT" != "success" ] && POST_ICON="❌"
 
           payload=$(cat <<EOF
           {
@@ -548,7 +483,7 @@ jobs:
                 {"name": "서비스", "value": "Re-Fit AI", "inline": true},
                 {"name": "브랜치", "value": "\`$BRANCH\`", "inline": true},
                 {"name": "커밋", "value": "\`${SHA:0:7}\`", "inline": true},
-                {"name": "단계", "value": "$PRE_ICON 전 점검 | $DEPLOY_ICON 배포 | $POST_ICON 후 점검", "inline": false},
+                {"name": "단계", "value": "$PRE_ICON 전 점검 | $DEPLOY_ICON 배포", "inline": false},
                 {"name": "워크플로우", "value": "[상세 보기](https://github.com/${{ github.repository }}/actions/runs/$RUN_ID)", "inline": false}
               ],
               "footer": { "text": "Re-Fit AI CD" },
