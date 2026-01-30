@@ -153,7 +153,9 @@ class LLMClient:
                     break
 
             if model != models_to_try[-1]:
-                logger.info(f"🔄 모델 {model}의 모든 시도 실패. 다음 Fallback 모델({models_to_try[models_to_try.index(model)+1]})로 전환합니다.")
+                logger.info(
+                    f"🔄 모델 {model}의 모든 시도 실패. 다음 Fallback 모델({models_to_try[models_to_try.index(model) + 1]})로 전환합니다."
+                )
 
         raise last_error or RuntimeError("모든 Vertex AI 모델 호출 및 재시도에 실패했습니다.")
 

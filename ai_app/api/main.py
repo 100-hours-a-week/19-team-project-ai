@@ -1,10 +1,9 @@
 import logging
 import sys
 
+from api.endpoints import health_router, jobs_router, reco_router, resumes_router
 from dotenv import load_dotenv
 from fastapi import FastAPI
-
-from api.endpoints import health_router, jobs_router, reco_router, resumes_router
 
 load_dotenv()
 
