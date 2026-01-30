@@ -31,10 +31,28 @@ class LLMClient:
     def _get_client(self) -> genai.Client:
         """Get or create the Gemini client (lazy initialization)."""
         if self._client is None:
-            api_key = os.getenv("GOOGLE_API_KEY")
-            if not api_key:
-                raise ValueError("GOOGLE_API_KEY environment variable is not set")
-            self._client = genai.Client(api_key=api_key)
+            # Vertex AI 설정 확인
+            project_id = os.getenv("GCP_PROJECT_ID")
+            location = os.getenv("GCP_LOCATION", "asia-northeast3")
+            credentials_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+
+            if project_id and credentials_path:
+                logger.info(f"Using Vertex AI (Project: {project_id}, Location: {location})")
+                self._client = genai.Client(
+                    vertexai=True,
+                    project=project_id,
+                    location=location,
+                )
+            else:
+                # 기존 API 키 방식
+                api_key = os.getenv("GOOGLE_API_KEY")
+                if not api_key:
+                    raise ValueError(
+                        "Neither Vertex AI (GCP_PROJECT_ID/GOOGLE_APPLICATION_CREDENTIALS) "
+                        "nor Gemini API Key (GOOGLE_API_KEY) is set."
+                    )
+                logger.info("Using Gemini API Key")
+                self._client = genai.Client(api_key=api_key)
         return self._client
 
     async def generate(
