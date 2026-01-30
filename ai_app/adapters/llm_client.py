@@ -119,10 +119,9 @@ class LLMClient:
 
                     # 429 Rate Limit 에러인 경우
                     if "429" in error_str or "RESOURCE_EXHAUSTED" in error_str:
-                        delay = self.base_delay * (2 ** attempt)
+                        delay = self.base_delay * (2**attempt)
                         logger.warning(
-                            f"Rate limit ({model}, 시도 {attempt + 1}/{self.max_retries}). "
-                            f"{delay}초 후 재시도..."
+                            f"Rate limit ({model}, 시도 {attempt + 1}/{self.max_retries}). {delay}초 후 재시도..."
                         )
                         await asyncio.sleep(delay)
                         continue
