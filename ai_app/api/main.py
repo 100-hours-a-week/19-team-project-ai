@@ -1,19 +1,8 @@
-import logging
-import sys
-
+from api.endpoints import health_router, jobs_router, reco_router, resumes_router
 from dotenv import load_dotenv
 from fastapi import FastAPI
 
-from api.endpoints import health_router, jobs_router, reco_router, resumes_router
-
 load_dotenv()
-
-# logging 설정: INFO 레벨 로그를 stdout으로 출력
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    stream=sys.stdout,
-)
 
 app = FastAPI(
     title="AI Resume & Mentoring Platform",
