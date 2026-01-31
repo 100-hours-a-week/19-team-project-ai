@@ -1,15 +1,8 @@
-import logging
-
 from api.endpoints import health_router, jobs_router, reco_router, resumes_router
 from dotenv import load_dotenv
 from fastapi import FastAPI
 
 load_dotenv()
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-)
 
 app = FastAPI(
     title="AI Resume & Mentoring Platform",
