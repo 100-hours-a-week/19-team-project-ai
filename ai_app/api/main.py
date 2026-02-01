@@ -13,6 +13,7 @@ app = FastAPI(
     version="0.1.0",
 )
 
+
 # Root health check for CD/monitoring
 @app.get("/health")
 async def root_health():
