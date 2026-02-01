@@ -1,8 +1,8 @@
-"""FastAPI Application Configuration with Router includes and Middleware."""
-
+from api.endpoints import health_router, jobs_router, reco_router, resumes_router
+from dotenv import load_dotenv
 from fastapi import FastAPI
 
-from api.endpoints import health_router
+load_dotenv()
 
 app = FastAPI(
     title="AI Resume & Mentoring Platform",
@@ -10,5 +10,15 @@ app = FastAPI(
     version="0.1.0",
 )
 
-# Include routers
-app.include_router(health_router.router, tags=["Health"])
+
+# Root health check for CD/monitoring
+@app.get("/health")
+async def root_health():
+    """Simple health check at root level for deployment monitoring"""
+    return {"status": "ok"}
+
+
+app.include_router(health_router.router, prefix="/api/ai", tags=["Health"])
+app.include_router(resumes_router.router, prefix="/api/ai")
+app.include_router(jobs_router.router, prefix="/api/ai")
+app.include_router(reco_router.router, prefix="/api/ai")

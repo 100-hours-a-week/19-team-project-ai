@@ -1,190 +1,463 @@
 name: Re-Fit AI CD
 
 on:
-  workflow_run:
-    workflows: ['Re-Fit AI CI']
-    types: [completed]
-    branches: [main]
   workflow_dispatch:
+    inputs:
+      run_id:
+        description: 'CI workflow run ID (자동 입력 또는 직접 입력)'
+        required: false
+        type: string
+      sha:
+        description: 'Commit SHA (자동 입력 또는 직접 입력)'
+        required: false
+        type: string
+      branch:
+        description: 'Branch name'
+        required: true
+        type: choice
+        default: 'develop'
+        options:
+          - develop
+          - main
+      use_latest_artifact:
+        description: 'run_id/sha를 입력하지 않으면 선택한 브랜치의 최신 아티팩트 사용'
+        required: true
+        type: boolean
+        default: true
 
 env:
   PYTHON_VERSION: '3.11'
-  SERVER_AI_DIR: '/home/ubuntu/refit/app/ai'
 
 jobs:
+  # ==========================================
+  # 1단계: 아티팩트 준비 및 배포
+  # ==========================================
   deploy:
-    # CI가 성공했을 때만 실행
-    if: |
-      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success') ||
-      github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    
+    environment: ${{ inputs.branch == 'main' && 'production' || 'development' }}
+    outputs:
+      deployment_success: ${{ steps.deploy.outputs.success }}
+      deployment_sha: ${{ steps.deploy-vars.outputs.sha }}
     steps:
-      # ===========================================
-      # 1. Artifact 다운로드
-      # ===========================================
+      - name: Find Latest Artifact (if needed)
+        if: inputs.use_latest_artifact == true && (inputs.run_id == '' || inputs.sha == '')
+        id: find-artifact
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.PAT }}
+          script: |
+            const branch = '${{ inputs.branch }}';
+            console.log(`Finding latest artifact for branch: ${branch}`);
+
+            const runs = await github.rest.actions.listWorkflowRuns({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'ci.yml',
+              branch: branch,
+              status: 'success',
+              per_page: 10
+            });
+
+            if (runs.data.workflow_runs.length === 0) {
+              core.setFailed(`No successful CI runs found for branch: ${branch}`);
+              return;
+            }
+
+            for (const run of runs.data.workflow_runs) {
+              const artifacts = await github.rest.actions.listWorkflowRunArtifacts({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                run_id: run.id
+              });
+
+              const buildArtifact = artifacts.data.artifacts.find(
+                a => a.name.startsWith('ai-wheel-')
+              );
+
+              if (buildArtifact) {
+                const sha = run.head_sha;
+                console.log(`Found artifact from run #${run.run_number}`);
+                console.log(`   Run ID: ${run.id}`);
+                console.log(`   SHA: ${sha}`);
+                console.log(`   Created: ${run.created_at}`);
+
+                core.setOutput('run_id', run.id.toString());
+                core.setOutput('sha', sha);
+                core.setOutput('run_number', run.run_number.toString());
+                return;
+              }
+            }
+
+            core.setFailed(`No artifacts found in recent CI runs for branch: ${branch}`);
+
+      - name: Set Deployment Variables
+        id: deploy-vars
+        run: |
+          if [ "${{ inputs.use_latest_artifact }}" == "true" ] && [ -z "${{ inputs.run_id }}" ]; then
+            echo "run_id=${{ steps.find-artifact.outputs.run_id }}" >> $GITHUB_OUTPUT
+            echo "sha=${{ steps.find-artifact.outputs.sha }}" >> $GITHUB_OUTPUT
+            echo "Using latest artifact from run #${{ steps.find-artifact.outputs.run_number }}"
+          else
+            echo "run_id=${{ inputs.run_id }}" >> $GITHUB_OUTPUT
+            echo "sha=${{ inputs.sha }}" >> $GITHUB_OUTPUT
+            echo "Using manually specified artifact"
+          fi
+
       - name: Download Wheel Package
         uses: actions/download-artifact@v4
         with:
-          name: ai-wheel-${{ github.event.workflow_run.head_sha || github.sha }}
+          name: ai-wheel-${{ steps.deploy-vars.outputs.sha }}
           path: build-output/dist
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          run-id: ${{ github.event.workflow_run.id }}
-      
+          github-token: ${{ secrets.PAT }}
+          run-id: ${{ steps.deploy-vars.outputs.run_id }}
+
       - name: Download Deployment Files
         uses: actions/download-artifact@v4
         with:
-          name: ai-deploy-files-${{ github.event.workflow_run.head_sha || github.sha }}
+          name: ai-deploy-files-${{ steps.deploy-vars.outputs.sha }}
           path: build-output
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          run-id: ${{ github.event.workflow_run.id }}
-      
-      # ===========================================
-      # 2. 다운로드 파일 검증
-      # ===========================================
+          github-token: ${{ secrets.PAT }}
+          run-id: ${{ steps.deploy-vars.outputs.run_id }}
+
       - name: Verify Downloaded Files
         run: |
           echo "=== Verifying downloaded files ==="
           ls -la build-output/
           
           if [ -d "build-output/dist" ] && [ -n "$(ls -A build-output/dist/*.whl 2>/dev/null)" ]; then
-            echo "Wheel package found"
+            echo "✅ Wheel package found"
             ls -lh build-output/dist/
           else
-            echo "Wheel package not found"
+            echo "❌ Wheel package not found"
+            exit 1
+          fi
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ap-northeast-2
+
+      - name: Upload Wheel Package to S3
+        id: s3_upload
+        run: |
+          set -euo pipefail
+          COMMIT_SHA=${{ steps.deploy-vars.outputs.sha }}
+          S3_KEY="artifacts/ai/${COMMIT_SHA}/$(basename build-output/dist/*.whl)"
+          
+          echo "Uploading wheel package to s3://${{ secrets.S3_ARTIFACTS_BUCKET }}/$S3_KEY"
+          aws s3 cp build-output/dist/*.whl s3://${{ secrets.S3_ARTIFACTS_BUCKET }}/$S3_KEY
+          
+          echo "s3_key=$S3_KEY" >> $GITHUB_OUTPUT
+
+      - name: Deploy via SSM
+        id: deploy
+        env:
+          SERVER_BASE_PATH: ${{ secrets.SERVER_BASE_PATH }}
+          EC2_INSTANCE_ID: ${{ secrets.EC2_INSTANCE_ID }}
+          HEALTH_CHECK_URL: ${{ secrets.HEALTH_CHECK_URL }}
+          S3_BUCKET: ${{ secrets.S3_ARTIFACTS_BUCKET }}
+          S3_KEY: ${{ steps.s3_upload.outputs.s3_key }}
+        run: |
+          set -euo pipefail
+          
+          AI_HEALTH_URL="${HEALTH_CHECK_URL%/health}/api/ai/health"
+          
+          BASE_PATH="$SERVER_BASE_PATH"
+          AI_DIR="${BASE_PATH}/app/ai"
+          AI_APP_DIR="${AI_DIR}/ai_app"
+          BACKUP_DIR="${BASE_PATH}/backups/ai"
+          TEMP_DIR="${AI_DIR}/deploy_temp"
+          PM2_CONFIG="${BASE_PATH}/infra/pm2/ecosystem.ai.config.js"
+          
+          DEPLOY_SCRIPT=$(cat <<'SCRIPT_END'
+          set -euo pipefail
+          BASE_PATH="$1"
+          AI_DIR="$2"
+          AI_APP_DIR="$3"
+          BACKUP_DIR="$4"
+          TEMP_DIR="$5"
+          PM2_CONFIG="$6"
+          S3_BUCKET="$7"
+          S3_KEY="$8"
+          HEALTH_CHECK_URL="$9"
+          
+          APP_NAME="ai-service"
+          TIMESTAMP=$(date +%Y%m%d%H%M%S)
+          
+          trap 'sudo -u ubuntu pm2 status || true; exit $?' ERR
+          
+          echo "============================================"
+          echo "Re-Fit AI 배포 시작: $(date)"
+          echo "============================================"
+          
+          mkdir -p $BACKUP_DIR $TEMP_DIR
+          
+          # S3에서 패키지 다운로드
+          echo "S3에서 패키지 다운로드 중..."
+          aws s3 cp s3://$S3_BUCKET/$S3_KEY $TEMP_DIR/ --region ap-northeast-2 || {
+            echo "에러: S3에서 패키지 다운로드 실패"
+            exit 1
+          }
+          
+          WHEEL_FILE=$(ls $TEMP_DIR/*.whl | head -1)
+          if [ ! -f "$WHEEL_FILE" ]; then
+            echo "에러: Wheel 패키지가 없습니다"
+            rm -rf $TEMP_DIR
             exit 1
           fi
           
-          if [ -f "build-output/ai_app/requirements.txt" ]; then
-            echo "requirements.txt found"
-          else
-            echo "requirements.txt not found"
+          # Wheel 파일 크기 검증
+          WHEEL_SIZE=$(stat -c%s "$WHEEL_FILE" 2>/dev/null || echo 0)
+          if [ "$WHEEL_SIZE" -lt 10000 ]; then
+            echo "에러: Wheel 파일 크기가 너무 작습니다 (${WHEEL_SIZE} bytes)"
+            rm -rf $TEMP_DIR
             exit 1
           fi
-      
-      # ===========================================
-      # 3. 서버로 파일 전송 (SCP)
-      # ===========================================
-      - name: Transfer Wheel to Server
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ secrets.HOST }}
-          username: ${{ secrets.USER }}
-          key: ${{ secrets.SSH_KEY }}
-          source: 'build-output/dist/*.whl'
-          target: '${{ env.SERVER_AI_DIR }}/deploy_temp'
-          strip_components: 2
-      
-      # ===========================================
-      # 4. 배포 실행 (SSH)
-      # ===========================================
-      - name: Execute Remote Deployment Script
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ secrets.HOST }}
-          username: ${{ secrets.USER }}
-          key: ${{ secrets.SSH_KEY }}
-          envs: SERVER_AI_DIR
-          script: |
-            set -e
+          echo "✅ Wheel 파일 크기: ${WHEEL_SIZE} bytes"
+          
+          # 기존 코드 백업
+          if [ -d "$AI_APP_DIR" ]; then
+            echo "기존 코드 백업 중..."
+            cp -r "$AI_APP_DIR" "$BACKUP_DIR/code_$TIMESTAMP"
+            sudo chown -R ubuntu:ubuntu "$BACKUP_DIR/code_$TIMESTAMP" 2>/dev/null || true
+            echo "✅ 백업 완료: $BACKUP_DIR/code_$TIMESTAMP"
+          fi
+          
+          # Wheel 파일 백업 (롤백용)
+          echo "Wheel 파일 백업 중..."
+          mkdir -p "$BACKUP_DIR/wheel_$TIMESTAMP"
+          cp "$WHEEL_FILE" "$BACKUP_DIR/wheel_$TIMESTAMP/"
+          sudo chown -R ubuntu:ubuntu "$BACKUP_DIR/wheel_$TIMESTAMP" 2>/dev/null || true
+          echo "✅ Wheel 백업 완료"
+          
+          # 새 패키지 설치
+          echo "새 패키지 설치 중..."
+          cd $AI_DIR
+          source venv/bin/activate
+          
+          pip install "$WHEEL_FILE" --force-reinstall --no-cache-dir > /tmp/pip_install.log 2>&1 && {
+            echo "✅ 패키지 설치 완료"
+            tail -20 /tmp/pip_install.log
+          } || {
+            echo "❌ 패키지 설치 실패"
+            tail -50 /tmp/pip_install.log
             
-            # --- 변수 설정 ---
-            AI_APP_DIR="$SERVER_AI_DIR/ai_app"
-            BACKUP_DIR="/home/ubuntu/refit/backups/ai"
-            LOG_DIR="/home/ubuntu/refit/logs/ai"
-            TEMP_DIR="$SERVER_AI_DIR/deploy_temp"
-            TIMESTAMP=$(date +%Y%m%d%H%M%S)
-            
-            echo "============================================"
-            echo "Re-Fit AI 배포 시작: $(date)"
-            echo "============================================"
-            
-            # --- 롤백 함수 ---
-            rollback() {
-              echo "!!! 배포 실패: 자동 롤백을 시작합니다 !!!"
-              if [ -d "$BACKUP_DIR/code_$TIMESTAMP" ]; then
-                rm -rf "$AI_APP_DIR"
-                cp -r "$BACKUP_DIR/code_$TIMESTAMP" "$AI_APP_DIR"
-                echo "코드 롤백 완료"
-              fi
-              pm2 reload ai-service --update-env
-              echo "배포 실패 - 이전 버전으로 복구되었습니다."
-              rm -rf $TEMP_DIR
-              exit 1
-            }
-            
-            # 1. 디렉토리 준비
-            mkdir -p $BACKUP_DIR $LOG_DIR
-            
-            # 2. 환경 변수 체크 (선택사항)
-            if [ ! -f "$SERVER_AI_DIR/.env" ]; then
-              echo "⚠️  .env 파일이 없습니다. (환경 변수 미사용 시 정상)"
-            else
-              echo "✅ .env 파일 확인됨"
+            # 롤백
+            if [ -d "$BACKUP_DIR/code_$TIMESTAMP" ]; then
+              rm -rf "$AI_APP_DIR"
+              cp -r "$BACKUP_DIR/code_$TIMESTAMP" "$AI_APP_DIR"
+              sudo chown -R ubuntu:ubuntu "$AI_APP_DIR" 2>/dev/null || true
             fi
-            
-            # 3. 전송된 파일 검증
-            if [ ! -f "$TEMP_DIR"/*.whl ]; then
-              echo "에러: Wheel 패키지가 전송되지 않았습니다."
-              rm -rf $TEMP_DIR
-              exit 1
-            fi
-            
-            # 4. 백업 (기존 ai_app)
-            if [ -d "$AI_APP_DIR" ]; then
-              echo "기존 코드 백업 중..."
-              cp -r "$AI_APP_DIR" "$BACKUP_DIR/code_$TIMESTAMP"
-              echo "백업 완료: $BACKUP_DIR/code_$TIMESTAMP"
-            fi
-            
-            # 5. 패키지 설치 및 업데이트
-            echo "새 패키지 설치 중..."
-            cd $SERVER_AI_DIR
-            source venv/bin/activate
-            
-            pip install "$TEMP_DIR"/*.whl --force-reinstall || rollback
-            
-            echo "패키지 설치 완료"
-            
-            # 6. 임시 디렉토리 정리
+            sudo lsof -ti:8000 | xargs -r sudo kill -9 2>/dev/null || true
+            sudo -u ubuntu pm2 restart ${APP_NAME} 2>/dev/null || true
             rm -rf $TEMP_DIR
-            
-            # 7. PM2 무중단 재시작
-            echo "AI 서비스 무중단 재시작 중..."
-            PM2_CONFIG="/home/ubuntu/refit/infra/pm2/ecosystem.ai.config.js"
-            
-            if pm2 describe ai-service > /dev/null 2>&1; then
-              echo "기존 프로세스 무중단 재시작 (Reload)..."
-              pm2 reload ai-service --update-env
-            else
-              echo "신규 프로세스 시작..."
-              pm2 start $PM2_CONFIG --env production
+            exit 1
+          }
+          
+          rm -rf $TEMP_DIR
+          sudo chown -R ubuntu:ubuntu "$AI_APP_DIR" 2>/dev/null || true
+          
+          # PM2 프로세스 정리
+          echo "AI 관련 PM2 프로세스 정리 중..."
+          sudo lsof -ti:8000 | xargs -r sudo kill -9 2>/dev/null || true
+          sudo -u ubuntu pm2 list | grep -E 'ai-service|ai-serv' | awk '{print $2}' | while read -r process_name; do
+            if [ -n "$process_name" ] && [ "$process_name" != "name" ]; then
+              sudo -u ubuntu pm2 stop "$process_name" 2>/dev/null || true
+              sudo -u ubuntu pm2 delete "$process_name" 2>/dev/null || true
             fi
+          done
+          sleep 1
+          
+          # PM2로 서비스 시작
+          echo "AI 서비스 시작 중..."
+          sudo -u ubuntu pm2 start $PM2_CONFIG --only ${APP_NAME} --env production || exit 1
+          
+          sleep 3
+          sudo -u ubuntu pm2 describe ${APP_NAME} > /dev/null || exit 1
+          
+          # 서비스 초기화 대기 (AI 모델 로딩 고려)
+          echo "서비스 초기화 대기 중... (30초)"
+          echo "AI 모델 로딩 중... (시간이 걸릴 수 있습니다)"
+          sleep 30
+          
+          # Caddy 리로드
+          systemctl is-active --quiet caddy && sudo systemctl reload caddy 2>/dev/null || true
+          sleep 2
+          
+          # 헬스체크 (최대 15회 재시도, 간격 증가)
+          echo "헬스체크 시작..."
+          HEALTH_OK=false
+          for i in {1..15}; do
+            HTTP_STATUS=$(timeout 10 curl -s -o /dev/null -w "%{http_code}" "$HEALTH_CHECK_URL" 2>/dev/null || echo "000")
+            if [ "$HTTP_STATUS" = "200" ]; then
+              echo "✅ 헬스체크 성공! (HTTP $HTTP_STATUS) - 시도 $i/15"
+              HEALTH_OK=true
+              break
+            fi
+            echo "⚠️  시도 $i/15: HTTP $HTTP_STATUS (AI 모델 로딩 중일 수 있음)"
             
-            # 8. 배포 검증 (헬스 체크 - 5회 재시도)
-            echo "배포 검증 중..."
-            for i in {1..5}; do
-              sleep 5
-              HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/health 2>/dev/null || echo "000")
-              
-              if [ "$HTTP_STATUS" = "200" ]; then
-                echo "배포 성공! (HTTP $HTTP_STATUS)"
-                
-                # PM2 상태 저장
-                pm2 save
-                
-                # 오래된 백업 삭제 (7일 이상)
-                find $BACKUP_DIR -name "code_*" -type d -mtime +7 -exec rm -rf {} + 2>/dev/null || true
-                
-                echo "============================================"
-                echo "Re-Fit AI 배포 완료: $(date)"
-                echo "============================================"
-                exit 0
-              fi
-              
-              echo "Health check 시도 중... ($i/5) - HTTP $HTTP_STATUS"
-            done
+            # 점진적 대기 시간 증가 (처음엔 짧게, 나중엔 길게)
+            if [ $i -le 5 ]; then
+              WAIT_TIME=5
+            elif [ $i -le 10 ]; then
+              WAIT_TIME=8
+            else
+              WAIT_TIME=10
+            fi
+            [ $i -lt 15 ] && sleep $WAIT_TIME
+          done
+          
+          if [ "$HEALTH_OK" = "true" ]; then
+            sudo -u ubuntu pm2 save 2>/dev/null || true
             
-            # 모든 재시도 실패 시 롤백
-            echo "⚠️  헬스 체크 실패 - 롤백을 시작합니다."
-            rollback
+            # 7일 이상 된 백업 정리
+            (find $BACKUP_DIR -name "code_*" -type d -mtime +7 -exec rm -rf {} + 2>/dev/null) &
+            (find $BACKUP_DIR -name "wheel_*" -type d -mtime +7 -exec rm -rf {} + 2>/dev/null) &
+            
+            echo ""
+            echo "============================================"
+            echo "Re-Fit AI 배포 완료: $(date)"
+            echo "============================================"
+            exit 0
+          fi
+          
+          # 헬스체크 실패 - 롤백
+          echo ""
+          echo "❌ 헬스체크 실패 - 롤백 시작"
+          echo "=== PM2 로그 (최근 30줄) ==="
+          sudo -u ubuntu pm2 logs ${APP_NAME} --lines 30 --nostream || true
+          
+          if [ -d "$BACKUP_DIR/code_$TIMESTAMP" ]; then
+            rm -rf "$AI_APP_DIR"
+            cp -r "$BACKUP_DIR/code_$TIMESTAMP" "$AI_APP_DIR"
+            sudo chown -R ubuntu:ubuntu "$AI_APP_DIR" 2>/dev/null || true
+            
+            sudo lsof -ti:8000 | xargs -r sudo kill -9 2>/dev/null || true
+            sudo -u ubuntu pm2 restart ${APP_NAME} 2>/dev/null || true
+            sleep 5
+            
+            HTTP_STATUS=$(timeout 10 curl -s -o /dev/null -w "%{http_code}" "$HEALTH_CHECK_URL" 2>/dev/null || echo "000")
+            if [ "$HTTP_STATUS" = "200" ]; then
+              echo "✅ 롤백 성공 - 이전 버전으로 복구됨"
+              sudo -u ubuntu pm2 save 2>/dev/null || true
+            else
+              echo "⚠️  롤백 후에도 헬스체크 실패 (HTTP $HTTP_STATUS)"
+            fi
+          fi
+          exit 1
+          SCRIPT_END
+          )
+          
+          # SSM 명령 실행
+          DEPLOY_SCRIPT_ENCODED=$(echo "$DEPLOY_SCRIPT" | base64 -w 0)
+          SSM_COMMAND="bash -c \"echo '$DEPLOY_SCRIPT_ENCODED' | base64 -d | bash -s -- '$BASE_PATH' '$AI_DIR' '$AI_APP_DIR' '$BACKUP_DIR' '$TEMP_DIR' '$PM2_CONFIG' '$S3_BUCKET' '$S3_KEY' '$AI_HEALTH_URL'\""
+          PARAMETERS_JSON=$(jq -n --arg cmd "$SSM_COMMAND" '{commands: [$cmd]}')
+          
+          COMMAND_ID=$(aws ssm send-command \
+            --instance-ids "$EC2_INSTANCE_ID" \
+            --document-name "AWS-RunShellScript" \
+            --parameters "$PARAMETERS_JSON" \
+            --timeout-seconds 1800 \
+            --region ap-northeast-2 \
+            --query 'Command.CommandId' \
+            --output text)
+          
+          [ -n "$COMMAND_ID" ] || exit 1
+          
+          echo "SSM Command ID: $COMMAND_ID"
+          
+          # SSM 명령 실행 상태 확인
+          for i in {1..60}; do
+            STATUS=$(aws ssm get-command-invocation \
+              --command-id "$COMMAND_ID" \
+              --instance-id "$EC2_INSTANCE_ID" \
+              --region ap-northeast-2 \
+              --query 'Status' \
+              --output text 2>/dev/null || echo "InProgress")
+            
+            if [ "$STATUS" = "Success" ]; then
+              aws ssm get-command-invocation \
+                --command-id "$COMMAND_ID" \
+                --instance-id "$EC2_INSTANCE_ID" \
+                --region ap-northeast-2 \
+                --query 'StandardOutputContent' \
+                --output text
+              echo "success=true" >> $GITHUB_OUTPUT
+              exit 0
+            elif [ "$STATUS" = "Failed" ] || [ "$STATUS" = "Cancelled" ] || [ "$STATUS" = "TimedOut" ]; then
+              echo "SSM Command failed with status: $STATUS"
+              echo "=== Standard Output ==="
+              aws ssm get-command-invocation \
+                --command-id "$COMMAND_ID" \
+                --instance-id "$EC2_INSTANCE_ID" \
+                --region ap-northeast-2 \
+                --query 'StandardOutputContent' \
+                --output text
+              echo "=== Standard Error ==="
+              aws ssm get-command-invocation \
+                --command-id "$COMMAND_ID" \
+                --instance-id "$EC2_INSTANCE_ID" \
+                --region ap-northeast-2 \
+                --query 'StandardErrorContent' \
+                --output text
+              echo "success=false" >> $GITHUB_OUTPUT
+              exit 1
+            fi
+            [ $i -eq 1 ] && echo "Waiting for SSM command to complete..."
+            [ $i -eq 30 ] && echo "Still waiting... (30/60 checks)"
+            sleep 5
+          done
+          
+          echo "SSM Command timeout after 60 checks"
+          echo "success=false" >> $GITHUB_OUTPUT
+          exit 1
+
+  # ==========================================
+  # 최종: 배포 결과 알림
+  # ==========================================
+  notify-result:
+    runs-on: ubuntu-latest
+    needs: [deploy]
+    if: always()
+    steps:
+      - name: Notify Discord on Final Result
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+          DEPLOY_RESULT: ${{ needs.deploy.result }}
+          BRANCH: ${{ inputs.branch }}
+          SHA: ${{ needs.deploy.outputs.deployment_sha }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          if [ "$DEPLOY_RESULT" = "success" ]; then
+            EMOJI="✅"
+            COLOR=3066993
+            TITLE="AI 배포 성공"
+            MESSAGE="배포가 성공적으로 완료되었습니다."
+          else
+            EMOJI="🚨"
+            COLOR=15158332
+            TITLE="AI 배포 실패"
+            MESSAGE="배포 과정에서 문제가 발생했습니다."
+          fi
+
+          payload=$(cat <<EOF
+          {
+            "embeds": [{
+              "title": "$EMOJI $TITLE",
+              "color": $COLOR,
+              "description": "$MESSAGE",
+              "fields": [
+                {"name": "서비스", "value": "Re-Fit AI", "inline": true},
+                {"name": "브랜치", "value": "\`$BRANCH\`", "inline": true},
+                {"name": "커밋", "value": "\`${SHA:0:7}\`", "inline": true},
+                {"name": "워크플로우", "value": "[상세 보기](https://github.com/${{ github.repository }}/actions/runs/$RUN_ID)", "inline": false}
+              ],
+              "footer": { "text": "Re-Fit AI CD" },
+              "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            }]
+          }
+          EOF
+          )
+          curl -H "Content-Type: application/json" -X POST -d "$payload" "$DISCORD_WEBHOOK"

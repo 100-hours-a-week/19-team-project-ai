@@ -1,0 +1,17 @@
+# Wheel 패키지에 포함할 추가 파일들
+# Python 코드 외에 설정 파일, 문서 등도 포함
+
+# 설정 파일
+include pyproject.toml
+include README.md
+
+# 의존성 관리 (팀원 참조용)
+include ai_app/requirements.txt
+
+# 제외할 파일들
+exclude .gitignore
+exclude .env
+exclude .env.*
+recursive-exclude tests *
+recursive-exclude .github *
+recursive-exclude scripts *
