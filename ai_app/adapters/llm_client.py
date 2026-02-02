@@ -25,8 +25,8 @@ class LLMClient:
     def __init__(self, model_name: str = "gemini-2.0-flash"):
         self.model_name = model_name
         self._client: genai.Client | None = None
-        self.max_retries = 5  # 재시도 횟수 상향
-        self.base_delay = 3  # 기본 대기 시간 상향 (초)
+        self.max_retries = 2  # 빠른 실패를 위해 축소 (5 → 2)
+        self.base_delay = 1  # 대기 시간 축소 (3 → 1초)
 
     def _get_client(self) -> genai.Client:
         """Get or create the Gemini client (lazy initialization)."""

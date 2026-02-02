@@ -41,6 +41,19 @@ async def parse_resume(
                 response = await client.get(request.file_url)
                 response.raise_for_status()
                 pdf_bytes = response.content
+
+                # 파일 크기 검증 (5MB 제한)
+                max_file_size = 5 * 1024 * 1024  # 5MB in bytes
+                if len(pdf_bytes) > max_file_size:
+                    raise HTTPException(
+                        status_code=400,
+                        detail={
+                            "code": ResponseCode.BAD_REQUEST.value,
+                            "data": {
+                                "message": f"파일 크기가 5MB를 초과합니다. (현재: {len(pdf_bytes) / (1024 * 1024):.2f}MB)"
+                            },
+                        },
+                    )
         except httpx.HTTPStatusError as e:
             raise HTTPException(
                 status_code=400,
