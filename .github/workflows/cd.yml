@@ -30,37 +30,10 @@ env:
 
 jobs:
   # ==========================================
-  # 1단계: 배포 전 기본 상태 확인
-  # ==========================================
-  pre-deployment-check:
-    runs-on: ubuntu-latest
-    environment: ${{ inputs.branch == 'main' && 'production' || 'development' }}
-    steps:
-      # 현재 서비스 상태 확인
-      - name: Check Current Service Health
-        continue-on-error: true
-        env:
-          HEALTH_CHECK_URL: ${{ secrets.HEALTH_CHECK_URL }}
-        run: |
-          echo "🏥 현재 서비스 상태 확인..."
-          
-          AI_HEALTH_URL="${HEALTH_CHECK_URL%/health}/api/ai/health"
-          
-          HTTP_STATUS=$(timeout 10 curl -s -o /dev/null -w "%{http_code}" "$AI_HEALTH_URL" 2>/dev/null || echo "000")
-          
-          if [ "$HTTP_STATUS" = "200" ]; then
-            echo "✅ 현재 서비스 정상 작동 중 (HTTP $HTTP_STATUS)"
-          else
-            echo "⚠️  현재 서비스 상태 불량 (HTTP $HTTP_STATUS)"
-            echo "   배포로 상황이 개선될 수 있습니다."
-          fi
-
-  # ==========================================
-  # 2단계: 아티팩트 준비 및 배포
+  # 1단계: 아티팩트 준비 및 배포
   # ==========================================
   deploy:
     runs-on: ubuntu-latest
-    needs: pre-deployment-check
     environment: ${{ inputs.branch == 'main' && 'production' || 'development' }}
     outputs:
       deployment_success: ${{ steps.deploy.outputs.success }}
@@ -446,13 +419,12 @@ jobs:
   # ==========================================
   notify-result:
     runs-on: ubuntu-latest
-    needs: [pre-deployment-check, deploy]
+    needs: [deploy]
     if: always()
     steps:
       - name: Notify Discord on Final Result
         env:
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
-          PRE_CHECK_RESULT: ${{ needs.pre-deployment-check.result }}
           DEPLOY_RESULT: ${{ needs.deploy.result }}
           BRANCH: ${{ inputs.branch }}
           SHA: ${{ needs.deploy.outputs.deployment_sha }}
@@ -470,9 +442,6 @@ jobs:
             MESSAGE="배포 과정에서 문제가 발생했습니다."
           fi
 
-          PRE_ICON="✅"; [ "$PRE_CHECK_RESULT" != "success" ] && PRE_ICON="❌"
-          DEPLOY_ICON="✅"; [ "$DEPLOY_RESULT" != "success" ] && DEPLOY_ICON="❌"
-
           payload=$(cat <<EOF
           {
             "embeds": [{
@@ -483,7 +452,6 @@ jobs:
                 {"name": "서비스", "value": "Re-Fit AI", "inline": true},
                 {"name": "브랜치", "value": "\`$BRANCH\`", "inline": true},
                 {"name": "커밋", "value": "\`${SHA:0:7}\`", "inline": true},
-                {"name": "단계", "value": "$PRE_ICON 전 점검 | $DEPLOY_ICON 배포", "inline": false},
                 {"name": "워크플로우", "value": "[상세 보기](https://github.com/${{ github.repository }}/actions/runs/$RUN_ID)", "inline": false}
               ],
               "footer": { "text": "Re-Fit AI CD" },
