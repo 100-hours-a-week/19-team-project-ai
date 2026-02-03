@@ -153,19 +153,19 @@ class KcBERTPIIMasker(PIIMasker):
 
         try:
             import os
+
             # Meta tensor 비활성화 (transformers 4.39+ 호환)
             os.environ["TRANSFORMERS_NO_ADVISORY_WARNINGS"] = "1"
-            
-            import torch
-            from transformers import pipeline, AutoModelForTokenClassification, AutoTokenizer
+
+            from transformers import pipeline
 
             # seungkukim/korean-pii-masking 모델 로드
             model_name = "seungkukim/korean-pii-masking"
-            
+
             # 직접 pipeline으로 로드 (가장 단순한 방법)
             self.pipeline = pipeline(
-                "token-classification", 
-                model=model_name, 
+                "token-classification",
+                model=model_name,
                 tokenizer=model_name,
                 aggregation_strategy="simple",
                 device="cpu",
@@ -257,6 +257,7 @@ def _get_lock():
     global _masker_lock
     if _masker_lock is None:
         import threading
+
         _masker_lock = threading.Lock()
     return _masker_lock
 
@@ -264,11 +265,11 @@ def _get_lock():
 def get_pii_masker() -> PIIMasker:
     """PIIMasker 싱글톤 반환 (기본값: KcBERT) - Thread-safe"""
     global _masker
-    
+
     # 이미 초기화된 경우 바로 반환 (락 없이)
     if _masker is not None:
         return _masker
-    
+
     # 락을 사용하여 한 번만 초기화
     with _get_lock():
         # Double-checked locking
