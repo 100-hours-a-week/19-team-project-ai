@@ -152,14 +152,26 @@ class KcBERTPIIMasker(PIIMasker):
         self.available = False
 
         try:
+            import os
+
+            # Meta tensor 비활성화 (transformers 4.39+ 호환)
+            os.environ["TRANSFORMERS_NO_ADVISORY_WARNINGS"] = "1"
+
             from transformers import pipeline
 
             # seungkukim/korean-pii-masking 모델 로드
+            model_name = "seungkukim/korean-pii-masking"
+
+            # 직접 pipeline으로 로드 (가장 단순한 방법)
             self.pipeline = pipeline(
-                "token-classification", model="seungkukim/korean-pii-masking", aggregation_strategy="simple"
+                "token-classification",
+                model=model_name,
+                tokenizer=model_name,
+                aggregation_strategy="simple",
+                device="cpu",
             )
             self.available = True
-            print("✅ KcBERT 기반 PII 모델 로드 완료")
+            print("✅ KcBERT 기반 PII 모델 로드 완료 (CPU)")
 
         except Exception as e:
             print(f"⚠️  KcBERT 모델 로드 실패: {e}")
@@ -237,15 +249,34 @@ class KcBERTPIIMasker(PIIMasker):
 
 # 싱글톤 인스턴스
 _masker: PIIMasker | None = None
+_masker_lock = None
+
+
+def _get_lock():
+    """Lock 싱글톤 (모듈 로드 시점에 생성)"""
+    global _masker_lock
+    if _masker_lock is None:
+        import threading
+
+        _masker_lock = threading.Lock()
+    return _masker_lock
 
 
 def get_pii_masker() -> PIIMasker:
-    """PIIMasker 싱글톤 반환 (기본값: KcBERT)"""
+    """PIIMasker 싱글톤 반환 (기본값: KcBERT) - Thread-safe"""
     global _masker
-    if _masker is None:
-        _masker = KcBERTPIIMasker()
-        if not getattr(_masker, "available", False):
-            logger.warning("KcBERT 사용 불가, Presidio로 대체합니다.")
-            _masker = PresidioPIIMasker()
+
+    # 이미 초기화된 경우 바로 반환 (락 없이)
+    if _masker is not None:
+        return _masker
+
+    # 락을 사용하여 한 번만 초기화
+    with _get_lock():
+        # Double-checked locking
+        if _masker is None:
+            _masker = KcBERTPIIMasker()
+            if not getattr(_masker, "available", False):
+                logger.warning("KcBERT 사용 불가, Presidio로 대체합니다.")
+                _masker = PresidioPIIMasker()
 
     return _masker

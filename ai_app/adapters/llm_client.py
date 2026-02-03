@@ -22,7 +22,7 @@ FALLBACK_MODELS = [
 class LLMClient:
     """Wrapper for LLM API calls (Gemini) with retry and fallback."""
 
-    def __init__(self, model_name: str = "gemini-2.0-flash"):
+    def __init__(self, model_name: str = "gemini-2.0-flash-lite"):
         self.model_name = model_name
         self._client: genai.Client | None = None
         self.max_retries = 2  # 빠른 실패를 위해 축소 (5 → 2)

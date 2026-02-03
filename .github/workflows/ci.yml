@@ -98,7 +98,7 @@ jobs:
         if: (steps.sync-deps.outputs.changed == 'true' || steps.ruff-fix.outputs.changed == 'true') && github.event_name == 'pull_request'
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
-          commit_message: "chore: Auto-sync dependencies and lint fixes [skip ci]"
+          commit_message: "chore: Auto-sync dependencies and lint fixes"
           file_pattern: "."
           branch: ${{ github.event.pull_request.head.ref }}
           commit_user_name: "github-actions[bot]"
