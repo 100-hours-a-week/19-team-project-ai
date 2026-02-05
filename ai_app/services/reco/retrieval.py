@@ -167,7 +167,7 @@ class MentorRetriever:
 
         where_clause = " AND ".join(where_clauses)
 
-        return f"""
+        return f"""  # nosec B608 - 내부 변수만 사용, 사용자 입력 없음
             SELECT
                 u.id as user_id,
                 u.nickname,
@@ -422,7 +422,7 @@ class MentorRetriever:
         if only_verified:
             where_clause += " AND ep.verified = true"
 
-        query = text(f"""
+        query = text(f"""  # nosec B608 - where_clause는 내부 생성값
             SELECT
                 u.id as user_id,
                 u.nickname,
