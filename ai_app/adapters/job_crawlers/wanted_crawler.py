@@ -1,7 +1,5 @@
 """원티드 채용공고 크롤러"""
 
-import re
-
 from schemas.jobs import CompanyInfo, JobPosting, JobSource
 
 from adapters.job_crawlers.base_crawler import BaseJobCrawler, CrawlerConfig
@@ -123,23 +121,3 @@ class WantedCrawler(BaseJobCrawler):
             deadline=deadline,
             url=f"{self.config.base_url}/wd/{source_id}",
         )
-
-    def _parse_text_to_list(self, text: str) -> list[str]:
-        """텍스트를 리스트로 파싱"""
-        if not text:
-            return []
-
-        items = []
-        lines = text.split("\n")
-
-        for line in lines:
-            line = line.strip()
-            if not line or len(line) < 2:
-                continue
-
-            # - 또는 • 등 제거
-            line = re.sub(r"^[-•·\*]\s*", "", line)
-            if line:
-                items.append(line)
-
-        return items

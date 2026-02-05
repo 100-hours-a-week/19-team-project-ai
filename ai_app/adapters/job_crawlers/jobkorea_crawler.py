@@ -1,7 +1,5 @@
 """잡코리아 채용공고 크롤러"""
 
-import re
-
 from bs4 import BeautifulSoup
 from schemas.jobs import CompanyInfo, JobPosting, JobSource, SalaryInfo
 
@@ -89,8 +87,9 @@ class JobKoreaCrawler(BaseJobCrawler):
 
             if header and content:
                 header_text = header.get_text(strip=True).lower()
-                items = self._extract_list_items(content)
+                items = self._extract_list_items_from_element(content)
 
+                # BaseJobCrawler의 공통 메서드 사용
                 if any(kw in header_text for kw in ["주요업무", "담당업무", "업무내용"]):
                     responsibilities = items
                 elif any(kw in header_text for kw in ["자격요건", "필수", "지원자격"]):
@@ -102,23 +101,28 @@ class JobKoreaCrawler(BaseJobCrawler):
                 elif any(kw in header_text for kw in ["전형절차", "채용절차"]):
                     hiring_process = items
 
-        # 상세 정보가 분리되지 않은 경우
+        # 상세 정보가 분리되지 않은 경우 - BaseJobCrawler의 공통 메서드 사용
         if not responsibilities and not qualifications:
             detail_content = soup.select_one(".artReadJobSum, .rcrtJobSum")
             if detail_content:
                 full_text = detail_content.get_text("\n", strip=True)
                 parsed = self._parse_job_content_text(full_text)
-                responsibilities = parsed.get("responsibilities", [])
-                qualifications = parsed.get("qualifications", [])
-                preferred_qualifications = parsed.get("preferred", [])
-                benefits = parsed.get("benefits", [])
-                hiring_process = parsed.get("process", [])
+                resp = parsed.get("responsibilities")
+                responsibilities = resp if isinstance(resp, list) else []
+                qual = parsed.get("qualifications")
+                qualifications = qual if isinstance(qual, list) else []
+                pref = parsed.get("preferred")
+                preferred_qualifications = pref if isinstance(pref, list) else []
+                ben = parsed.get("benefits")
+                benefits = ben if isinstance(ben, list) else []
+                proc = parsed.get("process")
+                hiring_process = proc if isinstance(proc, list) else []
 
         # 복리후생 별도 영역
         if not benefits:
             welfare_section = soup.select_one(".welfareWrap")
             if welfare_section:
-                benefits = self._extract_list_items(welfare_section)
+                benefits = self._extract_list_items_from_element(welfare_section)
 
         # 직무 카테고리
         job_categories = []
@@ -148,67 +152,3 @@ class JobKoreaCrawler(BaseJobCrawler):
             url=url,
         )
 
-    def _extract_list_items(self, element) -> list[str]:
-        """HTML 요소에서 리스트 아이템 추출"""
-        items = []
-
-        li_items = element.select("li")
-        if li_items:
-            for li in li_items:
-                text = li.get_text(strip=True)
-                if text and len(text) > 1:
-                    items.append(text)
-            return items
-
-        text = element.get_text("\n", strip=True)
-        lines = [line.strip() for line in text.split("\n") if line.strip()]
-
-        for line in lines:
-            line = re.sub(r"^[-•·]\s*", "", line)
-            if line and len(line) > 1:
-                items.append(line)
-
-        return items
-
-    def _parse_job_content_text(self, text: str) -> dict[str, list[str]]:
-        """전체 텍스트에서 섹션별로 파싱"""
-        result = {
-            "responsibilities": [],
-            "qualifications": [],
-            "preferred": [],
-            "benefits": [],
-            "process": [],
-        }
-
-        current_section = None
-        lines = text.split("\n")
-
-        for line in lines:
-            line = line.strip()
-            if not line:
-                continue
-
-            line_lower = line.lower()
-
-            if any(kw in line_lower for kw in ["주요업무", "담당업무", "업무내용"]):
-                current_section = "responsibilities"
-                continue
-            elif any(kw in line_lower for kw in ["자격요건", "필수요건", "지원자격"]):
-                current_section = "qualifications"
-                continue
-            elif any(kw in line_lower for kw in ["우대사항", "우대조건"]):
-                current_section = "preferred"
-                continue
-            elif any(kw in line_lower for kw in ["복리후생", "복지", "혜택"]):
-                current_section = "benefits"
-                continue
-            elif any(kw in line_lower for kw in ["전형절차", "채용절차"]):
-                current_section = "process"
-                continue
-
-            if current_section and len(line) > 2:
-                clean_line = re.sub(r"^[-•·]\s*", "", line)
-                if clean_line:
-                    result[current_section].append(clean_line)
-
-        return result
