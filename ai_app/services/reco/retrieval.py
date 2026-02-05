@@ -134,70 +134,62 @@ class MentorRetriever:
 
     # ========== 헬퍼 메서드 ==========
 
-    def _build_mentor_candidates_query(
-        self,
-        only_verified: bool = False,
-        exclude_user_id: int | None = None,
-        include_jobs: bool = True,
-    ) -> str:
-        """멘토 후보 조회 SQL 쿼리 생성
+    # 멘토 후보 조회 쿼리 (고정 문자열 - SQL injection 방지)
+    _MENTOR_CANDIDATES_QUERY = """
+        SELECT
+            u.id as user_id,
+            u.nickname,
+            u.introduction,
+            ep.company_name,
+            ep.verified,
+            ep.rating_avg,
+            ep.rating_count,
+            ep.responded_request_count,
+            ep.accepted_request_count,
+            ep.rejected_request_count,
+            ep.last_active_at,
+            1 - (ep.embedding <=> CAST(:query_embedding AS vector)) as embedding_similarity,
+            ARRAY_AGG(DISTINCT s.name) FILTER (WHERE s.name IS NOT NULL) as skills,
+            ARRAY_AGG(DISTINCT j.name) FILTER (WHERE j.name IS NOT NULL) as jobs
+        FROM expert_profiles ep
+        JOIN users u ON ep.user_id = u.id
+        LEFT JOIN user_skills us ON u.id = us.user_id
+        LEFT JOIN skills s ON us.skill_id = s.id
+        LEFT JOIN user_jobs uj ON u.id = uj.user_id
+        LEFT JOIN jobs j ON uj.job_id = j.id
+        WHERE ep.embedding IS NOT NULL
+          AND ep.user_id != :user_id
+          AND (:only_verified = false OR ep.verified = true)
+        GROUP BY u.id, u.nickname, u.introduction,
+                 ep.company_name, ep.verified, ep.rating_avg, ep.rating_count,
+                 ep.responded_request_count, ep.accepted_request_count,
+                 ep.rejected_request_count, ep.last_active_at, ep.embedding
+        ORDER BY ep.embedding <=> CAST(:query_embedding AS vector)
+        LIMIT :candidate_limit
+    """
 
-        Args:
-            only_verified: 인증된 멘토만 조회
-            exclude_user_id: 제외할 사용자 ID
-            include_jobs: 직무 정보 포함 여부
-
-        Returns:
-            SQL 쿼리 문자열
-        """
-        jobs_select = "ARRAY_AGG(DISTINCT j.name) FILTER (WHERE j.name IS NOT NULL) as jobs," if include_jobs else ""
-        jobs_join = (
-            """
-            LEFT JOIN user_jobs uj ON u.id = uj.user_id
-            LEFT JOIN jobs j ON uj.job_id = j.id"""
-            if include_jobs
-            else ""
-        )
-
-        where_clauses = ["ep.embedding IS NOT NULL"]
-        if exclude_user_id is not None:
-            where_clauses.append("ep.user_id != :user_id")
-        if only_verified:
-            where_clauses.append("ep.verified = true")
-
-        where_clause = " AND ".join(where_clauses)
-
-        query_str = f"""  # nosec B608
-            SELECT
-                u.id as user_id,
-                u.nickname,
-                u.introduction,
-                ep.company_name,
-                ep.verified,
-                ep.rating_avg,
-                ep.rating_count,
-                ep.responded_request_count,
-                ep.accepted_request_count,
-                ep.rejected_request_count,
-                ep.last_active_at,
-                1 - (ep.embedding <=> CAST(:query_embedding AS vector)) as embedding_similarity,
-                ARRAY_AGG(DISTINCT s.name) FILTER (WHERE s.name IS NOT NULL) as skills,
-                {jobs_select}
-            FROM expert_profiles ep
-            JOIN users u ON ep.user_id = u.id
-            LEFT JOIN user_skills us ON u.id = us.user_id
-            LEFT JOIN skills s ON us.skill_id = s.id
-            {jobs_join}
-            WHERE {where_clause}
-            GROUP BY u.id, u.nickname, u.introduction,
-                     ep.company_name, ep.verified, ep.rating_avg, ep.rating_count,
-                     ep.responded_request_count, ep.accepted_request_count,
-                     ep.rejected_request_count, ep.last_active_at, ep.embedding
-            ORDER BY ep.embedding <=> CAST(:query_embedding AS vector)
-            LIMIT :candidate_limit
-        """
-        # jobs가 없을 때 콤마 제거
-        return query_str.replace("jobs,\n            FROM", "jobs\n            FROM")
+    # 텍스트 검색 쿼리 (고정 문자열)
+    _SEARCH_BY_TEXT_QUERY = """
+        SELECT
+            u.id as user_id,
+            u.nickname,
+            u.introduction,
+            ep.company_name,
+            ep.verified,
+            ep.rating_avg,
+            1 - (ep.embedding <=> CAST(:query_embedding AS vector)) as similarity,
+            ARRAY_AGG(DISTINCT s.name) FILTER (WHERE s.name IS NOT NULL) as skills
+        FROM expert_profiles ep
+        JOIN users u ON ep.user_id = u.id
+        LEFT JOIN user_skills us ON u.id = us.user_id
+        LEFT JOIN skills s ON us.skill_id = s.id
+        WHERE ep.embedding IS NOT NULL
+          AND (:only_verified = false OR ep.verified = true)
+        GROUP BY u.id, u.nickname, u.introduction,
+                 ep.company_name, ep.verified, ep.rating_avg, ep.embedding
+        ORDER BY ep.embedding <=> CAST(:query_embedding AS vector)
+        LIMIT :top_k
+    """
 
     def _row_to_candidate(
         self,
@@ -364,19 +356,15 @@ class MentorRetriever:
         user_embedding = self.embedder.embed_text(profile_text)
         embedding_list = user_embedding.tolist()
 
-        # 후보 멘토 조회
+        # 후보 멘토 조회 (고정 쿼리 + 바인딩 파라미터)
         candidate_limit = max(top_k * 10, 100)
-        query_str = self._build_mentor_candidates_query(
-            only_verified=only_verified,
-            exclude_user_id=user_id,
-            include_jobs=True,
-        )
 
         result = self.conn.execute(
-            text(query_str),
+            text(self._MENTOR_CANDIDATES_QUERY),
             {
                 "query_embedding": str(embedding_list),
                 "user_id": user_id,
+                "only_verified": only_verified,
                 "candidate_limit": candidate_limit,
             },
         )
@@ -419,35 +407,13 @@ class MentorRetriever:
         query_embedding = self.embedder.embed_text(query_text)
         embedding_list = query_embedding.tolist()
 
-        where_clause = "ep.embedding IS NOT NULL"
-        if only_verified:
-            where_clause += " AND ep.verified = true"
-
-        query_str = f"""  # nosec B608
-            SELECT
-                u.id as user_id,
-                u.nickname,
-                u.introduction,
-                ep.company_name,
-                ep.verified,
-                ep.rating_avg,
-                1 - (ep.embedding <=> CAST(:query_embedding AS vector)) as similarity,
-                ARRAY_AGG(DISTINCT s.name) FILTER (WHERE s.name IS NOT NULL) as skills
-            FROM expert_profiles ep
-            JOIN users u ON ep.user_id = u.id
-            LEFT JOIN user_skills us ON u.id = us.user_id
-            LEFT JOIN skills s ON us.skill_id = s.id
-            WHERE {where_clause}
-            GROUP BY u.id, u.nickname, u.introduction,
-                     ep.company_name, ep.verified, ep.rating_avg, ep.embedding
-            ORDER BY ep.embedding <=> CAST(:query_embedding AS vector)
-            LIMIT :top_k
-        """
-        query = text(query_str)
-
         result = self.conn.execute(
-            query,
-            {"query_embedding": str(embedding_list), "top_k": top_k},
+            text(self._SEARCH_BY_TEXT_QUERY),
+            {
+                "query_embedding": str(embedding_list),
+                "only_verified": only_verified,
+                "top_k": top_k,
+            },
         )
 
         return [
