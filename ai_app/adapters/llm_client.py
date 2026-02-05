@@ -12,6 +12,9 @@ from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
+# Fallback 모델 (rate limit 시 시도)
+FALLBACK_MODELS = ["gemini-2.0-flash-lite"]
+
 
 class LLMClient:
     """Wrapper for LLM API calls (Gemini) with retry."""
@@ -80,7 +83,7 @@ class LLMClient:
         response_schema: type[BaseModel] | None = None,
         temperature: float = 0.1,
     ) -> dict[str, Any]:
-        """Generate structured JSON output with retry."""
+        """Generate structured JSON output with retry and fallback."""
         client = self._get_client()
 
         config = types.GenerateContentConfig(
@@ -92,47 +95,56 @@ class LLMClient:
         if response_schema:
             config.response_schema = response_schema
 
+        # 현재 모델 + fallback 모델 리스트
+        models_to_try = [self.model_name] + [m for m in FALLBACK_MODELS if m != self.model_name]
         last_error = None
 
-        for attempt in range(self.max_retries):
-            try:
-                response = await client.aio.models.generate_content(
-                    model=self.model_name,
-                    contents=prompt,
-                    config=config,
-                )
-
-                text = response.text.strip()
-                # 마크다운 코드 블록 제거 로직
-                if text.startswith("```"):
-                    lines = text.split("\n")
-                    if lines[0].startswith("```"):
-                        lines = lines[1:]
-                    if lines and lines[-1].strip() == "```":
-                        lines = lines[:-1]
-                    text = "\n".join(lines)
-
-                return json.loads(text)
-
-            except Exception as e:
-                last_error = e
-                error_str = str(e).upper()
-
-                # 429(할당량 초과) 또는 503(서버 과부하) 에러 처리
-                if any(code in error_str for code in ["429", "RESOURCE_EXHAUSTED", "503", "OVERLOADED"]):
-                    wait_time = self.base_delay * (2**attempt)
-                    logger.warning(
-                        f"⚠️ 할당량 초과 또는 서버 과부하 (시도 {attempt + 1}/{self.max_retries}). "
-                        f"{wait_time}초 후 다시 시도합니다... 에러 메시지: {e}"
+        for model in models_to_try:
+            for attempt in range(self.max_retries):
+                try:
+                    response = await client.aio.models.generate_content(
+                        model=model,
+                        contents=prompt,
+                        config=config,
                     )
-                    await asyncio.sleep(wait_time)
-                    continue
 
-                # 그 외의 에러는 즉시 실패
-                logger.error(f"❌ LLM 호출 중 에러 발생: {e}")
-                raise
+                    if model != self.model_name:
+                        logger.info(f"✅ Fallback 모델 사용 성공: {model}")
 
-        raise last_error or RuntimeError("LLM 호출 재시도에 실패했습니다.")
+                    text = response.text.strip()
+                    # 마크다운 코드 블록 제거 로직
+                    if text.startswith("```"):
+                        lines = text.split("\n")
+                        if lines[0].startswith("```"):
+                            lines = lines[1:]
+                        if lines and lines[-1].strip() == "```":
+                            lines = lines[:-1]
+                        text = "\n".join(lines)
+
+                    return json.loads(text)
+
+                except Exception as e:
+                    last_error = e
+                    error_str = str(e).upper()
+
+                    # 429(할당량 초과) 또는 503(서버 과부하) 에러 처리
+                    if any(code in error_str for code in ["429", "RESOURCE_EXHAUSTED", "503", "OVERLOADED"]):
+                        wait_time = self.base_delay * (2**attempt)
+                        logger.warning(
+                            f"⚠️ 할당량 초과 또는 서버 과부하 ({model}, 시도 {attempt + 1}/{self.max_retries}). "
+                            f"{wait_time}초 후 다시 시도합니다..."
+                        )
+                        await asyncio.sleep(wait_time)
+                        continue
+
+                    # 그 외의 에러는 다음 모델로 시도
+                    logger.warning(f"⚠️ {model} 호출 실패: {e}")
+                    break
+
+            if model != models_to_try[-1]:
+                logger.info(f"🔄 다음 Fallback 모델로 전환: {models_to_try[models_to_try.index(model) + 1]}")
+
+        raise last_error or RuntimeError("모든 모델 호출에 실패했습니다.")
 
 
 # Singleton instance
