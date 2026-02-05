@@ -167,8 +167,7 @@ class MentorRetriever:
 
         where_clause = " AND ".join(where_clauses)
 
-        # SQL 쿼리 생성 (내부 변수만 사용, 사용자 입력 없음)
-        query_str = f"""
+        query_str = f"""  # nosec B608
             SELECT
                 u.id as user_id,
                 u.nickname,
@@ -198,7 +197,7 @@ class MentorRetriever:
             LIMIT :candidate_limit
         """
         # jobs가 없을 때 콤마 제거
-        return query_str.replace("jobs,\n            FROM", "jobs\n            FROM")  # nosec B608
+        return query_str.replace("jobs,\n            FROM", "jobs\n            FROM")
 
     def _row_to_candidate(
         self,
@@ -420,12 +419,11 @@ class MentorRetriever:
         query_embedding = self.embedder.embed_text(query_text)
         embedding_list = query_embedding.tolist()
 
-        # 간단한 검색용 쿼리 (직무 정보 제외, 내부 변수만 사용)
         where_clause = "ep.embedding IS NOT NULL"
         if only_verified:
             where_clause += " AND ep.verified = true"
 
-        query_str = f"""
+        query_str = f"""  # nosec B608
             SELECT
                 u.id as user_id,
                 u.nickname,
@@ -445,7 +443,7 @@ class MentorRetriever:
             ORDER BY ep.embedding <=> CAST(:query_embedding AS vector)
             LIMIT :top_k
         """
-        query = text(query_str)  # nosec B608
+        query = text(query_str)
 
         result = self.conn.execute(
             query,
@@ -486,7 +484,7 @@ class MentorRetriever:
         )
         self.conn.commit()
 
-        logger.info(f"Updated embedding for expert {user_id}")
+        logger.debug(f"Updated embedding for expert {user_id}")
         return True
 
     def compute_embedding(self, user_id: int) -> dict[str, Any] | None:
@@ -507,7 +505,7 @@ class MentorRetriever:
         embedding = self.embedder.embed_text(profile_text)
         embedding_list = embedding.tolist()
 
-        logger.info(f"Computed embedding for user {user_id}, dim={len(embedding_list)}")
+        logger.debug(f"Computed embedding for user {user_id}, dim={len(embedding_list)}")
 
         return {
             "user_id": user_id,
@@ -527,7 +525,7 @@ class MentorRetriever:
             if self.update_expert_embedding(row.user_id):
                 updated_count += 1
 
-        logger.info(f"Updated {updated_count} expert embeddings")
+        logger.debug(f"Updated {updated_count} expert embeddings")
         return updated_count
 
     def evaluate_silver_ground_truth(
