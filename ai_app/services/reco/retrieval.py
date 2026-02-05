@@ -167,7 +167,8 @@ class MentorRetriever:
 
         where_clause = " AND ".join(where_clauses)
 
-        return f"""  # nosec B608 - 내부 변수만 사용, 사용자 입력 없음
+        # SQL 쿼리 생성 (내부 변수만 사용, 사용자 입력 없음)
+        query_str = f"""
             SELECT
                 u.id as user_id,
                 u.nickname,
@@ -195,7 +196,9 @@ class MentorRetriever:
                      ep.rejected_request_count, ep.last_active_at, ep.embedding
             ORDER BY ep.embedding <=> CAST(:query_embedding AS vector)
             LIMIT :candidate_limit
-        """.replace("jobs,\n            FROM", "jobs\n            FROM")  # jobs가 없을 때 콤마 제거
+        """
+        # jobs가 없을 때 콤마 제거
+        return query_str.replace("jobs,\n            FROM", "jobs\n            FROM")  # nosec B608
 
     def _row_to_candidate(
         self,
@@ -417,12 +420,12 @@ class MentorRetriever:
         query_embedding = self.embedder.embed_text(query_text)
         embedding_list = query_embedding.tolist()
 
-        # 간단한 검색용 쿼리 (직무 정보 제외)
+        # 간단한 검색용 쿼리 (직무 정보 제외, 내부 변수만 사용)
         where_clause = "ep.embedding IS NOT NULL"
         if only_verified:
             where_clause += " AND ep.verified = true"
 
-        query = text(f"""  # nosec B608 - where_clause는 내부 생성값
+        query_str = f"""
             SELECT
                 u.id as user_id,
                 u.nickname,
@@ -441,7 +444,8 @@ class MentorRetriever:
                      ep.company_name, ep.verified, ep.rating_avg, ep.embedding
             ORDER BY ep.embedding <=> CAST(:query_embedding AS vector)
             LIMIT :top_k
-        """)
+        """
+        query = text(query_str)  # nosec B608
 
         result = self.conn.execute(
             query,
