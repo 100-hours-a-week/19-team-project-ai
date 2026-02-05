@@ -60,8 +60,8 @@ class FieldExtractor:
                 system_instruction=system_prompt,
                 temperature=0.1,
             )
-            logger.info(f"LLM 응답 타입: {type(raw_response)}")
-            logger.info(f"LLM 응답 키: {raw_response.keys() if isinstance(raw_response, dict) else 'N/A'}")
+            logger.debug(f"LLM 응답 타입: {type(raw_response)}")
+            logger.debug(f"LLM 응답 키: {raw_response.keys() if isinstance(raw_response, dict) else 'N/A'}")
         except Exception as e:
             logger.error(f"LLM 호출 에러: {e}")
             raise

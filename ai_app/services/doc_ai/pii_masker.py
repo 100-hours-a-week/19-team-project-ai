@@ -134,7 +134,7 @@ class PresidioPIIMasker(PIIMasker):
                 logger.warning(f"Presidio 분석 스킵: {presidio_error}")
 
             processing_time = time.time() - start_time
-            logger.info(f"PII 마스킹 완료 ({self.name}): {len(entities)}개 엔티티 발견")
+            logger.debug(f"PII 마스킹 완료 ({self.name}): {len(entities)}개 엔티티 발견")
 
             return MaskingResult(
                 masked_text=masked_text, entities=entities, processing_time=processing_time, method_name=self.name
