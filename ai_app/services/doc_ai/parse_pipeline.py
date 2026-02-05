@@ -105,16 +105,18 @@ class ParsePipeline:
                     needs_ocr=True,
                 )
 
-            # 3단계: LLM을 통한 필드 추출
+            # 3단계: PII 마스킹 (개인정보 보호)
+            if not extract_pii:
+                masked_doc = self.pii_masker.mask(parsed_doc.full_text)
+                # parsed_doc의 텍스트를 마스킹된 버전으로 대체
+                parsed_doc.full_text = masked_doc.masked_text
+
+            # 4단계: LLM을 통한 필드 추출
             extracted_fields, raw_response = await self.field_extractor.extract(
                 parsed_doc,
                 include_layout=True,
             )
             model_used = "gemini-2.5-flash-lite"
-
-            # 4단계: PII 마스킹 (extract_pii가 False인 경우)
-            if not extract_pii:
-                extracted_fields = self._mask_pii(extracted_fields)
 
             # 신뢰도 점수 계산
             confidence_score = self._calculate_confidence(extracted_fields)
