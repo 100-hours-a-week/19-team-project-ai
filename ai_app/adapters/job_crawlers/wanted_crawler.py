@@ -1,8 +1,13 @@
 """원티드 채용공고 크롤러"""
 
+import json
+import logging
+
 from schemas.jobs import CompanyInfo, JobPosting, JobSource
 
 from adapters.job_crawlers.base_crawler import BaseJobCrawler, CrawlerConfig
+
+logger = logging.getLogger(__name__)
 
 
 class WantedCrawler(BaseJobCrawler):
@@ -32,13 +37,21 @@ class WantedCrawler(BaseJobCrawler):
         if not response:
             return None
 
-        import json
-
         try:
             data = json.loads(response)
-            job = data.get("job", {})
-            return self._parse_job_detail(job, source_id) if job else None
-        except Exception:
+        except json.JSONDecodeError as e:
+            logger.warning(f"Failed to parse JSON for job {source_id}: {e}")
+            return None
+
+        job = data.get("job", {})
+        if not job:
+            logger.debug(f"No job data found for {source_id}")
+            return None
+
+        try:
+            return self._parse_job_detail(job, source_id)
+        except (KeyError, TypeError) as e:
+            logger.warning(f"Failed to parse job detail for {source_id}: {e}")
             return None
 
     def _parse_job_detail(self, job: dict, source_id: str) -> JobPosting | None:
