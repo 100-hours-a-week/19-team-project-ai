@@ -12,6 +12,7 @@ from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
+
 class LLMClient:
     """Wrapper for LLM API calls (Gemini) with retry."""
 
