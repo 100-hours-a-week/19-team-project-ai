@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 class LLMClient:
     """Wrapper for LLM API calls (Gemini) with retry."""
 
-    def __init__(self, model_name: str = "gemini-3.0-flash-lite"):
+    def __init__(self, model_name: str = "gemini-2.5-flash-lite"):
         self.model_name = model_name
         self._client: genai.Client | None = None
         self.max_retries = 2  # 빠른 실패를 위해 축소 (5 → 2)
