@@ -151,9 +151,13 @@ class MentorRetriever:
             SQL 쿼리 문자열
         """
         jobs_select = "ARRAY_AGG(DISTINCT j.name) FILTER (WHERE j.name IS NOT NULL) as jobs," if include_jobs else ""
-        jobs_join = """
+        jobs_join = (
+            """
             LEFT JOIN user_jobs uj ON u.id = uj.user_id
-            LEFT JOIN jobs j ON uj.job_id = j.id""" if include_jobs else ""
+            LEFT JOIN jobs j ON uj.job_id = j.id"""
+            if include_jobs
+            else ""
+        )
 
         where_clauses = ["ep.embedding IS NOT NULL"]
         if exclude_user_id is not None:
@@ -376,10 +380,7 @@ class MentorRetriever:
         )
 
         # 후보 데이터 변환
-        all_candidates = [
-            self._row_to_candidate(row, user_skills, user_jobs)
-            for row in result
-        ]
+        all_candidates = [self._row_to_candidate(row, user_skills, user_jobs) for row in result]
 
         # 필터링 및 Top-K 선택
         top_candidates = self._filter_candidates(all_candidates, top_k)

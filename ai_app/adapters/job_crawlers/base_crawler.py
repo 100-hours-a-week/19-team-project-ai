@@ -14,10 +14,27 @@ if TYPE_CHECKING:
     from bs4 import Tag
 
 # 한국 지역명 상수
-KOREAN_REGIONS = frozenset({
-    "서울", "경기", "부산", "대구", "인천", "광주", "대전", "울산",
-    "세종", "강원", "충북", "충남", "전북", "전남", "경북", "경남", "제주",
-})
+KOREAN_REGIONS = frozenset(
+    {
+        "서울",
+        "경기",
+        "부산",
+        "대구",
+        "인천",
+        "광주",
+        "대전",
+        "울산",
+        "세종",
+        "강원",
+        "충북",
+        "충남",
+        "전북",
+        "전남",
+        "경북",
+        "경남",
+        "제주",
+    }
+)
 
 # 섹션 키워드 매핑
 SECTION_KEYWORDS = {
@@ -233,9 +250,7 @@ class BaseJobCrawler(ABC):
 
         return result
 
-    def _parse_deadline_location_line(
-        self, line: str, result: dict[str, list[str] | dict[str, str]]
-    ) -> None:
+    def _parse_deadline_location_line(self, line: str, result: dict[str, list[str] | dict[str, str]]) -> None:
         """마감일/근무지 라인 파싱
 
         Args:

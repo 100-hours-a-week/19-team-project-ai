@@ -153,4 +153,3 @@ class SaraminCrawler(BaseJobCrawler):
             deadline=deadline,
             url=url,
         )
-

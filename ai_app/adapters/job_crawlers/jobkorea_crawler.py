@@ -151,4 +151,3 @@ class JobKoreaCrawler(BaseJobCrawler):
             deadline=deadline,
             url=url,
         )
-
