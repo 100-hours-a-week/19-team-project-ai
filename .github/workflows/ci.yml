@@ -12,15 +12,15 @@ on:
     # 수동 실행 시 작업을 선택할 수 있는 디스패처 구성
     inputs:
       job_to_run:
-        description: '실행할 작업을 선택하세요 (all, lint-and-test, integration, release)'
+        description: 'Which job to run'
         required: true
         type: choice
-        default: 'all'
         options:
-          - all
           - lint-and-test
           - integration
-          - release
+          - release-dev
+          - release-prod
+          - all
 
 permissions:
   contents: write  # git-auto-commit-action이 파일을 커밋하고 푸시할 수 있도록 허용
@@ -133,13 +133,6 @@ jobs:
           export PYTHONPATH=$PYTHONPATH:$(pwd)/${{ env.WORKING_DIRECTORY }}
           timeout 10s python -c "from api.main import app; print('Application loaded successfully')" || true
 
-  # 2. 통합 검증 단계 (Integration Tests)
-      # [Build Check] 머지 전 빌드 가능 여부 확인 단계 추가
-      - name: Build Check
-        run: python -m build --wheel
-        env:
-          NODE_ENV: production
-
   # ===========================================
   # 2. 통합 검증 단계 (Integration Tests)
   # ===========================================
@@ -179,12 +172,89 @@ jobs:
           fi
 
   # ===========================================
-  # 3. 릴리즈 확정 단계 (Production Build + Artifact Upload)
+  # 3. 개발 환경 릴리즈 (develop 브랜치 - Docker 기반)
   # ===========================================
-  release:
+  release-dev:
+    needs: [integration]
+    if: |
+      always() &&
+      needs.integration.result != 'failure' &&
+      (
+        (github.event_name == 'push' && github.ref == 'refs/heads/develop') ||
+        (github.event_name == 'workflow_dispatch' && (github.event.inputs.job_to_run == 'release-dev' || github.event.inputs.job_to_run == 'all'))
+      )
+    runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ steps.meta.outputs.image_tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ap-northeast-2
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Generate Image Metadata
+        id: meta
+        run: |
+          SHA_SHORT="${GITHUB_SHA::7}"
+          IMAGE_TAG="develop-${SHA_SHORT}"
+          FULL_IMAGE="${{ steps.login-ecr.outputs.registry }}/${{ secrets.ECR_REPOSITORY_AI }}:${IMAGE_TAG}"
+          LATEST_IMAGE="${{ steps.login-ecr.outputs.registry }}/${{ secrets.ECR_REPOSITORY_AI }}:develop-latest"
+
+          echo "image_tag=${IMAGE_TAG}" >> $GITHUB_OUTPUT
+          echo "full_image=${FULL_IMAGE}" >> $GITHUB_OUTPUT
+          echo "latest_image=${LATEST_IMAGE}" >> $GITHUB_OUTPUT
+          echo "sha_short=${SHA_SHORT}" >> $GITHUB_OUTPUT
+          echo "🐳 Docker Image: ${FULL_IMAGE}"
+
+      - name: Build and Push Docker Image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ steps.meta.outputs.full_image }}
+            ${{ steps.meta.outputs.latest_image }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          platforms: linux/arm64
+
+      - name: Trigger CD-Dev Workflow
+        if: success()
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.PAT }}
+          script: |
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'cd-dev.yml',
+              ref: 'develop',
+              inputs: {
+                image_tag: '${{ steps.meta.outputs.image_tag }}',
+                sha: '${{ github.sha }}',
+                run_id: '${{ github.run_id }}'
+              }
+            });
+            console.log('✅ CD-Dev workflow triggered successfully');
+
+  # ===========================================
+  # 4. 프로덕션 릴리즈 (main 브랜치 - Artifact 기반)
+  # ===========================================
+  release-prod:
     if: |
       (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
-      (github.event_name == 'workflow_dispatch' && (github.event.inputs.job_to_run == 'release' || github.event.inputs.job_to_run == 'all'))
+      (github.event_name == 'workflow_dispatch' && (github.event.inputs.job_to_run == 'release-prod' || github.event.inputs.job_to_run == 'all'))
     runs-on: ubuntu-latest
     
     steps:
@@ -279,8 +349,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         continue-on-error: true
       
-      # Trigger CD Workflow
-      - name: Trigger CD Workflow
+      - name: Trigger CD-Prod Workflow
         if: success()
         uses: actions/github-script@v7
         with:
@@ -289,12 +358,12 @@ jobs:
             await github.rest.actions.createWorkflowDispatch({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              workflow_id: 'cd.yml',
-              ref: context.ref,
+              workflow_id: 'cd-prod.yml',
+              ref: 'main',
               inputs: {
                 run_id: '${{ github.run_id }}',
                 sha: '${{ github.sha }}',
-                branch: '${{ github.ref_name }}'
+                branch: 'main'
               }
             });
-            console.log('CD workflow triggered successfully');
+            console.log('✅ CD-Prod workflow triggered successfully');
