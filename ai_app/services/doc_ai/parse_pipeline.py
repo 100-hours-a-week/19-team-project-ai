@@ -105,16 +105,18 @@ class ParsePipeline:
                     needs_ocr=True,
                 )
 
-            # 3단계: LLM을 통한 필드 추출
+            # 3단계: PII 마스킹 (개인정보 보호)
+            if not extract_pii:
+                masked_doc = self.pii_masker.mask(parsed_doc.full_text)
+                # parsed_doc의 텍스트를 마스킹된 버전으로 대체
+                parsed_doc.full_text = masked_doc.masked_text
+
+            # 4단계: LLM을 통한 필드 추출
             extracted_fields, raw_response = await self.field_extractor.extract(
                 parsed_doc,
                 include_layout=True,
             )
             model_used = "gemini-2.5-flash-lite"
-
-            # 4단계: PII 마스킹 (extract_pii가 False인 경우)
-            if not extract_pii:
-                extracted_fields = self._mask_pii(extracted_fields)
 
             # 신뢰도 점수 계산
             confidence_score = self._calculate_confidence(extracted_fields)
@@ -165,13 +167,13 @@ class ParsePipeline:
         try:
             # 1단계: 바이트에서 PDF 파싱 (텍스트 추출)
             parsed_doc = self.pdf_parser.parse_bytes(pdf_bytes)
-            logger.info("=" * 60)
-            logger.info("1단계 PDF 파싱 완료 (텍스트 추출)")
-            logger.info(f"  - 페이지 수: {parsed_doc.total_pages}")
-            logger.info(f"  - 텍스트 기반 PDF: {parsed_doc.is_text_pdf}")
-            logger.info(f"  - 추출된 텍스트 길이: {len(parsed_doc.full_text)} 글자")
+            logger.debug("=" * 60)
+            logger.debug("1단계 PDF 파싱 완료 (텍스트 추출)")
+            logger.debug(f"  - 페이지 수: {parsed_doc.total_pages}")
+            logger.debug(f"  - 텍스트 기반 PDF: {parsed_doc.is_text_pdf}")
+            logger.debug(f"  - 추출된 텍스트 길이: {len(parsed_doc.full_text)} 글자")
             text_preview = parsed_doc.full_text[:200] if len(parsed_doc.full_text) > 200 else parsed_doc.full_text
-            logger.info(f"  - 텍스트 미리보기: {text_preview}...")
+            logger.debug(f"  - 텍스트 미리보기: {text_preview}...")
 
             # OCR 필요 여부 확인
             if not parsed_doc.is_text_pdf:
@@ -189,23 +191,23 @@ class ParsePipeline:
                 )
 
             # 2단계: Presidio PII 마스킹 (LLM 호출 전)
-            logger.info("-" * 60)
-            logger.info("2단계 Presidio PII 마스킹")
+            logger.debug("-" * 60)
+            logger.debug("2단계 Presidio PII 마스킹")
             if not extract_pii:
                 masking_result = self.pii_masker.mask_text(parsed_doc.full_text)
                 masked_text = masking_result.masked_text
-                logger.info(f"  - 발견된 PII 개수: {len(masking_result.entities)}개")
+                logger.debug(f"  - 발견된 PII 개수: {len(masking_result.entities)}개")
                 for entity in masking_result.entities:
-                    logger.info(f"    • {entity.entity_type}: {entity.masked_text}")
+                    logger.debug(f"    • {entity.entity_type}: {entity.masked_text}")
                 masked_preview = masked_text[:200] if len(masked_text) > 200 else masked_text
-                logger.info(f"  - 마스킹된 텍스트 미리보기: {masked_preview}...")
+                logger.debug(f"  - 마스킹된 텍스트 미리보기: {masked_preview}...")
             else:
                 masked_text = parsed_doc.full_text
-                logger.info("  - PII 마스킹 스킵 (extract_pii=True)")
+                logger.debug("  - PII 마스킹 스킵 (extract_pii=True)")
 
             # 3단계: LLM을 통한 필드 추출 (마스킹된 텍스트 사용)
-            logger.info("-" * 60)
-            logger.info("3단계 LLM 필드 추출 시작...")
+            logger.debug("-" * 60)
+            logger.debug("3단계 LLM 필드 추출 시작...")
 
             # 마스킹된 텍스트로 임시 ParsedDocument 생성
             from services.doc_ai.pdf_parser import ParsedDocument
@@ -223,23 +225,23 @@ class ParsePipeline:
                 include_layout=True,
             )
             model_used = "gemini-2.5-flash-lite"
-            logger.info("3단계 LLM 필드 추출 완료")
-            logger.info(f"  - 사용 모델: {model_used}")
-            logger.info(f"  - 제목: {extracted_fields.title}")
-            logger.info(f"  - 학력 수: {len(extracted_fields.education)}개")
-            logger.info(f"  - 경력 수: {len(extracted_fields.work_experience)}개")
-            logger.info(f"  - 프로젝트 수: {len(extracted_fields.projects)}개")
-            logger.info(f"  - 자격증 수: {len(extracted_fields.certifications)}개")
-            logger.info(f"  - 수상 내역 수: {len(extracted_fields.awards)}개")
+            logger.debug("3단계 LLM 필드 추출 완료")
+            logger.debug(f"  - 사용 모델: {model_used}")
+            logger.debug(f"  - 제목: {extracted_fields.title}")
+            logger.debug(f"  - 학력 수: {len(extracted_fields.education)}개")
+            logger.debug(f"  - 경력 수: {len(extracted_fields.work_experience)}개")
+            logger.debug(f"  - 프로젝트 수: {len(extracted_fields.projects)}개")
+            logger.debug(f"  - 자격증 수: {len(extracted_fields.certifications)}개")
+            logger.debug(f"  - 수상 내역 수: {len(extracted_fields.awards)}개")
 
             # 4단계: 스키마 정규화 및 신뢰도 계산
-            logger.info("-" * 60)
+            logger.debug("-" * 60)
             confidence_score = self._calculate_confidence(extracted_fields)
             processing_time = int((time.time() - start_time) * 1000)
-            logger.info("4단계 스키마 정규화 완료")
-            logger.info(f"  - 신뢰도 점수: {confidence_score}")
-            logger.info(f"  - 총 처리 시간: {processing_time}ms")
-            logger.info("=" * 60)
+            logger.debug("4단계 스키마 정규화 완료")
+            logger.debug(f"  - 신뢰도 점수: {confidence_score}")
+            logger.debug(f"  - 총 처리 시간: {processing_time}ms")
+            logger.debug("=" * 60)
 
             return ParseResult(
                 success=True,
