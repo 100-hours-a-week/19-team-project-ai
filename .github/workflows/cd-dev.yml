@@ -106,7 +106,7 @@ jobs:
 
             # 환경변수 파일 주입
             echo "$AI_ENV_FILE_DEV" > .env.ai
-            chmod 600 .env.ai
+            chmod 644 .env.ai
             echo "🔐 .env.ai 주입 완료"
 
             # 이미지 태그를 환경 변수로 설정하여 compose pull & up
