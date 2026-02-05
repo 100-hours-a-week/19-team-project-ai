@@ -110,7 +110,7 @@ class ParsePipeline:
                 parsed_doc,
                 include_layout=True,
             )
-            model_used = "gemini-2.0-flash"
+            model_used = "gemini-3.0-flash-lite"
 
             # 4단계: PII 마스킹 (extract_pii가 False인 경우)
             if not extract_pii:
@@ -222,7 +222,7 @@ class ParsePipeline:
                 masked_doc,
                 include_layout=True,
             )
-            model_used = "gemini-2.0-flash"
+            model_used = "gemini-3.0-flash-lite"
             logger.info("3단계 LLM 필드 추출 완료")
             logger.info(f"  - 사용 모델: {model_used}")
             logger.info(f"  - 제목: {extracted_fields.title}")
