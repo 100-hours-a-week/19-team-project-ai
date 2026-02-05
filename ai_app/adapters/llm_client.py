@@ -12,17 +12,14 @@ from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
-# Fallback 모델 순서 (rate limit 시 순차 시도)
-FALLBACK_MODELS = [
-    "gemini-2.0-flash",
-    "gemini-2.0-flash-lite",  # 더 가벼운 모델
-]
+# Fallback 모델 (rate limit 시 시도)
+FALLBACK_MODELS = ["gemini-2.0-flash-lite"]
 
 
 class LLMClient:
-    """Wrapper for LLM API calls (Gemini) with retry and fallback."""
+    """Wrapper for LLM API calls (Gemini) with retry."""
 
-    def __init__(self, model_name: str = "gemini-2.0-flash-lite"):
+    def __init__(self, model_name: str = "gemini-2.5-flash-lite"):
         self.model_name = model_name
         self._client: genai.Client | None = None
         self.max_retries = 2  # 빠른 실패를 위해 축소 (5 → 2)
@@ -86,7 +83,7 @@ class LLMClient:
         response_schema: type[BaseModel] | None = None,
         temperature: float = 0.1,
     ) -> dict[str, Any]:
-        """Generate structured JSON output with robust retry for Vertex AI quotas."""
+        """Generate structured JSON output with retry and fallback."""
         client = self._get_client()
 
         config = types.GenerateContentConfig(
@@ -98,19 +95,13 @@ class LLMClient:
         if response_schema:
             config.response_schema = response_schema
 
-        # 현재 모델부터 시작하는 fallback 리스트 생성 (2.0 모델군 위주)
-        models_to_try = [self.model_name]
-        for model in FALLBACK_MODELS:
-            if model not in models_to_try:
-                models_to_try.append(model)
-
+        # 현재 모델 + fallback 모델 리스트
+        models_to_try = [self.model_name] + [m for m in FALLBACK_MODELS if m != self.model_name]
         last_error = None
 
         for model in models_to_try:
             for attempt in range(self.max_retries):
                 try:
-                    # Vertex AI는 'gemini-2.0-flash' 같은 짧은 이름 대신
-                    # 'publishers/google/models/...' 형식을 기대할 수 있으나 SDK가 변환함
                     response = await client.aio.models.generate_content(
                         model=model,
                         contents=prompt,
@@ -138,26 +129,22 @@ class LLMClient:
 
                     # 429(할당량 초과) 또는 503(서버 과부하) 에러 처리
                     if any(code in error_str for code in ["429", "RESOURCE_EXHAUSTED", "503", "OVERLOADED"]):
-                        # 지수 백오프: 2^attempt * base_delay (예: 3, 6, 12, 24, 48초)
-                        # Vertex AI의 경우 1.5-flash는 넉넉하지만 2.0은 Tier에 따라 좁을 수 있음
                         wait_time = self.base_delay * (2**attempt)
                         logger.warning(
                             f"⚠️ 할당량 초과 또는 서버 과부하 ({model}, 시도 {attempt + 1}/{self.max_retries}). "
-                            f"{wait_time}초 후 다시 시도합니다... 에러 메시지: {e}"
+                            f"{wait_time}초 후 다시 시도합니다..."
                         )
                         await asyncio.sleep(wait_time)
                         continue
 
-                    # 그 외의 에러 (예: 404 모델 없음)는 즉시 다음 모델로 전환
-                    logger.error(f"❌ 모델 {model} 호출 중 예상치 못한 에러 발생: {e}")
+                    # 그 외의 에러는 다음 모델로 시도
+                    logger.warning(f"⚠️ {model} 호출 실패: {e}")
                     break
 
             if model != models_to_try[-1]:
-                logger.info(
-                    f"🔄 모델 {model}의 모든 시도 실패. 다음 Fallback 모델({models_to_try[models_to_try.index(model) + 1]})로 전환합니다."
-                )
+                logger.info(f"🔄 다음 Fallback 모델로 전환: {models_to_try[models_to_try.index(model) + 1]}")
 
-        raise last_error or RuntimeError("모든 Vertex AI 모델 호출 및 재시도에 실패했습니다.")
+        raise last_error or RuntimeError("모든 모델 호출에 실패했습니다.")
 
 
 # Singleton instance
