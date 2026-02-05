@@ -3,6 +3,7 @@ import re
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from functools import lru_cache
 
 from presidio_analyzer import AnalyzerEngine
 from presidio_anonymizer import AnonymizerEngine
@@ -247,36 +248,14 @@ class KcBERTPIIMasker(PIIMasker):
         )
 
 
-# 싱글톤 인스턴스
-_masker: PIIMasker | None = None
-_masker_lock = None
-
-
-def _get_lock():
-    """Lock 싱글톤 (모듈 로드 시점에 생성)"""
-    global _masker_lock
-    if _masker_lock is None:
-        import threading
-
-        _masker_lock = threading.Lock()
-    return _masker_lock
-
-
+@lru_cache(maxsize=1)
 def get_pii_masker() -> PIIMasker:
-    """PIIMasker 싱글톤 반환 (기본값: KcBERT) - Thread-safe"""
-    global _masker
+    """PIIMasker 싱글톤 (thread-safe via lru_cache)
 
-    # 이미 초기화된 경우 바로 반환 (락 없이)
-    if _masker is not None:
-        return _masker
-
-    # 락을 사용하여 한 번만 초기화
-    with _get_lock():
-        # Double-checked locking
-        if _masker is None:
-            _masker = KcBERTPIIMasker()
-            if not getattr(_masker, "available", False):
-                logger.warning("KcBERT 사용 불가, Presidio로 대체합니다.")
-                _masker = PresidioPIIMasker()
-
-    return _masker
+    기본값: KcBERT, 사용 불가 시 Presidio로 fallback
+    """
+    masker = KcBERTPIIMasker()
+    if not getattr(masker, "available", False):
+        logger.warning("KcBERT 사용 불가, Presidio로 대체합니다.")
+        return PresidioPIIMasker()
+    return masker

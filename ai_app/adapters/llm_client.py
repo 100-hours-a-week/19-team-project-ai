@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import os
+from functools import lru_cache
 from typing import Any
 
 from google import genai
@@ -147,13 +148,7 @@ class LLMClient:
         raise last_error or RuntimeError("모든 모델 호출에 실패했습니다.")
 
 
-# Singleton instance
-_llm_client: LLMClient | None = None
-
-
+@lru_cache(maxsize=1)
 def get_llm_client() -> LLMClient:
-    """Get or create LLM client singleton."""
-    global _llm_client
-    if _llm_client is None:
-        _llm_client = LLMClient()
-    return _llm_client
+    """Get or create LLM client singleton (thread-safe via lru_cache)."""
+    return LLMClient()
