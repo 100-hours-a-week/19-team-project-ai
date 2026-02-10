@@ -14,6 +14,14 @@ class JobSource(str, Enum):
     WANTED = "wanted"
 
 
+class JobType(str, Enum):
+    """고용 형태"""
+
+    FULL_TIME = "정규직"
+    CONTRACT = "계약직"
+    ANY = "상관없음"
+
+
 # ============== 채용공고 모델 ==============
 
 
@@ -43,7 +51,7 @@ class JobPosting(BaseModel):
     company: CompanyInfo = Field(..., description="회사 정보")
 
     # 직무 정보
-    job_type: str | None = Field(default=None, description="고용형태 (정규직, 계약직 등)")
+    job_type: JobType | None = Field(default=None, description="고용형태 (정규직, 계약직, 상관없음)")
     job_category: list[str] = Field(default_factory=list, description="직무 카테고리")
     experience_level: str | None = Field(default=None, description="경력 요건")
     education: str | None = Field(default=None, description="학력 요건")
@@ -56,7 +64,7 @@ class JobPosting(BaseModel):
     responsibilities: list[str] = Field(default_factory=list, description="주요 업무")
     qualifications: list[str] = Field(default_factory=list, description="자격 요건")
     preferred_qualifications: list[str] = Field(default_factory=list, description="우대사항")
-    benefits: list[str] = Field(default_factory=list, description="복지 및 혜택")
+    benefits: list[str] = Field(default_factory=list, description="근무 조건 및 복지/혜택")
     hiring_process: list[str] = Field(default_factory=list, description="채용절차")
     etc: list[str] = Field(default_factory=list, description="기타 정보")
 

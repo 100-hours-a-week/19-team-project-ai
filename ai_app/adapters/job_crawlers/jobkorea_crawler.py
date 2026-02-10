@@ -1,7 +1,7 @@
 """잡코리아 채용공고 크롤러"""
 
 from bs4 import BeautifulSoup
-from schemas.jobs import CompanyInfo, JobPosting, JobSource, SalaryInfo
+from schemas.jobs import CompanyInfo, JobPosting, JobSource, JobType, SalaryInfo
 
 from adapters.job_crawlers.base_crawler import BaseJobCrawler, CrawlerConfig
 
@@ -45,7 +45,7 @@ class JobKoreaCrawler(BaseJobCrawler):
         location = ""
         experience = ""
         education = ""
-        job_type = ""
+        job_type_text = ""
         deadline = ""
         salary_text = ""
 
@@ -63,13 +63,16 @@ class JobKoreaCrawler(BaseJobCrawler):
                 elif "학력" in th_text:
                     education = td_text
                 elif "고용형태" in th_text or "근무형태" in th_text:
-                    job_type = td_text
+                    job_type_text = td_text
                 elif "급여" in th_text:
                     salary_text = td_text
                 elif "근무지역" in th_text or "지역" in th_text:
                     location = td_text
                 elif "마감" in th_text:
                     deadline = td_text
+
+        # 고용형태 정규화
+        job_type = _normalize_job_type(job_type_text)
 
         # 상세 정보 섹션 파싱
         responsibilities = []
@@ -151,3 +154,16 @@ class JobKoreaCrawler(BaseJobCrawler):
             deadline=deadline,
             url=url,
         )
+
+
+def _normalize_job_type(text: str) -> JobType | None:
+    """고용형태 텍스트를 JobType enum으로 정규화"""
+    if not text:
+        return None
+    if "정규직" in text and "계약직" in text:
+        return JobType.ANY
+    if "정규직" in text:
+        return JobType.FULL_TIME
+    if "계약직" in text:
+        return JobType.CONTRACT
+    return None

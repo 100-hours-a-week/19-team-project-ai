@@ -3,7 +3,7 @@
 import json
 import logging
 
-from schemas.jobs import CompanyInfo, JobPosting, JobSource
+from schemas.jobs import CompanyInfo, JobPosting, JobSource, JobType
 
 from adapters.job_crawlers.base_crawler import BaseJobCrawler, CrawlerConfig
 
@@ -85,7 +85,8 @@ class WantedCrawler(BaseJobCrawler):
         detail = job.get("detail", {})
 
         # 고용 형태 (정규직, 인턴, 계약직 등)
-        job_type = job.get("job_type", {}).get("name", "") or job.get("position_type", "") or "정규직"
+        job_type_text = job.get("job_type", {}).get("name", "") or job.get("position_type", "") or ""
+        job_type = _normalize_job_type(job_type_text)
 
         # 주요업무 (main_tasks)
         main_tasks = detail.get("main_tasks", "")
@@ -134,3 +135,18 @@ class WantedCrawler(BaseJobCrawler):
             deadline=deadline,
             url=f"{self.config.base_url}/wd/{source_id}",
         )
+
+
+def _normalize_job_type(text: str) -> JobType | None:
+    """고용형태 텍스트를 JobType enum으로 정규화"""
+    if not text:
+        return None
+    if "정규직" in text and "계약직" in text:
+        return JobType.ANY
+    if "정규직" in text:
+        return JobType.FULL_TIME
+    if "계약직" in text:
+        return JobType.CONTRACT
+    if "인턴" in text:
+        return JobType.CONTRACT
+    return None
