@@ -41,12 +41,16 @@ SECTION_KEYWORDS = {
     "responsibilities": ["주요업무", "담당업무", "업무내용"],
     "qualifications": ["자격요건", "필수요건", "지원자격"],
     "preferred": ["우대사항", "우대조건"],
+    "tech_stack": [
+        "사용하는 기술", "사용 기술", "기술 스택", "기술스택",
+        "tech stack", "개발 환경", "개발환경", "기술 환경",
+    ],
     "benefits": [
         "복리후생", "복지", "혜택", "복지 및 혜택",
         "근무조건", "근무 조건", "고용형태", "고용 형태",
     ],
     "process": ["전형절차", "채용절차", "접수기간", "접수방법", "제출서류", "유의사항"],
-    "etc": ["모집부문", "상세내용", "사용 기술"],
+    "etc": ["모집부문", "상세내용"],
     "company_intro": ["서비스 소개", "회사 소개"],
     "deadline_location": ["마감일 및 근무지"],
 }
@@ -206,6 +210,7 @@ class BaseJobCrawler(ABC):
             "responsibilities": [],
             "qualifications": [],
             "preferred": [],
+            "tech_stack": [],
             "benefits": [],
             "process": [],
             "etc": [],

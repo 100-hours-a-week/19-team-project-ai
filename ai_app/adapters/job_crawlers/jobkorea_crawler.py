@@ -78,6 +78,7 @@ class JobKoreaCrawler(BaseJobCrawler):
         responsibilities = []
         qualifications = []
         preferred_qualifications = []
+        tech_stack = []
         benefits = []
         hiring_process = []
         etc = []
@@ -99,6 +100,8 @@ class JobKoreaCrawler(BaseJobCrawler):
                     qualifications = items
                 elif any(kw in header_text for kw in ["우대"]):
                     preferred_qualifications = items
+                elif any(kw in header_text for kw in ["사용 기술", "기술 스택", "기술스택", "개발 환경", "개발환경"]):
+                    tech_stack = items
                 elif any(kw in header_text for kw in ["복리후생", "복지", "혜택"]):
                     benefits = items
                 elif any(kw in header_text for kw in ["전형절차", "채용절차"]):
@@ -116,6 +119,8 @@ class JobKoreaCrawler(BaseJobCrawler):
                 qualifications = qual if isinstance(qual, list) else []
                 pref = parsed.get("preferred")
                 preferred_qualifications = pref if isinstance(pref, list) else []
+                ts = parsed.get("tech_stack")
+                tech_stack = ts if isinstance(ts, list) else []
                 ben = parsed.get("benefits")
                 benefits = ben if isinstance(ben, list) else []
                 proc = parsed.get("process")
@@ -148,6 +153,7 @@ class JobKoreaCrawler(BaseJobCrawler):
             responsibilities=responsibilities,
             qualifications=qualifications,
             preferred_qualifications=preferred_qualifications,
+            tech_stack=tech_stack,
             benefits=benefits,
             hiring_process=hiring_process,
             etc=etc,

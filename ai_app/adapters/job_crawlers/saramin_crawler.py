@@ -101,6 +101,7 @@ class SaraminCrawler(BaseJobCrawler):
         responsibilities = []
         qualifications = []
         preferred_qualifications = []
+        tech_stack = []
         benefits = []
         hiring_process = []
         etc = []
@@ -121,6 +122,8 @@ class SaraminCrawler(BaseJobCrawler):
                 qualifications = qual if isinstance(qual, list) else []
                 pref = parsed.get("preferred")
                 preferred_qualifications = pref if isinstance(pref, list) else []
+                ts = parsed.get("tech_stack")
+                tech_stack = ts if isinstance(ts, list) else []
                 ben = parsed.get("benefits")
                 benefits = ben if isinstance(ben, list) else []
 
@@ -161,6 +164,7 @@ class SaraminCrawler(BaseJobCrawler):
                 responsibilities = llm_result.get("responsibilities", [])
                 qualifications = llm_result.get("qualifications", [])
                 preferred_qualifications = llm_result.get("preferred_qualifications", [])
+                tech_stack = llm_result.get("tech_stack", [])
                 benefits = llm_result.get("benefits", [])
                 hiring_process = llm_result.get("hiring_process", [])
                 etc = llm_result.get("etc", [])
@@ -194,6 +198,7 @@ class SaraminCrawler(BaseJobCrawler):
             responsibilities=responsibilities,
             qualifications=qualifications,
             preferred_qualifications=preferred_qualifications,
+            tech_stack=tech_stack,
             benefits=benefits,
             hiring_process=hiring_process,
             etc=etc,

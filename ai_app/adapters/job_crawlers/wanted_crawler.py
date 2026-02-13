@@ -100,6 +100,10 @@ class WantedCrawler(BaseJobCrawler):
         preferred = detail.get("preferred", "")
         preferred_qualifications = self._parse_text_to_list(preferred) if preferred else []
 
+        # 사용 기술 (skill_tags)
+        skill_tags = job.get("skill_tags", [])
+        tech_stack = [tag.get("title", "") for tag in skill_tags if tag.get("title")] if skill_tags else []
+
         # 혜택 및 복지
         benefits_text = detail.get("benefits", "")
         benefits = self._parse_text_to_list(benefits_text) if benefits_text else []
@@ -129,6 +133,7 @@ class WantedCrawler(BaseJobCrawler):
             responsibilities=responsibilities,
             qualifications=qualifications,
             preferred_qualifications=preferred_qualifications,
+            tech_stack=tech_stack,
             benefits=benefits,
             hiring_process=hiring_process,
             etc=etc,
