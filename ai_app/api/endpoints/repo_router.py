@@ -72,8 +72,8 @@ async def upload_resume_for_test(file: UploadFile = File(...)):
     )
 
 
-@router.post("/job", response_model=ApiResponse[JobParseResponse])
-async def parse_job(request: JobParseRequest):
+@router.post("/job-post", response_model=ApiResponse[JobParseResponse])
+async def parse_job_post(request: JobParseRequest):
     """채용공고 파싱 (URL)"""
     controller = get_repo_controller()
     result = await controller.parse_job(request)
@@ -100,7 +100,7 @@ async def parse_job(request: JobParseRequest):
     return ApiResponse(
         code=ResponseCode.OK,
         data=JobParseResponse(
-            job_id=result.get("job_id", ""),
+            job_post_id=result.get("job_post_id"),
             title=data.get("title"),
             company=company_name,
             employment_type=data.get("job_type") or data.get("employment_type"),
@@ -125,20 +125,20 @@ async def generate_report(request: ReportGenerateRequest):
     현직자 피드백 + AI 분석을 통합하여 리포트를 생성합니다.
 
     - **resume_id**: 이력서 ID (필수)
-    - **job_id**: 채용공고 ID (필수, /repo/job에서 반환된 ID)
+    - **job_post_id**: 채용공고 ID (필수, /repo/job-post에서 반환된 ID)
     - **mentor_feedback**: 현직자 피드백 (선택)
     - **chat_messages**: 채팅 메시지 (선택)
     """
     controller = get_repo_controller()
 
-    # job_id로 저장된 채용공고 데이터 조회
-    job_data = controller._job_store.get(request.job_id)
+    # job_post_id로 저장된 채용공고 데이터 조회
+    job_data = controller._job_store.get(request.job_post_id)
     if not job_data:
         raise HTTPException(
             status_code=404,
             detail={
                 "code": ResponseCode.NOT_FOUND.value,
-                "data": f"job_id '{request.job_id}'에 해당하는 채용공고가 없습니다. /repo/job을 먼저 호출하세요.",
+                "data": f"job_post_id '{request.job_post_id}'에 해당하는 채용공고가 없습니다. /repo/job-post를 먼저 호출하세요.",
             },
         )
 
