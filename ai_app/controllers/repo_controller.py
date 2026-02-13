@@ -34,12 +34,12 @@ class RepoController:
 
             if job_posting:
                 job_data = job_posting.model_dump()
-                job_id = f"job_{len(self._job_store) + 1}"
-                self._job_store[job_id] = job_data
+                job_post_id = len(self._job_store) + 1
+                self._job_store[job_post_id] = job_data
                 logger.info(f"CrawlerService 파싱 성공 - {job_data.get('title')}")
                 return {
                     "success": True,
-                    "job_id": job_id,
+                    "job_post_id": job_post_id,
                     "data": job_data,
                 }
 
@@ -52,12 +52,12 @@ class RepoController:
 
         if result.get("success"):
             job_data = result.get("data", {})
-            job_id = f"job_{len(self._job_store) + 1}"
-            self._job_store[job_id] = job_data
+            job_post_id = len(self._job_store) + 1
+            self._job_store[job_post_id] = job_data
 
             return {
                 "success": True,
-                "job_id": job_id,
+                "job_post_id": job_post_id,
                 "data": job_data,
             }
 

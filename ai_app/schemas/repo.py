@@ -125,7 +125,7 @@ class JobParseRequest(BaseModel):
 class JobParseResponse(BaseModel):
     """채용공고 파싱 응답"""
 
-    job_id: str = Field(..., description="채용공고 ID")
+    job_post_id: int = Field(..., description="채용공고 ID")
     title: str | None = Field(default=None, description="직무/포지션명")
     company: str | None = Field(default=None, description="회사명")
     employment_type: str | None = Field(default=None, description="고용 형태")
@@ -145,7 +145,7 @@ class ReportGenerateRequest(BaseModel):
     """리포트 생성 요청"""
 
     resume_id: str = Field(..., description="이력서 ID")
-    job_id: str = Field(..., description="채용공고 ID (/repo/job에서 반환된 ID)")
+    job_post_id: int = Field(..., description="채용공고 ID (/repo/job-post에서 반환된 ID)")
     user_skills: list[str] | None = Field(default=None, description="사용자 보유 기술 스택 (DB에서 조회)")
     mentor_feedback: MentorFeedback | None = Field(default=None, description="현직자 피드백")
     chat_messages: list[ChatMessage] | None = Field(default=None, description="채팅 메시지")
