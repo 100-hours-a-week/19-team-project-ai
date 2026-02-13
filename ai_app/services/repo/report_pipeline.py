@@ -169,6 +169,7 @@ class ReportPipeline:
     ) -> dict:
         """10개 섹션 리포트 빌드"""
         from services.repo.utils import map_standard_position
+
         ai_data = ai_analysis.get("requirements", {})
 
         # 1. 기본 정보
