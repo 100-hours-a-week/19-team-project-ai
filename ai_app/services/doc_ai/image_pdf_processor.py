@@ -4,11 +4,11 @@ import asyncio
 import logging
 
 import pymupdf
+from adapters.llm_client import LLMClient, get_llm_client
 from google.genai import types
+from prompts import get_vlm_ocr_pii_prompts
 from pydantic import BaseModel, Field
 
-from adapters.llm_client import LLMClient, get_llm_client
-from prompts import get_vlm_ocr_pii_prompts
 from services.doc_ai.pdf_parser import ParsedDocument, ParsedPage, TextBlock
 from services.doc_ai.pii_masker import MaskingResult, PIIEntity, PIIMasker, get_pii_masker
 

@@ -107,9 +107,7 @@ class ParsePipeline:
                 logger.info("이미지 기반 PDF 감지 → VLM OCR 파이프라인 실행")
                 image_processor = self._get_image_processor()
                 pdf_bytes = Path(file_path).read_bytes()
-                parsed_doc, _masking_result = await image_processor.process(
-                    pdf_bytes, extract_pii=extract_pii
-                )
+                parsed_doc, _masking_result = await image_processor.process(pdf_bytes, extract_pii=extract_pii)
                 masked_text = parsed_doc.full_text
             else:
                 # 3단계: PII 마스킹 (개인정보 보호 - CPU 작업이므로 스레드에서 실행)
@@ -186,9 +184,7 @@ class ParsePipeline:
             if not parsed_doc.is_text_pdf:
                 logger.info("이미지 기반 PDF 감지 → VLM OCR 파이프라인 실행")
                 image_processor = self._get_image_processor()
-                parsed_doc, ocr_masking_result = await image_processor.process(
-                    pdf_bytes, extract_pii=extract_pii
-                )
+                parsed_doc, ocr_masking_result = await image_processor.process(pdf_bytes, extract_pii=extract_pii)
                 masked_text = parsed_doc.full_text
                 logger.debug(f"  - VLM OCR 텍스트 길이: {len(masked_text)}자")
                 logger.debug(f"  - VLM PII 감지: {len(ocr_masking_result.entities)}개")
