@@ -39,6 +39,18 @@ def get_resume_extraction_prompts() -> tuple[str, str]:
     return system_prompt, user_prompt
 
 
+def get_vlm_ocr_pii_prompts() -> tuple[str, str]:
+    """
+    VLM OCR + PII 탐지용 프롬프트 로드
+
+    Returns:
+        (system_prompt, user_prompt) 튜플
+    """
+    system_prompt = load_prompt("vlm_ocr_pii_system")
+    user_prompt = load_prompt("vlm_ocr_pii_user")
+    return system_prompt, user_prompt
+
+
 def clear_prompt_cache():
     """프롬프트 캐시 초기화 (개발/테스트용)"""
     load_prompt.cache_clear()

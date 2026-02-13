@@ -222,6 +222,94 @@ class LLMClient:
 
         raise last_error or RuntimeError("모든 API 키 및 모델 호출에 실패했습니다.")
 
+    async def generate_json_with_images(
+        self,
+        contents: list[types.Part],
+        system_instruction: str | None = None,
+        response_schema: type[BaseModel] | None = None,
+        temperature: float = 0.1,
+    ) -> dict[str, Any]:
+        """Generate structured JSON output from image+text parts with retry, key rotation, and model fallback."""
+        self._init_clients()
+
+        config = types.GenerateContentConfig(
+            temperature=temperature,
+            response_mime_type="application/json",
+            system_instruction=system_instruction,
+        )
+
+        if response_schema:
+            config.response_schema = response_schema
+
+        models_to_try = [self.model_name] + [m for m in FALLBACK_MODELS if m != self.model_name]
+        last_error = None
+
+        clients_tried = 0
+        total_clients = len(self._clients)
+
+        while clients_tried < total_clients:
+            client = self._clients[self._current_client_idx]
+            client_label = self._client_labels[self._current_client_idx]
+
+            for model in models_to_try:
+                for attempt in range(self.max_retries):
+                    try:
+                        response = await client.aio.models.generate_content(
+                            model=model,
+                            contents=contents,
+                            config=config,
+                        )
+
+                        if model != self.model_name:
+                            logger.info(f"✅ Fallback 모델 사용 성공: {model} ({client_label})")
+
+                        text = response.text.strip()
+                        if text.startswith("```"):
+                            lines = text.split("\n")
+                            if lines[0].startswith("```"):
+                                lines = lines[1:]
+                            if lines and lines[-1].strip() == "```":
+                                lines = lines[:-1]
+                            text = "\n".join(lines)
+
+                        return json.loads(text)
+
+                    except Exception as e:
+                        last_error = e
+                        error_str = str(e).upper()
+
+                        if any(code in error_str for code in ["429", "RESOURCE_EXHAUSTED", "503", "OVERLOADED"]):
+                            logger.warning(
+                                f"⚠️ 할당량 초과 ({client_label}, {model}, 시도 {attempt + 1}/{self.max_retries})"
+                            )
+
+                            if attempt == self.max_retries - 1:
+                                break
+
+                            wait_time = self.base_delay * (2**attempt)
+                            logger.info(f"⏳ {wait_time}초 후 재시도...")
+                            await asyncio.sleep(wait_time)
+                            continue
+
+                        logger.warning(f"⚠️ {model} 호출 실패 ({client_label}): {e}")
+                        break
+
+                else:
+                    continue
+                break
+            else:
+                pass
+
+            has_next = self._rotate_client()
+            clients_tried += 1
+
+            if has_next and clients_tried < total_clients:
+                logger.info(f"🔄 다음 API 키로 전환 ({self._client_labels[self._current_client_idx]})")
+            else:
+                break
+
+        raise last_error or RuntimeError("모든 API 키 및 모델 호출에 실패했습니다.")
+
 
 # 싱글톤
 _llm_client: LLMClient | None = None
