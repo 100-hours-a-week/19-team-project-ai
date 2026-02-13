@@ -93,15 +93,19 @@ async def parse_job_post(request: JobParseRequest):
     else:
         company_name = company_raw
 
+    from services.repo.utils import map_standard_position
+
     qualifications = data.get("qualifications", [])
     preferred_qualifications = data.get("preferred_qualifications", [])
     tech_stack = data.get("tech_stack") or filter_tech_requirements(qualifications + preferred_qualifications)
+    title = data.get("title")
 
     return ApiResponse(
         code=ResponseCode.OK,
         data=JobParseResponse(
             job_post_id=result.get("job_post_id"),
-            title=data.get("title"),
+            job_post_title=title,
+            job_post_position=map_standard_position(title) if title else None,
             company=company_name,
             employment_type=data.get("job_type") or data.get("employment_type"),
             experience_level=data.get("experience_level"),
