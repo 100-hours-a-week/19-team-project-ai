@@ -13,15 +13,14 @@ RUN apt-get update && \
         build-essential \
         && rm -rf /var/lib/apt/lists/*
 
-# Copy dependency files
+# 의존성 먼저 설치 (레이어 캐시 활용 — 코드 변경 시 재설치 방지)
 COPY pyproject.toml MANIFEST.in ./
-
-# Copy application code
-COPY ai_app ./ai_app
-
-# Install Python dependencies
-RUN pip install --no-cache-dir --upgrade pip && \
+RUN mkdir -p ai_app && \
+    pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -e .
+
+# 애플리케이션 코드는 마지막에 복사 (코드 변경 시 이 레이어만 갱신)
+COPY ai_app ./ai_app
 
 # Create non-root user
 RUN useradd -m -u 1001 aiuser && \
