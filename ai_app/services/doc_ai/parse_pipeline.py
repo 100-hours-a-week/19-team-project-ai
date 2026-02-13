@@ -1,5 +1,6 @@
 """파싱 파이프라인 - 이력서 파싱 워크플로우 조율"""
 
+import asyncio
 import logging
 import time
 from dataclasses import dataclass
@@ -54,6 +55,7 @@ class ParsePipeline:
 
     파이프라인 단계:
     1. PDF 텍스트 추출 (pdf_parser)
+    1-a. 이미지 PDF인 경우 → VLM OCR + PII 처리 (image_pdf_processor)
     2. Presidio PII 마스킹 (pii_masker) - LLM 호출 전
     3. LLM을 통한 필드 추출 (field_extractor)
     4. 스키마 정규화
@@ -68,6 +70,15 @@ class ParsePipeline:
         self.pdf_parser = pdf_parser or PDFParser()
         self.field_extractor = field_extractor or FieldExtractor()
         self.pii_masker = pii_masker or get_pii_masker()
+        self._image_processor = None
+
+    def _get_image_processor(self):
+        """ImagePDFProcessor 지연 초기화"""
+        if self._image_processor is None:
+            from services.doc_ai.image_pdf_processor import ImagePDFProcessor
+
+            self._image_processor = ImagePDFProcessor(pii_masker=self.pii_masker)
+        return self._image_processor
 
     async def parse(
         self,
@@ -88,28 +99,24 @@ class ParsePipeline:
         model_used = None
 
         try:
-            # 1단계: PDF 파싱
-            parsed_doc = self.pdf_parser.parse(file_path)
+            # 1단계: PDF 파싱 (CPU 작업이므로 스레드에서 실행)
+            parsed_doc = await asyncio.to_thread(self.pdf_parser.parse, file_path)
 
-            # 2단계: OCR 필요 여부 확인
+            # 2단계: 이미지 PDF인 경우 VLM OCR + PII 처리
             if not parsed_doc.is_text_pdf:
-                processing_time = int((time.time() - start_time) * 1000)
-                return ParseResult(
-                    success=False,
-                    extracted_fields=None,
-                    raw_text=None,
-                    confidence_score=None,
-                    error_message="이미지 기반 PDF입니다. OCR 처리가 필요합니다.",
-                    processing_time_ms=processing_time,
-                    model_used=None,
-                    needs_ocr=True,
+                logger.info("이미지 기반 PDF 감지 → VLM OCR 파이프라인 실행")
+                image_processor = self._get_image_processor()
+                pdf_bytes = Path(file_path).read_bytes()
+                parsed_doc, _masking_result = await image_processor.process(
+                    pdf_bytes, extract_pii=extract_pii
                 )
-
-            # 3단계: PII 마스킹 (개인정보 보호)
-            if not extract_pii:
-                masked_doc = self.pii_masker.mask(parsed_doc.full_text)
-                # parsed_doc의 텍스트를 마스킹된 버전으로 대체
-                parsed_doc.full_text = masked_doc.masked_text
+                masked_text = parsed_doc.full_text
+            else:
+                # 3단계: PII 마스킹 (개인정보 보호 - CPU 작업이므로 스레드에서 실행)
+                if not extract_pii:
+                    masking_result = await asyncio.to_thread(self.pii_masker.mask_text, parsed_doc.full_text)
+                    parsed_doc.full_text = masking_result.masked_text
+                masked_text = parsed_doc.full_text
 
             # 4단계: LLM을 통한 필드 추출
             extracted_fields, raw_response = await self.field_extractor.extract(
@@ -125,7 +132,7 @@ class ParsePipeline:
             return ParseResult(
                 success=True,
                 extracted_fields=extracted_fields,
-                raw_text=parsed_doc.full_text,
+                raw_text=masked_text,
                 confidence_score=confidence_score,
                 error_message=None,
                 processing_time_ms=processing_time,
@@ -165,8 +172,8 @@ class ParsePipeline:
         model_used = None
 
         try:
-            # 1단계: 바이트에서 PDF 파싱 (텍스트 추출)
-            parsed_doc = self.pdf_parser.parse_bytes(pdf_bytes)
+            # 1단계: 바이트에서 PDF 파싱 (텍스트 추출 - CPU 작업이므로 스레드에서 실행)
+            parsed_doc = await asyncio.to_thread(self.pdf_parser.parse_bytes, pdf_bytes)
             logger.debug("=" * 60)
             logger.debug("1단계 PDF 파싱 완료 (텍스트 추출)")
             logger.debug(f"  - 페이지 수: {parsed_doc.total_pages}")
@@ -175,35 +182,31 @@ class ParsePipeline:
             text_preview = parsed_doc.full_text[:200] if len(parsed_doc.full_text) > 200 else parsed_doc.full_text
             logger.debug(f"  - 텍스트 미리보기: {text_preview}...")
 
-            # OCR 필요 여부 확인
+            # 이미지 기반 PDF → VLM OCR + PII 처리
             if not parsed_doc.is_text_pdf:
-                logger.warning("  - OCR 필요: 이미지 기반 PDF입니다.")
-                processing_time = int((time.time() - start_time) * 1000)
-                return ParseResult(
-                    success=False,
-                    extracted_fields=None,
-                    raw_text=None,
-                    confidence_score=None,
-                    error_message="이미지 기반 PDF입니다. OCR 처리가 필요합니다.",
-                    processing_time_ms=processing_time,
-                    model_used=None,
-                    needs_ocr=True,
+                logger.info("이미지 기반 PDF 감지 → VLM OCR 파이프라인 실행")
+                image_processor = self._get_image_processor()
+                parsed_doc, ocr_masking_result = await image_processor.process(
+                    pdf_bytes, extract_pii=extract_pii
                 )
-
-            # 2단계: Presidio PII 마스킹 (LLM 호출 전)
-            logger.debug("-" * 60)
-            logger.debug("2단계 Presidio PII 마스킹")
-            if not extract_pii:
-                masking_result = self.pii_masker.mask_text(parsed_doc.full_text)
-                masked_text = masking_result.masked_text
-                logger.debug(f"  - 발견된 PII 개수: {len(masking_result.entities)}개")
-                for entity in masking_result.entities:
-                    logger.debug(f"    • {entity.entity_type}: {entity.masked_text}")
-                masked_preview = masked_text[:200] if len(masked_text) > 200 else masked_text
-                logger.debug(f"  - 마스킹된 텍스트 미리보기: {masked_preview}...")
-            else:
                 masked_text = parsed_doc.full_text
-                logger.debug("  - PII 마스킹 스킵 (extract_pii=True)")
+                logger.debug(f"  - VLM OCR 텍스트 길이: {len(masked_text)}자")
+                logger.debug(f"  - VLM PII 감지: {len(ocr_masking_result.entities)}개")
+            else:
+                # 2단계: Presidio PII 마스킹 (LLM 호출 전 - CPU 작업이므로 스레드에서 실행)
+                logger.debug("-" * 60)
+                logger.debug("2단계 Presidio PII 마스킹")
+                if not extract_pii:
+                    masking_result = await asyncio.to_thread(self.pii_masker.mask_text, parsed_doc.full_text)
+                    masked_text = masking_result.masked_text
+                    logger.debug(f"  - 발견된 PII 개수: {len(masking_result.entities)}개")
+                    for entity in masking_result.entities:
+                        logger.debug(f"    • {entity.entity_type}: {entity.masked_text}")
+                    masked_preview = masked_text[:200] if len(masked_text) > 200 else masked_text
+                    logger.debug(f"  - 마스킹된 텍스트 미리보기: {masked_preview}...")
+                else:
+                    masked_text = parsed_doc.full_text
+                    logger.debug("  - PII 마스킹 스킵 (extract_pii=True)")
 
             # 3단계: LLM을 통한 필드 추출 (마스킹된 텍스트 사용)
             logger.debug("-" * 60)
