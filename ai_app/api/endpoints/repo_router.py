@@ -25,7 +25,7 @@ router = APIRouter(prefix="/repo", tags=["Report"])
 
 
 # ============== 임시 이력서 저장소 (테스트용) ==============
-_resume_store: dict[str, dict] = {}
+_resume_store: dict[int, dict] = {}
 
 
 @router.post("/resumes/upload", summary="[테스트용] 이력서 업로드")
@@ -49,7 +49,7 @@ async def upload_resume_for_test(file: UploadFile = File(...)):
 
     if result.status.value == "COMPLETED" and result.result:
         resume_data = {
-            "resume_id": str(resume_id),
+            "resume_id": resume_id,
             "title": result.result.content_json.work_experience[0]
             if result.result.content_json.work_experience
             else "이력서",
@@ -59,11 +59,11 @@ async def upload_resume_for_test(file: UploadFile = File(...)):
             "certifications": result.result.content_json.certifications,
             "etc": result.result.content_json.etc,
         }
-        _resume_store[str(resume_id)] = resume_data
+        _resume_store[resume_id] = resume_data
 
         return ApiResponse(
             code=ResponseCode.OK,
-            data={"resume_id": str(resume_id), "status": "uploaded", "parsed_fields": resume_data},
+            data={"resume_id": resume_id, "status": "uploaded", "parsed_fields": resume_data},
         )
 
     return ApiResponse(
@@ -72,7 +72,7 @@ async def upload_resume_for_test(file: UploadFile = File(...)):
     )
 
 
-@router.post("/job-post", response_model=ApiResponse[JobParseResponse])
+@router.post("/job-post", summary="채용공고 파싱 (URL)", response_model=ApiResponse[JobParseResponse])
 async def parse_job_post(request: JobParseRequest):
     """채용공고 파싱 (URL)"""
     controller = get_repo_controller()
@@ -118,9 +118,9 @@ async def parse_job_post(request: JobParseRequest):
     )
 
 
-@router.post("/generate", response_model=ApiResponse[ReportGenerateResponse])
+@router.post("/generate", summary="리포트 생성 - 10개 섹션", response_model=ApiResponse[ReportGenerateResponse])
 async def generate_report(request: ReportGenerateRequest):
-    """리포트 생성 - 10개 섹션
+    """
 
     현직자 피드백 + AI 분석을 통합하여 리포트를 생성합니다.
 
@@ -171,7 +171,7 @@ async def generate_report(request: ReportGenerateRequest):
     return ApiResponse(
         code=ResponseCode.OK,
         data=ReportGenerateResponse(
-            report_id=result.get("report_id", ""),
+            report_id=result.get("report_id"),
             resume_id=request.resume_id,
             basic_info=BasicInfo(**report_data.get("basic_info", {})),
             tech_coverage=TechCoverage(**report_data.get("tech_coverage", {})),
@@ -188,8 +188,8 @@ async def generate_report(request: ReportGenerateRequest):
     )
 
 
-@router.get("/{report_id}", response_model=ApiResponse[ReportGenerateResponse])
-async def get_report(report_id: str):
+@router.get("/{report_id}", summary="리포트 조회", response_model=ApiResponse[ReportGenerateResponse])
+async def get_report(report_id: int):
     """리포트 조회"""
     controller = get_repo_controller()
     result = await controller.get_report(report_id)
@@ -205,8 +205,8 @@ async def get_report(report_id: str):
     return ApiResponse(
         code=ResponseCode.OK,
         data=ReportGenerateResponse(
-            report_id=result.get("report_id", ""),
-            resume_id=result.get("resume_id", ""),
+            report_id=result.get("report_id"),
+            resume_id=result.get("resume_id"),
             basic_info=BasicInfo(**report_data.get("basic_info", {})),
             tech_coverage=TechCoverage(**report_data.get("tech_coverage", {})),
             capability_matching=CapabilityMatching(**report_data.get("capability_matching", {})),

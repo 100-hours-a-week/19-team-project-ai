@@ -2,7 +2,7 @@
 
 import logging
 import time
-import uuid
+
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -32,8 +32,8 @@ class ReportResult:
     """리포트 생성 결과"""
 
     success: bool
-    report_id: str | None
-    resume_id: str | None
+    report_id: int | None
+    resume_id: int | None
     report_data: dict | None
     processing_time_ms: int
     error_message: str | None = None
@@ -90,13 +90,13 @@ class ReportPipeline:
         self,
         resume_data: dict,
         job_data: dict,
-        resume_id: str | None = None,
+        report_id: int,
+        resume_id: int | None = None,
         mentor_feedback: MentorFeedback | None = None,
         chat_messages: list[dict] | None = None,
     ) -> ReportResult:
         """리포트 생성 파이프라인 실행"""
         start_time = time.time()
-        report_id = str(uuid.uuid4())
 
         logger.info(f"리포트 생성 시작 - report_id: {report_id}")
 

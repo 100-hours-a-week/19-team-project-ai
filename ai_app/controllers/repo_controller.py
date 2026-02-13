@@ -16,8 +16,8 @@ class RepoController:
 
     def __init__(self):
         self.report_pipeline = get_report_pipeline()
-        self._job_store: dict[str, dict] = {}
-        self._report_store: dict[str, dict] = {}
+        self._job_store: dict[int, dict] = {}
+        self._report_store: dict[int, dict] = {}
 
     async def parse_job(self, request: JobParseRequest) -> dict[str, Any]:
         """채용공고 파싱 - CrawlerService 우선, LLM fallback"""
@@ -76,10 +76,14 @@ class RepoController:
         if request.chat_messages:
             chat_messages = [msg.model_dump() for msg in request.chat_messages]
 
+        # 리포트 ID 생성
+        report_id = len(self._report_store) + 1
+
         # 리포트 파이프라인 실행
         result = await self.report_pipeline.generate(
             resume_data=resume_data,
             job_data=job_data,
+            report_id=report_id,
             resume_id=request.resume_id,
             mentor_feedback=request.mentor_feedback,
             chat_messages=chat_messages,
@@ -101,7 +105,7 @@ class RepoController:
             "error": result.error_message,
         }
 
-    async def get_report(self, report_id: str) -> dict[str, Any] | None:
+    async def get_report(self, report_id: int) -> dict[str, Any] | None:
         """리포트 조회"""
         return self._report_store.get(report_id)
 
