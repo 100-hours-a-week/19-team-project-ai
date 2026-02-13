@@ -23,7 +23,9 @@ class ExtractedJobPosting(BaseModel):
     responsibilities: list[str] = Field(default_factory=list, description="주요 업무/담당 업무")
     qualifications: list[str] = Field(default_factory=list, description="자격 요건 (필수)")
     preferred_qualifications: list[str] = Field(default_factory=list, description="우대 조건 (선택)")
-    tech_stack: list[str] = Field(default_factory=list, description="사용 기술/기술 스택 (예: React, Spring Boot, Docker 등)")
+    tech_stack: list[str] = Field(
+        default_factory=list, description="사용 기술/기술 스택 (예: React, Spring Boot, Docker 등)"
+    )
     benefits: list[str] = Field(default_factory=list, description="복지 및 혜택 (복리후생, 근무 환경 등)")
     hiring_process: list[str] = Field(default_factory=list, description="채용 절차/전형")
     etc: list[str] = Field(default_factory=list, description="기타 (유의사항, 분류 불가 정보)")

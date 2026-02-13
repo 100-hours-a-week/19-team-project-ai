@@ -3,10 +3,8 @@
 from functools import lru_cache
 
 from schemas.reports import (
-    ExpertFeedback,
     ReportData,
     ReportRequest,
-    ReportResult,
 )
 from services.report import ReportGenerator, get_report_generator
 

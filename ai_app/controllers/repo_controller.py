@@ -5,7 +5,6 @@ from typing import Any
 
 from schemas.repo import (
     JobParseRequest,
-    MentorFeedback,
     ReportGenerateRequest,
 )
 from services.repo import parse_job_from_url

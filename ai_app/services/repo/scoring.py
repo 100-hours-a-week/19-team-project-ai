@@ -29,6 +29,7 @@ def filter_tech_requirements(items: list[str]) -> list[str]:
 
 class RequirementAssessment(BaseModel):
     """요구사항 평가"""
+
     requirement: str = Field(..., description="요구사항")
     level: str = Field(..., description="충족 수준")
     reason: str = Field(..., description="판단 근거")
@@ -36,18 +37,22 @@ class RequirementAssessment(BaseModel):
 
 class TechMatch(BaseModel):
     """기술 스택 매핑 결과"""
+
     tech: str = Field(..., description="공고 요구 기술")
     status: str = Field(..., description="충족/부분충족/미충족")
     reason: str = Field(..., description="매핑 근거 (예: 동의어, 유사 기술 등)")
 
+
 class ItemWithReason(BaseModel):
     """항목과 그에 대한 AI의 분석 이유"""
+
     item: str = Field(..., description="항목 (요구사항/강점/보완점 등)")
     reason: str = Field(..., description="분석 근거 및 이유")
 
 
 class AIAnalysisResult(BaseModel):
     """AI 분석 결과"""
+
     short_title: str = Field(..., description="지원 공고 요약 제목 (30자 내)")
     top_requirements: list[ItemWithReason] = Field(default_factory=list, description="중요 요구사항 Top 3와 이유")
     assessments: list[RequirementAssessment] = Field(default_factory=list, description="현직자 요구사항에 대한 AI 평가")
@@ -55,7 +60,9 @@ class AIAnalysisResult(BaseModel):
     improvements: list[ItemWithReason] = Field(default_factory=list, description="보완점 2개와 이유")
     action_items: list[str] = Field(default_factory=list, description="2주 내 액션 2개")
     overall_comment: str = Field(default="", description="AI 총평 (300자 이내)")
-    tech_matches: list[TechMatch] = Field(default_factory=list, description="기술 스택 지능형 매칭 결과 (동의어 매핑, 유사 기술 부분 충족 반영)")
+    tech_matches: list[TechMatch] = Field(
+        default_factory=list, description="기술 스택 지능형 매칭 결과 (동의어 매핑, 유사 기술 부분 충족 반영)"
+    )
     unverifiable_items: list[str] = Field(default_factory=list, description="확인 불가 항목")
     confidence_score: float = Field(default=70.0, description="신뢰도")
     confidence_reason: str = Field(default="", description="신뢰도 근거")
@@ -104,9 +111,9 @@ async def analyze_requirements(
     llm = get_llm_client()
 
     # company 필드는 dict 또는 str일 수 있음 (CrawlerService vs LLM parser)
-    company_info = job_data.get('company', '미상')
+    company_info = job_data.get("company", "미상")
     if isinstance(company_info, dict):
-        company_name = company_info.get('name', '미상')
+        company_name = company_info.get("name", "미상")
     else:
         company_name = company_info
 
@@ -115,7 +122,7 @@ async def analyze_requirements(
     if mentor_requirements:
         mentor_req_text = f"""
 <현직자 선택 핵심 요구사항>
-{chr(10).join([f'{i+1}. {req}' for i, req in enumerate(mentor_requirements)])}
+{chr(10).join([f"{i + 1}. {req}" for i, req in enumerate(mentor_requirements)])}
 </현직자 선택 핵심 요구사항>
 
 위 현직자가 선택한 3개 요구사항에 대해 assessments 필드에서 각각 AI 관점의 충족/부분충족/미충족 판단과 근거를 작성하세요.
@@ -128,17 +135,17 @@ async def analyze_requirements(
 </이력서>
 
 <대화 내용>
-{', '.join([f"{msg.get('sender', {}).get('nickname')}: {msg.get('content')}" for msg in chat_messages]) if chat_messages else '채팅 내역 없음'}
+{", ".join([f"{msg.get('sender', {}).get('nickname')}: {msg.get('content')}" for msg in chat_messages]) if chat_messages else "채팅 내역 없음"}
 </대화 내용>
 
 <채용공고>
-포지션: {job_data.get('title', '미상')}
+포지션: {job_data.get("title", "미상")}
 회사: {company_name}
-요구 경력: {job_data.get('experience_level', '미상')}
-주요 업무: {', '.join(job_data.get('responsibilities', []))}
-자격 요건: {', '.join(job_data.get('qualifications', []))}
-우대 사항: {', '.join(job_data.get('preferred_qualifications', []))}
-근무조건/복지: {', '.join(job_data.get('benefits', []))}
+요구 경력: {job_data.get("experience_level", "미상")}
+주요 업무: {", ".join(job_data.get("responsibilities", []))}
+자격 요건: {", ".join(job_data.get("qualifications", []))}
+우대 사항: {", ".join(job_data.get("preferred_qualifications", []))}
+근무조건/복지: {", ".join(job_data.get("benefits", []))}
 </채용공고>
 {mentor_req_text}
 분석 결과를 JSON 형식으로 응답하세요."""
@@ -152,7 +159,11 @@ async def analyze_requirements(
         )
 
         # assessments의 level 문자열을 Enum으로 변환
-        level_map = {"충족": FulfillmentLevel.FULFILLED, "부분충족": FulfillmentLevel.PARTIAL, "미충족": FulfillmentLevel.NOT_FULFILLED}
+        level_map = {
+            "충족": FulfillmentLevel.FULFILLED,
+            "부분충족": FulfillmentLevel.PARTIAL,
+            "미충족": FulfillmentLevel.NOT_FULFILLED,
+        }
         for a in result.get("assessments", []):
             a["level"] = level_map.get(a.get("level", "미충족"), FulfillmentLevel.NOT_FULFILLED)
 

@@ -1,5 +1,4 @@
-"""요약/액션플랜 생성 서비스
-"""
+"""요약/액션플랜 생성 서비스"""
 
 import logging
 from typing import Any
@@ -51,9 +50,7 @@ SUMMARY_SYSTEM_PROMPT = """당신은 커리어 컨설턴트입니다.
 """
 
 
-async def generate_summary(
-    resume_data: dict, job_data: dict, scores: dict
-) -> dict[str, Any]:
+async def generate_summary(resume_data: dict, job_data: dict, scores: dict) -> dict[str, Any]:
     """요약 및 액션플랜 생성
 
     Args:
@@ -75,17 +72,17 @@ async def generate_summary(
 </이력서 요약>
 
 <채용공고>
-포지션: {job_data.get('title', '미상')}
-회사: {job_data.get('company', '미상')}
-자격요건: {', '.join(job_data.get('qualifications', [])[:5])}
-우대사항: {', '.join(job_data.get('preferred_qualifications', [])[:5])}
+포지션: {job_data.get("title", "미상")}
+회사: {job_data.get("company", "미상")}
+자격요건: {", ".join(job_data.get("qualifications", [])[:5])}
+우대사항: {", ".join(job_data.get("preferred_qualifications", [])[:5])}
 </채용공고>
 
 <적합도 분석>
-커버리지 점수: {scores.get('coverage_score', 0)}/100
-적합도 점수: {scores.get('fit_score', 0)}/100
-충족 요구사항: {', '.join(scores.get('matched_requirements', [])[:5])}
-미충족 요구사항: {', '.join(scores.get('unmatched_requirements', [])[:5])}
+커버리지 점수: {scores.get("coverage_score", 0)}/100
+적합도 점수: {scores.get("fit_score", 0)}/100
+충족 요구사항: {", ".join(scores.get("matched_requirements", [])[:5])}
+미충족 요구사항: {", ".join(scores.get("unmatched_requirements", [])[:5])}
 </적합도 분석>
 
 실행 가능한 구체적인 전략을 JSON 형식으로 제안하세요."""

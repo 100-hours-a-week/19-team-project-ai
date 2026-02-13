@@ -40,9 +40,7 @@ class LLMClient:
 
         if project_id and credentials_path:
             logger.info(f"Using Vertex AI (Project: {project_id}, Location: {location})")
-            self._clients.append(
-                genai.Client(vertexai=True, project=project_id, location=location)
-            )
+            self._clients.append(genai.Client(vertexai=True, project=project_id, location=location))
             self._client_labels.append(f"VertexAI({location})")
 
         # 2. 여러 API 키 클라이언트 (GOOGLE_API_KEY, GOOGLE_API_KEY_2, ...)
@@ -62,8 +60,7 @@ class LLMClient:
         self._initialized = True
 
     def _load_api_keys(self) -> list[str]:
-        """환경변수에서 API 키 목록 로드
-        """
+        """환경변수에서 API 키 목록 로드"""
         keys = []
 
         # 방법 1: 콤마 구분 (GOOGLE_API_KEYS)
@@ -189,15 +186,14 @@ class LLMClient:
                         # 429(할당량 초과) 또는 503(서버 과부하) → 다음 API 키로 전환
                         if any(code in error_str for code in ["429", "RESOURCE_EXHAUSTED", "503", "OVERLOADED"]):
                             logger.warning(
-                                f"⚠️ 할당량 초과 ({client_label}, {model}, "
-                                f"시도 {attempt + 1}/{self.max_retries})"
+                                f"⚠️ 할당량 초과 ({client_label}, {model}, 시도 {attempt + 1}/{self.max_retries})"
                             )
 
                             # 마지막 retry면 다음 API 키로 전환
                             if attempt == self.max_retries - 1:
                                 break  # model loop 밖으로 → client rotation
 
-                            wait_time = self.base_delay * (2 ** attempt)
+                            wait_time = self.base_delay * (2**attempt)
                             logger.info(f"⏳ {wait_time}초 후 재시도...")
                             await asyncio.sleep(wait_time)
                             continue

@@ -1,10 +1,8 @@
 """레포트 생성 라우터 - 10개 섹션 리포트"""
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
-
 from controllers.repo_controller import get_repo_controller
+from fastapi import APIRouter, File, HTTPException, UploadFile
 from schemas.common import ApiResponse, ResponseCode
-from services.repo.scoring import filter_tech_requirements
 from schemas.repo import (
     ActionPlan,
     BasicInfo,
@@ -21,6 +19,7 @@ from schemas.repo import (
     StrengthsAnalysis,
     TechCoverage,
 )
+from services.repo.scoring import filter_tech_requirements
 
 router = APIRouter(prefix="/repo", tags=["Report"])
 
@@ -51,7 +50,9 @@ async def upload_resume_for_test(file: UploadFile = File(...)):
     if result.status.value == "COMPLETED" and result.result:
         resume_data = {
             "resume_id": str(resume_id),
-            "title": result.result.content_json.work_experience[0] if result.result.content_json.work_experience else "이력서",
+            "title": result.result.content_json.work_experience[0]
+            if result.result.content_json.work_experience
+            else "이력서",
             "work_experience": [str(exp) for exp in result.result.content_json.work_experience],
             "projects": [str(proj) for proj in result.result.content_json.projects],
             "education": result.result.content_json.education,
@@ -135,7 +136,10 @@ async def generate_report(request: ReportGenerateRequest):
     if not job_data:
         raise HTTPException(
             status_code=404,
-            detail={"code": ResponseCode.NOT_FOUND.value, "data": f"job_id '{request.job_id}'에 해당하는 채용공고가 없습니다. /repo/job을 먼저 호출하세요."},
+            detail={
+                "code": ResponseCode.NOT_FOUND.value,
+                "data": f"job_id '{request.job_id}'에 해당하는 채용공고가 없습니다. /repo/job을 먼저 호출하세요.",
+            },
         )
 
     # resume_id로 저장된 이력서 데이터 조회

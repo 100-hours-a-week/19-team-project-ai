@@ -23,5 +23,3 @@ app.include_router(resumes_router.router, prefix="/api/ai")
 app.include_router(jobs_router.router, prefix="/api/ai")
 app.include_router(reco_router.router, prefix="/api/ai")
 app.include_router(repo_router.router, prefix="/api/ai")
-
-
