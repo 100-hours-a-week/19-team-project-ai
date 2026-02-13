@@ -144,7 +144,7 @@ class JobParseResponse(BaseModel):
 class ReportGenerateRequest(BaseModel):
     """리포트 생성 요청"""
 
-    resume_id: str = Field(..., description="이력서 ID")
+    resume_id: int = Field(..., description="이력서 ID")
     job_post_id: int = Field(..., description="채용공고 ID (/repo/job-post에서 반환된 ID)")
     user_skills: list[str] | None = Field(default=None, description="사용자 보유 기술 스택 (DB에서 조회)")
     mentor_feedback: MentorFeedback | None = Field(default=None, description="현직자 피드백")
@@ -268,8 +268,8 @@ class Reliability(BaseModel):
 class ReportGenerateResponse(BaseModel):
     """리포트 생성 응답 - 11개 섹션"""
 
-    report_id: str = Field(..., description="리포트 ID")
-    resume_id: str = Field(..., description="이력서 ID")
+    report_id: int = Field(..., description="리포트 ID")
+    resume_id: int = Field(..., description="이력서 ID")
 
     # 10개 섹션
     basic_info: BasicInfo = Field(default_factory=BasicInfo, description="1. 기본 정보")
