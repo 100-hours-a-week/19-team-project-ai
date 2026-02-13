@@ -15,7 +15,7 @@ app = FastAPI(
 Instrumentator(
     should_group_status_codes=False,  # 200, 201 등 개별 status code 유지
     should_ignore_untemplated=True,  # 등록되지 않은 경로 무시
-    excluded_handlers=["/health", "/api/ai/metrics"],  # health/metrics는 집계 제외
+    excluded_handlers=["/health", "/api/ai/health", "/api/ai/metrics"],  # health/metrics는 집계 제외
     inprogress_name="ai_inprogress_requests",
     inprogress_labels=True,
 ).instrument(app).expose(app, endpoint="/api/ai/metrics", include_in_schema=False)
