@@ -168,14 +168,16 @@ class ReportPipeline:
         chat_messages: list[dict] | None,
     ) -> dict:
         """10개 섹션 리포트 빌드"""
+        from services.repo.utils import map_standard_position
+
         ai_data = ai_analysis.get("requirements", {})
 
         # 1. 기본 정보
         # AI가 뽑은 30자 이내 제목 사용
         short_title = ai_data.get("short_title", job_data.get("title", ""))
         basic_info = BasicInfo(
-            job_title=short_title,
-            job_position=job_data.get("title", ""),
+            job_post_title=short_title,
+            job_post_position=map_standard_position(job_data.get("title", "")),
             report_date=datetime.now().strftime("%Y-%m-%d"),
         )
 

@@ -126,7 +126,8 @@ class JobParseResponse(BaseModel):
     """채용공고 파싱 응답"""
 
     job_post_id: int = Field(..., description="채용공고 ID")
-    title: str | None = Field(default=None, description="직무/포지션명")
+    job_post_title: str | None = Field(default=None, description="채용공고 원문 제목")
+    job_post_position: str | None = Field(default=None, description="정규화된 직무 명칭")
     company: str | None = Field(default=None, description="회사명")
     employment_type: str | None = Field(default=None, description="고용 형태")
     experience_level: str | None = Field(default=None, description="요구 경력")
@@ -157,8 +158,8 @@ class ReportGenerateRequest(BaseModel):
 class BasicInfo(BaseModel):
     """1. 기본 정보"""
 
-    job_title: str | None = Field(default=None, description="지원 공고 제목")
-    job_position: str | None = Field(default=None, description="지원하는 직무")
+    job_post_title: str | None = Field(default=None, description="지원 공고 제목")
+    job_post_position: str | None = Field(default=None, description="지원하는 직무")
     report_date: str = Field(default_factory=lambda: datetime.now().strftime("%Y-%m-%d"), description="리포트 생성일")
 
 
