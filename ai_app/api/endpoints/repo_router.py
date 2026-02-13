@@ -1,9 +1,10 @@
-"""레포트 생성 라우터 - 11개 섹션 리포트"""
+"""레포트 생성 라우터 - 10개 섹션 리포트"""
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
 
 from controllers.repo_controller import get_repo_controller
 from schemas.common import ApiResponse, ResponseCode
+from services.repo.scoring import filter_tech_requirements
 from schemas.repo import (
     ActionPlan,
     BasicInfo,
@@ -17,7 +18,6 @@ from schemas.repo import (
     Reliability,
     ReportGenerateRequest,
     ReportGenerateResponse,
-    RequirementComparison,
     StrengthsAnalysis,
     TechCoverage,
 )
@@ -73,13 +73,7 @@ async def upload_resume_for_test(file: UploadFile = File(...)):
 
 @router.post("/job", response_model=ApiResponse[JobParseResponse])
 async def parse_job(request: JobParseRequest):
-    """채용공고 파싱 (URL 또는 텍스트)"""
-    if not request.job_url and not request.job_text:
-        raise HTTPException(
-            status_code=400,
-            detail={"code": ResponseCode.BAD_REQUEST.value, "data": "job_url 또는 job_text 필수"},
-        )
-
+    """채용공고 파싱 (URL)"""
     controller = get_repo_controller()
     result = await controller.parse_job(request)
 
@@ -90,42 +84,59 @@ async def parse_job(request: JobParseRequest):
         )
 
     data = result.get("data", {})
+
+    # company 필드 처리: CrawlerService는 dict(name, industry, location), LLM은 str
+    company_raw = data.get("company")
+    if isinstance(company_raw, dict):
+        company_name = company_raw.get("name")
+    else:
+        company_name = company_raw
+
+    qualifications = data.get("qualifications", [])
+    preferred_qualifications = data.get("preferred_qualifications", [])
+    tech_stack = data.get("tech_stack") or filter_tech_requirements(qualifications + preferred_qualifications)
+
     return ApiResponse(
         code=ResponseCode.OK,
         data=JobParseResponse(
             job_id=result.get("job_id", ""),
             title=data.get("title"),
-            company=data.get("company"),
-            department=data.get("department"),
-            employment_type=data.get("employment_type"),
-            experience_required=data.get("experience_required"),
-            education_required=data.get("education_required"),
-            requirements=data.get("requirements", []),
-            preferences=data.get("preferences", []),
-            tech_stack=data.get("tech_stack", []),
+            company=company_name,
+            employment_type=data.get("job_type") or data.get("employment_type"),
+            experience_level=data.get("experience_level"),
+            education=data.get("education"),
             responsibilities=data.get("responsibilities", []),
+            qualifications=qualifications,
+            preferred_qualifications=preferred_qualifications,
+            tech_stack=tech_stack,
+            location=data.get("location"),
+            benefits=data.get("benefits", []),
+            hiring_process=data.get("hiring_process", []),
+            notes=data.get("etc", []),
         ),
     )
 
 
 @router.post("/generate", response_model=ApiResponse[ReportGenerateResponse])
 async def generate_report(request: ReportGenerateRequest):
-    """리포트 생성 - 11개 섹션
+    """리포트 생성 - 10개 섹션
 
     현직자 피드백 + AI 분석을 통합하여 리포트를 생성합니다.
 
     - **resume_id**: 이력서 ID (필수)
-    - **job_url**: 채용공고 URL (필수)
+    - **job_id**: 채용공고 ID (필수, /repo/job에서 반환된 ID)
     - **mentor_feedback**: 현직자 피드백 (선택)
     - **chat_messages**: 채팅 메시지 (선택)
     """
-    if not request.job_url and not request.job_text:
-        raise HTTPException(
-            status_code=400,
-            detail={"code": ResponseCode.BAD_REQUEST.value, "data": "job_url은 필수입니다"},
-        )
-
     controller = get_repo_controller()
+
+    # job_id로 저장된 채용공고 데이터 조회
+    job_data = controller._job_store.get(request.job_id)
+    if not job_data:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": ResponseCode.NOT_FOUND.value, "data": f"job_id '{request.job_id}'에 해당하는 채용공고가 없습니다. /repo/job을 먼저 호출하세요."},
+        )
 
     # resume_id로 저장된 이력서 데이터 조회
     resume_data = _resume_store.get(request.resume_id)
@@ -143,8 +154,7 @@ async def generate_report(request: ReportGenerateRequest):
     if request.user_skills:
         resume_data["skills"] = request.user_skills
 
-    result = await controller.generate_report(request, resume_data)
-
+    result = await controller.generate_report(request, resume_data, job_data)
 
     if not result.get("success"):
         raise HTTPException(
@@ -160,7 +170,6 @@ async def generate_report(request: ReportGenerateRequest):
             report_id=result.get("report_id", ""),
             resume_id=request.resume_id,
             basic_info=BasicInfo(**report_data.get("basic_info", {})),
-            requirement_comparison=RequirementComparison(**report_data.get("requirement_comparison", {})),
             tech_coverage=TechCoverage(**report_data.get("tech_coverage", {})),
             capability_matching=CapabilityMatching(**report_data.get("capability_matching", {})),
             strengths_analysis=StrengthsAnalysis(**report_data.get("strengths_analysis", {})),
@@ -195,7 +204,6 @@ async def get_report(report_id: str):
             report_id=result.get("report_id", ""),
             resume_id=result.get("resume_id", ""),
             basic_info=BasicInfo(**report_data.get("basic_info", {})),
-            requirement_comparison=RequirementComparison(**report_data.get("requirement_comparison", {})),
             tech_coverage=TechCoverage(**report_data.get("tech_coverage", {})),
             capability_matching=CapabilityMatching(**report_data.get("capability_matching", {})),
             strengths_analysis=StrengthsAnalysis(**report_data.get("strengths_analysis", {})),

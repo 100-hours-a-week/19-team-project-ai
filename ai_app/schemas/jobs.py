@@ -64,7 +64,8 @@ class JobPosting(BaseModel):
     responsibilities: list[str] = Field(default_factory=list, description="주요 업무")
     qualifications: list[str] = Field(default_factory=list, description="자격 요건")
     preferred_qualifications: list[str] = Field(default_factory=list, description="우대사항")
-    benefits: list[str] = Field(default_factory=list, description="근무 조건 및 복지/혜택")
+    tech_stack: list[str] = Field(default_factory=list, description="사용 기술")
+    benefits: list[str] = Field(default_factory=list, description="복지 및 혜택")
     hiring_process: list[str] = Field(default_factory=list, description="채용절차")
     etc: list[str] = Field(default_factory=list, description="기타 정보")
 

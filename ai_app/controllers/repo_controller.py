@@ -8,7 +8,7 @@ from schemas.repo import (
     MentorFeedback,
     ReportGenerateRequest,
 )
-from services.repo import parse_job_from_text, parse_job_from_url
+from services.repo import parse_job_from_url
 from services.repo.report_pipeline import get_report_pipeline
 
 
@@ -17,21 +17,39 @@ class RepoController:
 
     def __init__(self):
         self.report_pipeline = get_report_pipeline()
-        # 임시 저장소 (실제로는 DB)
         self._job_store: dict[str, dict] = {}
         self._report_store: dict[str, dict] = {}
 
     async def parse_job(self, request: JobParseRequest) -> dict[str, Any]:
-        """채용공고 파싱"""
-        if request.job_url:
-            result = await parse_job_from_url(request.job_url)
-        elif request.job_text:
-            result = await parse_job_from_text(request.job_text)
-        else:
-            return {
-                "success": False,
-                "error": "job_url 또는 job_text 중 하나는 필수입니다.",
-            }
+        """채용공고 파싱 - CrawlerService 우선, LLM fallback"""
+        import logging
+
+        logger = logging.getLogger(__name__)
+
+        # 1. CrawlerService 우선 시도 (사람인/잡코리아/원티드)
+        try:
+            from services.job_crawler.crawler_service import get_crawler_service
+
+            crawler_service = get_crawler_service()
+            job_posting = await crawler_service.parse_url(request.job_url)
+
+            if job_posting:
+                job_data = job_posting.model_dump()
+                job_id = f"job_{len(self._job_store) + 1}"
+                self._job_store[job_id] = job_data
+                logger.info(f"CrawlerService 파싱 성공 - {job_data.get('title')}")
+                return {
+                    "success": True,
+                    "job_id": job_id,
+                    "data": job_data,
+                }
+
+            logger.info("CrawlerService가 이 URL을 지원하지 않음, LLM fallback 시도")
+        except Exception as e:
+            logger.warning(f"CrawlerService 파싱 실패, LLM fallback: {e}")
+
+        # 2. LLM fallback
+        result = await parse_job_from_url(request.job_url)
 
         if result.get("success"):
             job_data = result.get("data", {})
@@ -50,6 +68,7 @@ class RepoController:
         self,
         request: ReportGenerateRequest,
         resume_data: dict,
+        job_data: dict,
     ) -> dict[str, Any]:
         """리포트 생성 - 현직자 피드백 + AI 분석 통합"""
 
@@ -61,8 +80,7 @@ class RepoController:
         # 리포트 파이프라인 실행
         result = await self.report_pipeline.generate(
             resume_data=resume_data,
-            job_url=request.job_url,
-            job_text=request.job_text,
+            job_data=job_data,
             resume_id=request.resume_id,
             mentor_feedback=request.mentor_feedback,
             chat_messages=chat_messages,

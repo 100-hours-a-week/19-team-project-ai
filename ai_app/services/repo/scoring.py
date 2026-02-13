@@ -9,6 +9,20 @@ from schemas.repo import FitLevel, FulfillmentLevel
 
 logger = logging.getLogger(__name__)
 
+# 경력/학력 등 메타데이터 키워드 (기술 요구사항이 아닌 항목 필터링용)
+_NON_TECH_KEYWORDS = ["경력", "학력", "신입", "졸업", "무관"]
+
+
+def _is_tech_requirement(text: str) -> bool:
+    """기술 요구사항인지 판별 (경력/학력 메타데이터 제외)"""
+    lower = text.lower().strip()
+    return not any(kw in lower for kw in _NON_TECH_KEYWORDS)
+
+
+def filter_tech_requirements(items: list[str]) -> list[str]:
+    """기술 요구사항만 필터링 (경력/학력 관련 항목 제외)"""
+    return [item for item in items if _is_tech_requirement(item)]
+
 
 # ============== AI 분석 결과 스키마 ==============
 
@@ -20,16 +34,28 @@ class RequirementAssessment(BaseModel):
     reason: str = Field(..., description="판단 근거")
 
 
+class TechMatch(BaseModel):
+    """기술 스택 매핑 결과"""
+    tech: str = Field(..., description="공고 요구 기술")
+    status: str = Field(..., description="충족/부분충족/미충족")
+    reason: str = Field(..., description="매핑 근거 (예: 동의어, 유사 기술 등)")
+
+class ItemWithReason(BaseModel):
+    """항목과 그에 대한 AI의 분석 이유"""
+    item: str = Field(..., description="항목 (요구사항/강점/보완점 등)")
+    reason: str = Field(..., description="분석 근거 및 이유")
+
+
 class AIAnalysisResult(BaseModel):
     """AI 분석 결과"""
-    top_requirements: list[str] = Field(default_factory=list, description="중요 요구사항 Top 3")
-    assessments: list[RequirementAssessment] = Field(default_factory=list, description="요구사항별 평가")
-    strengths: list[str] = Field(default_factory=list, description="강점 2개")
-    improvements: list[str] = Field(default_factory=list, description="보완점 2개")
+    short_title: str = Field(..., description="지원 공고 요약 제목 (30자 내)")
+    top_requirements: list[ItemWithReason] = Field(default_factory=list, description="중요 요구사항 Top 3와 이유")
+    assessments: list[RequirementAssessment] = Field(default_factory=list, description="현직자 요구사항에 대한 AI 평가")
+    strengths: list[ItemWithReason] = Field(default_factory=list, description="강점 2개와 이유")
+    improvements: list[ItemWithReason] = Field(default_factory=list, description="보완점 2개와 이유")
     action_items: list[str] = Field(default_factory=list, description="2주 내 액션 2개")
-    job_fit: str = Field(default="중", description="직무 적합도")
-    pass_probability: str = Field(default="중", description="서류 통과 가능성")
-    overall_comment: str = Field(default="", description="AI 총평")
+    overall_comment: str = Field(default="", description="AI 총평 (300자 이내)")
+    tech_matches: list[TechMatch] = Field(default_factory=list, description="기술 스택 지능형 매칭 결과 (동의어 매핑, 유사 기술 부분 충족 반영)")
     unverifiable_items: list[str] = Field(default_factory=list, description="확인 불가 항목")
     confidence_score: float = Field(default=70.0, description="신뢰도")
     confidence_reason: str = Field(default="", description="신뢰도 근거")
@@ -37,28 +63,38 @@ class AIAnalysisResult(BaseModel):
 
 # ============== 시스템 프롬프트 ==============
 
-ANALYSIS_SYSTEM_PROMPT = """당신은 채용 전문가입니다. 이력서와 채용공고를 분석하여 적합도를 평가합니다.
+ANALYSIS_SYSTEM_PROMPT = """당신은 현직자(멘토) 수준의 시각을 가진 채용 전문가입니다. 이력서, 채용공고, 그리고 대화 채팅 로그를 종합적으로 분석하여 핵심 데이터를 생성합니다.
 
-평가 규칙:
-1. top_requirements: 공고에서 가장 중요한 요구사항 3개 선정
-2. assessments: 각 요구사항에 대해 충족/부분충족/미충족 판단 + 구체적 근거
-3. strengths: 이 공고에 특히 유리한 강점 2개
-4. improvements: 보완이 필요한 점 2개
-5. action_items: 2주 내 실행 가능한 구체적 액션 2개
-6. job_fit: 상(잘 맞음)/중(기본은 갖춤)/하(적합도 낮음)
-7. pass_probability: 상(높음)/중(보완 시 가능)/하(어려움)
-8. overall_comment: 200자 이내 종합 평가
-9. unverifiable_items: 이력서에서 확인 불가한 사항
+평가 규정:
+1. short_title: 채용공고의 특징을 살려 30자 이내의 매력적인 요약 제목 생성
+2. top_requirements: 다음 카테고리 중 가장 중요한 3개를 선정하고, 왜 중요한지 AI 관점의 이유(reason)를 구체적으로 기술
+   [특정 기술 스택 숙련도, 관련 프로젝트 경험, 도메인 지식, 협업/커뮤니케이션 경험, 문제 해결력/트러블슈팅 경험, 대용량 트래픽/성능 최적화 경험, 경력 연차 및 학력, 성장 가능성/학습 의지]
+3. assessments: 현직자(멘토)가 선택해서 넘어온 3개 요구사항에 대해 AI가 충족/부분충족/미충족 판단 + 구체적 근거
+4. strengths: 다음 중 강점 2개 선정 + 분석 이유(AI 관점)
+   [기술 역량, 문제 해결력, 커뮤니케이션, 프로젝트 경험, 성장 가능성, 도메인 이해도, 협업 능력, 자기 표현력]
+5. improvements: 다음 중 보완점 2개 선정 + 분석 이유(AI 관점)
+   [기술 깊이 부족, 도메인 지식 부족, 프로젝트 규모/복잡도 부족, 성과 정량화 부족, 경력 부족/연속성, 직무 연관성 부족, 포트폴리오 보완 필요, 경험 다양성 부족]
+6. action_items: 2주 내 실행 가능한 구체적 액션 2개
+7. overall_comment: 300자 이내의 종합 분석 총평 (핵심 위주로 기술)
+8. tech_matches: 공고 기술과 이력서 기술의 지능형 매칭 (동의어 '충족', 유사 '부분충족')
+9. unverifiable_items: 데이터 부족으로 확인 불가한 사항 리스트
 10. confidence_score: 분석 신뢰도 (0-100)
 """
 
 
-async def analyze_requirements(resume_data: dict, job_data: dict) -> dict[str, Any]:
-    """이력서-채용공고 요구사항 분석
+async def analyze_requirements(
+    resume_data: dict,
+    job_data: dict,
+    chat_messages: list[dict] | None = None,
+    mentor_requirements: list[str] | None = None,
+) -> dict[str, Any]:
+    """이력서-채용공고 요구사항 분석 (채팅 내역 포함)
 
     Args:
         resume_data: 이력서 파싱 데이터
         job_data: 채용공고 파싱 데이터
+        chat_messages: 채팅 메시지 목록
+        mentor_requirements: 현직자가 선택한 핵심 요구사항 3개
 
     Returns:
         AI 분석 결과
@@ -74,22 +110,37 @@ async def analyze_requirements(resume_data: dict, job_data: dict) -> dict[str, A
     else:
         company_name = company_info
 
+    # 현직자 요구사항 섹션
+    mentor_req_text = ""
+    if mentor_requirements:
+        mentor_req_text = f"""
+<현직자 선택 핵심 요구사항>
+{chr(10).join([f'{i+1}. {req}' for i, req in enumerate(mentor_requirements)])}
+</현직자 선택 핵심 요구사항>
+
+위 현직자가 선택한 3개 요구사항에 대해 assessments 필드에서 각각 AI 관점의 충족/부분충족/미충족 판단과 근거를 작성하세요.
+"""
+
     prompt = f"""다음 이력서와 채용공고를 분석하세요:
 
 <이력서>
 {_format_resume(resume_data)}
 </이력서>
 
+<대화 내용>
+{', '.join([f"{msg.get('sender', {}).get('nickname')}: {msg.get('content')}" for msg in chat_messages]) if chat_messages else '채팅 내역 없음'}
+</대화 내용>
+
 <채용공고>
 포지션: {job_data.get('title', '미상')}
 회사: {company_name}
-요구 경력: {job_data.get('experience_level') or job_data.get('experience_required', '미상')}
+요구 경력: {job_data.get('experience_level', '미상')}
 주요 업무: {', '.join(job_data.get('responsibilities', []))}
 자격 요건: {', '.join(job_data.get('qualifications', []))}
 우대 사항: {', '.join(job_data.get('preferred_qualifications', []))}
 근무조건/복지: {', '.join(job_data.get('benefits', []))}
 </채용공고>
-
+{mentor_req_text}
 분석 결과를 JSON 형식으로 응답하세요."""
 
     try:
@@ -100,22 +151,10 @@ async def analyze_requirements(resume_data: dict, job_data: dict) -> dict[str, A
             temperature=0.2,
         )
 
-        # 문자열 → Enum 변환
-        fit_map = {"상": FitLevel.HIGH, "중": FitLevel.MEDIUM, "하": FitLevel.LOW}
+        # assessments의 level 문자열을 Enum으로 변환
         level_map = {"충족": FulfillmentLevel.FULFILLED, "부분충족": FulfillmentLevel.PARTIAL, "미충족": FulfillmentLevel.NOT_FULFILLED}
-
-        result["job_fit"] = fit_map.get(result.get("job_fit", "중"), FitLevel.MEDIUM)
-        result["pass_probability"] = fit_map.get(result.get("pass_probability", "중"), FitLevel.MEDIUM)
-
-        # assessments를 dict로 변환
-        assessments_dict = {}
         for a in result.get("assessments", []):
-            req = a.get("requirement", "")
-            assessments_dict[req] = {
-                "level": level_map.get(a.get("level", "미충족"), FulfillmentLevel.NOT_FULFILLED),
-                "reason": a.get("reason", ""),
-            }
-        result["assessments"] = assessments_dict
+            a["level"] = level_map.get(a.get("level", "미충족"), FulfillmentLevel.NOT_FULFILLED)
 
         logger.info("AI 분석 완료")
         return result
@@ -149,8 +188,10 @@ async def analyze_tech_coverage(resume_data: dict, job_data: dict) -> dict[str, 
     """
     logger.info("기술 스택 커버리지 분석 시작")
 
-    # 공고의 자격요건에서 기술 추출
-    required_techs = set(t.lower() for t in job_data.get("qualifications", []))
+    # 공고의 자격요건에서 기술 추출 (경력/학력 메타데이터 제외)
+    raw_qualifications = job_data.get("qualifications", [])
+    filtered_qualifications = filter_tech_requirements(raw_qualifications)
+    required_techs = set(t.lower() for t in filtered_qualifications)
     preferred_techs = set()
 
     # 우대사항에서 기술 추출
@@ -199,6 +240,11 @@ def _format_resume(resume_data: dict) -> str:
 
     if resume_data.get("title"):
         parts.append(f"제목: {resume_data['title']}")
+
+    # 보유 기술 스택
+    skills = resume_data.get("skills", []) or resume_data.get("owned_techs", [])
+    if skills:
+        parts.append(f"보유 기술: {', '.join(skills)}")
 
     work_exp = resume_data.get("work_experience", [])
     if work_exp:

@@ -138,7 +138,7 @@ class ResumesController:
         enable_pii_masking: bool = True,
     ) -> ResumeData:
         """
-        [임시] PDF bytes에서 직접 이력서 추출 파이프라인 실행
+        PDF bytes에서 직접 이력서 추출 파이프라인 실행
 
         Args:
             resume_id: 이력서 ID

@@ -77,8 +77,8 @@ async def generate_summary(
 <채용공고>
 포지션: {job_data.get('title', '미상')}
 회사: {job_data.get('company', '미상')}
-필수 요구사항: {', '.join(job_data.get('requirements', [])[:5])}
-우대사항: {', '.join(job_data.get('preferences', [])[:5])}
+자격요건: {', '.join(job_data.get('qualifications', [])[:5])}
+우대사항: {', '.join(job_data.get('preferred_qualifications', [])[:5])}
 </채용공고>
 
 <적합도 분석>

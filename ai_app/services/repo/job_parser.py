@@ -23,7 +23,8 @@ class ExtractedJobPosting(BaseModel):
     responsibilities: list[str] = Field(default_factory=list, description="주요 업무/담당 업무")
     qualifications: list[str] = Field(default_factory=list, description="자격 요건 (필수)")
     preferred_qualifications: list[str] = Field(default_factory=list, description="우대 조건 (선택)")
-    benefits: list[str] = Field(default_factory=list, description="근무 조건 및 복지/혜택 (고용형태, 급여, 근무지, 복리후생 등)")
+    tech_stack: list[str] = Field(default_factory=list, description="사용 기술/기술 스택 (예: React, Spring Boot, Docker 등)")
+    benefits: list[str] = Field(default_factory=list, description="복지 및 혜택 (복리후생, 근무 환경 등)")
     hiring_process: list[str] = Field(default_factory=list, description="채용 절차/전형")
     etc: list[str] = Field(default_factory=list, description="기타 (유의사항, 분류 불가 정보)")
 
@@ -40,9 +41,10 @@ JOB_PARSING_SYSTEM_PROMPT = """당신은 채용공고 분석 전문가입니다.
 4. responsibilities: 주요 업무, 담당 업무, 역할, 직무 내용
 5. qualifications: 자격 요건, 필수 조건, 지원 자격, 필요 역량
 6. preferred_qualifications: 우대 사항, 우대 조건, 이런 분이면 더 좋아요
-7. benefits: 근무 조건(고용형태, 급여, 근무지) + 복리후생/혜택을 하나로 합칩니다
-8. hiring_process: 전형 절차, 채용 과정, 접수 기간/방법
-9. etc: 유의사항, 분류하기 어려운 정보
+7. tech_stack: 사용 기술, 기술 스택, 개발 환경 (예: React, Spring Boot, Docker 등 기술명 위주로 추출)
+8. benefits: 복지 및 혜택, 복리후생 (고용형태, 급여, 근무지는 제외)
+9. hiring_process: 전형 절차, 채용 과정, 접수 기간/방법
+10. etc: 유의사항, 분류하기 어려운 정보
 10. 각 항목은 간결하게 한 줄로 정리합니다
 """
 
@@ -90,6 +92,7 @@ JSON 형식으로 응답하세요."""
             "responsibilities": [],
             "qualifications": [],
             "preferred_qualifications": [],
+            "tech_stack": [],
             "benefits": [],
             "hiring_process": [],
             "etc": [],

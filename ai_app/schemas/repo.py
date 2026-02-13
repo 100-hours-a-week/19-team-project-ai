@@ -115,31 +115,31 @@ class ChatMessage(BaseModel):
 
 class JobParseRequest(BaseModel):
     """채용공고 파싱 요청"""
-    job_url: str | None = Field(default=None, description="채용공고 URL")
-    job_text: str | None = Field(default=None, description="채용공고 텍스트")
+    job_url: str = Field(..., description="채용공고 URL")
 
 
 class JobParseResponse(BaseModel):
     """채용공고 파싱 응답"""
     job_id: str = Field(..., description="채용공고 ID")
-    title: str | None = Field(default=None, description="채용 포지션명")
+    title: str | None = Field(default=None, description="직무/포지션명")
     company: str | None = Field(default=None, description="회사명")
-    department: str | None = Field(default=None, description="부서/팀명")
     employment_type: str | None = Field(default=None, description="고용 형태")
-    experience_required: str | None = Field(default=None, description="요구 경력")
-    education_required: str | None = Field(default=None, description="요구 학력")
-    requirements: list[str] = Field(default_factory=list, description="필수 요구사항")
-    preferences: list[str] = Field(default_factory=list, description="우대사항")
-    tech_stack: list[str] = Field(default_factory=list, description="기술 스택")
+    experience_level: str | None = Field(default=None, description="요구 경력")
+    education: str | None = Field(default=None, description="요구 학력")
     responsibilities: list[str] = Field(default_factory=list, description="주요 업무")
+    qualifications: list[str] = Field(default_factory=list, description="자격요건")
+    preferred_qualifications: list[str] = Field(default_factory=list, description="우대사항")
+    tech_stack: list[str] = Field(default_factory=list, description="사용 기술")
+    location: str | None = Field(default=None, description="근무지")
+    benefits: list[str] = Field(default_factory=list, description="복지 및 혜택")
+    hiring_process: list[str] = Field(default_factory=list, description="채용절차")
+    notes: list[str] = Field(default_factory=list, description="유의사항")
 
 
 class ReportGenerateRequest(BaseModel):
     """리포트 생성 요청"""
     resume_id: str = Field(..., description="이력서 ID")
-    job_url: str | None = Field(default=None, description="채용공고 URL")
-    job_text: str | None = Field(default=None, description="채용공고 텍스트")
-    job_id: str | None = Field(default=None, description="이미 파싱된 채용공고 ID")
+    job_id: str = Field(..., description="채용공고 ID (/repo/job에서 반환된 ID)")
     user_skills: list[str] | None = Field(default=None, description="사용자 보유 기술 스택 (DB에서 조회)")
     mentor_feedback: MentorFeedback | None = Field(default=None, description="현직자 피드백")
     chat_messages: list[ChatMessage] | None = Field(default=None, description="채팅 메시지")
@@ -156,17 +156,14 @@ class BasicInfo(BaseModel):
     report_date: str = Field(default_factory=lambda: datetime.now().strftime("%Y-%m-%d"), description="리포트 생성일")
 
 
-class RequirementComparison(BaseModel):
-    """2. 공고 핵심 요구사항 비교"""
-    mentor_selected: list[str] = Field(default_factory=list, description="현직자가 중요하다고 선택한 요구사항 3개")
-    ai_selected: list[str] = Field(default_factory=list, description="AI가 중요하다고 판단한 요구사항 3개")
-    common_items: list[str] = Field(default_factory=list, description="공통 항목")
-    mentor_perspective: str | None = Field(default=None, description="현직자 관점 차이")
-    ai_perspective: str | None = Field(default=None, description="AI 관점 차이")
+class AIRequirement(BaseModel):
+    """AI가 선정한 요구사항과 이유"""
+    requirement: str = Field(..., description="요구사항")
+    reason: str = Field(..., description="선택 이유")
 
 
 class TechCoverage(BaseModel):
-    """3. 기술 스택 커버리지"""
+    """2. 기술 스택 커버리지"""
     required_techs: list[str] = Field(default_factory=list, description="공고 요구 기술 (필수)")
     preferred_techs: list[str] = Field(default_factory=list, description="공고 요구 기술 (우대)")
     owned_techs: list[str] = Field(default_factory=list, description="보유 기술")
@@ -186,47 +183,49 @@ class CapabilityMatch(BaseModel):
 
 
 class CapabilityMatching(BaseModel):
-    """4. 역량 매칭 비교"""
-    matches: list[CapabilityMatch] = Field(default_factory=list, description="역량 매칭 목록")
+    """3. 역량 매칭 비교"""
+    ai_top_requirements: list[AIRequirement] = Field(default_factory=list, description="AI가 중요하다고 판단한 요구사항 3개와 이유")
+    matches: list[CapabilityMatch] = Field(default_factory=list, description="핵심 요구사항(현직자 선택 3가지) 매칭 결과")
 
 
 class StrengthsAnalysis(BaseModel):
-    """5. 강점 통합 분석"""
+    """4. 강점 통합 분석"""
     common_strengths: list[str] = Field(default_factory=list, description="공통 강점")
     mentor_only_strengths: list[str] = Field(default_factory=list, description="현직자만 언급한 강점")
     ai_only_strengths: list[str] = Field(default_factory=list, description="AI만 언급한 강점")
+    ai_reason: str = Field(default="", description="AI 관점 강점 분석 이유 (2개 추출 근거)")
 
 
 class ImprovementsAnalysis(BaseModel):
-    """6. 보완점 통합 분석"""
+    """5. 보완점 통합 분석"""
     common_improvements: list[str] = Field(default_factory=list, description="공통 보완점")
     mentor_only_improvements: list[str] = Field(default_factory=list, description="현직자만 언급한 보완점")
     ai_only_improvements: list[str] = Field(default_factory=list, description="AI만 언급한 보완점")
+    ai_reason: str = Field(default="", description="AI 관점 보완점 분석 이유 (2개 추출 근거)")
 
 
 class ActionPlan(BaseModel):
-    """7. 2주 액션 플랜"""
+    """6. 2주 액션 플랜"""
     mentor_actions: list[str] = Field(default_factory=list, description="현직자 관점 2주 내 액션 2개")
     ai_actions: list[str] = Field(default_factory=list, description="AI 관점 2주 내 액션 2개")
-    top_priorities: list[str] = Field(default_factory=list, description="통합 우선순위 Top 3")
 
 
 class OverallEvaluation(BaseModel):
-    """8. 종합 평가 요약"""
-    job_fit: FitLevel = Field(default=FitLevel.MEDIUM, description="직무 적합도")
-    pass_probability: FitLevel = Field(default=FitLevel.MEDIUM, description="서류 통과 가능성")
+    """7. 종합 평가 요약"""
+    job_fit: FitLevel = Field(default=FitLevel.MEDIUM, description="현직자의 직무 적합도")
+    pass_probability: FitLevel = Field(default=FitLevel.MEDIUM, description="현직자의 서류 통과 가능성")
 
 
 class FinalComment(BaseModel):
-    """9. 총평"""
+    """8. 총평"""
     mentor_comment: str = Field(default="", description="현직자 총평")
-    ai_comment: str = Field(default="", description="AI 총평")
+    ai_comment: str = Field(default="", description="AI 총평 (300자 내)")
 
 
 class DataSources(BaseModel):
-    """10. 사용된 데이터"""
-    resume_used: bool = Field(default=False, description="이력서 사용 여부")
-    job_posting_used: bool = Field(default=False, description="채용 공고 사용 여부")
+    """9. 사용된 데이터"""
+    resume_used: bool = Field(default=False, description="이력서 사용 여부 (선택)")
+    job_posting_used: bool = Field(default=False, description="채용 공고 사용 여부 (선택)")
     chat_used: bool = Field(default=True, description="채팅 사용 여부 (필수)")
     ai_analysis_used: bool = Field(default=True, description="AI 분석 사용 여부 (필수)")
     privacy_notice: str = Field(
@@ -236,7 +235,7 @@ class DataSources(BaseModel):
 
 
 class Reliability(BaseModel):
-    """11. 확인 불가 항목 및 신뢰도"""
+    """10. 확인 불가 항목 및 신뢰도"""
     unverifiable_items: list[str] = Field(default_factory=list, description="확인 불가 항목")
     confidence_score: float = Field(default=0.0, description="신뢰도/확신도 (0-100)")
     confidence_reason: str = Field(default="", description="신뢰도 판단 근거")
@@ -251,17 +250,16 @@ class ReportGenerateResponse(BaseModel):
     report_id: str = Field(..., description="리포트 ID")
     resume_id: str = Field(..., description="이력서 ID")
 
-    # 11개 섹션
+    # 10개 섹션
     basic_info: BasicInfo = Field(default_factory=BasicInfo, description="1. 기본 정보")
-    requirement_comparison: RequirementComparison = Field(default_factory=RequirementComparison, description="2. 공고 핵심 요구사항 비교")
-    tech_coverage: TechCoverage = Field(default_factory=TechCoverage, description="3. 기술 스택 커버리지")
-    capability_matching: CapabilityMatching = Field(default_factory=CapabilityMatching, description="4. 역량 매칭 비교")
-    strengths_analysis: StrengthsAnalysis = Field(default_factory=StrengthsAnalysis, description="5. 강점 통합 분석")
-    improvements_analysis: ImprovementsAnalysis = Field(default_factory=ImprovementsAnalysis, description="6. 보완점 통합 분석")
-    action_plan: ActionPlan = Field(default_factory=ActionPlan, description="7. 2주 액션 플랜")
-    overall_evaluation: OverallEvaluation = Field(default_factory=OverallEvaluation, description="8. 종합 평가 요약")
-    final_comment: FinalComment = Field(default_factory=FinalComment, description="9. 총평")
-    data_sources: DataSources = Field(default_factory=DataSources, description="10. 사용된 데이터")
-    reliability: Reliability = Field(default_factory=Reliability, description="11. 확인 불가 항목 및 신뢰도")
+    tech_coverage: TechCoverage = Field(default_factory=TechCoverage, description="2. 기술 스택 커버리지")
+    capability_matching: CapabilityMatching = Field(default_factory=CapabilityMatching, description="3. 역량 매칭 비교")
+    strengths_analysis: StrengthsAnalysis = Field(default_factory=StrengthsAnalysis, description="4. 강점 통합 분석")
+    improvements_analysis: ImprovementsAnalysis = Field(default_factory=ImprovementsAnalysis, description="5. 보완점 통합 분석")
+    action_plan: ActionPlan = Field(default_factory=ActionPlan, description="6. 2주 액션 플랜")
+    overall_evaluation: OverallEvaluation = Field(default_factory=OverallEvaluation, description="7. 종합 평가 요약")
+    final_comment: FinalComment = Field(default_factory=FinalComment, description="8. 총평")
+    data_sources: DataSources = Field(default_factory=DataSources, description="9. 사용된 데이터")
+    reliability: Reliability = Field(default_factory=Reliability, description="10. 확인 불가 항목 및 신뢰도")
 
     processing_time_ms: int | None = Field(default=None, description="처리 시간(ms)")

@@ -4,10 +4,12 @@
 import logging
 import time
 import uuid
+from datetime import datetime
 from dataclasses import dataclass
 
 from schemas.repo import (
     ActionPlan,
+    AIRequirement,
     BasicInfo,
     CapabilityMatch,
     CapabilityMatching,
@@ -19,12 +21,11 @@ from schemas.repo import (
     MentorFeedback,
     OverallEvaluation,
     Reliability,
-    RequirementComparison,
     StrengthsAnalysis,
     TechCoverage,
 )
 
-from services.repo.scoring import analyze_requirements, analyze_tech_coverage
+from services.repo.scoring import analyze_requirements, analyze_tech_coverage, filter_tech_requirements
 
 logger = logging.getLogger(__name__)
 
@@ -91,8 +92,7 @@ class ReportPipeline:
     async def generate(
         self,
         resume_data: dict,
-        job_url: str | None = None,
-        job_text: str | None = None,
+        job_data: dict,
         resume_id: str | None = None,
         mentor_feedback: MentorFeedback | None = None,
         chat_messages: list[dict] | None = None,
@@ -104,26 +104,13 @@ class ReportPipeline:
         logger.info(f"리포트 생성 시작 - report_id: {report_id}")
 
         try:
-            # 1. 채용공고 파싱 (CrawlerService 우선)
-            job_result = await self._parse_job(job_url, job_text)
-
-            if not job_result.get("success"):
-                return ReportResult(
-                    success=False,
-                    report_id=report_id,
-                    resume_id=resume_id,
-                    report_data=None,
-                    processing_time_ms=int((time.time() - start_time) * 1000),
-                    error_message=f"채용공고 파싱 실패: {job_result.get('error')}",
-                )
-
-            job_data = job_result.get("data", {})
-            logger.info(f"채용공고 파싱 완료 - 포지션: {job_data.get('title')}")
+            # 1. 저장된 채용공고 데이터 사용 (이미 파싱 완료)
+            logger.info(f"채용공고 데이터 사용 - 포지션: {job_data.get('title')}")
             logger.info(f"채용공고 자격요건: {job_data.get('qualifications', [])}")
             logger.info(f"채용공고 주요업무: {job_data.get('responsibilities', [])}")
 
-            # 2. AI 분석
-            ai_analysis = await self._run_ai_analysis(resume_data, job_data)
+            # 2. AI 분석 (채팅 내역 + 현직자 피드백 포함)
+            ai_analysis = await self._run_ai_analysis(resume_data, job_data, chat_messages, mentor_feedback)
 
             # 3. 11개 섹션 리포트 생성
             report_sections = await self._build_report_sections(
@@ -156,16 +143,25 @@ class ReportPipeline:
                 error_message=str(e),
             )
 
-    async def _run_ai_analysis(self, resume_data: dict, job_data: dict) -> dict:
+    async def _run_ai_analysis(
+        self,
+        resume_data: dict,
+        job_data: dict,
+        chat_messages: list[dict] | None = None,
+        mentor_feedback: MentorFeedback | None = None,
+    ) -> dict:
         """AI 분석 수행"""
-        # 기술 스택 커버리지
-        tech_coverage = await analyze_tech_coverage(resume_data, job_data)
+        # 현직자가 선택한 핵심 요구사항 추출
+        mentor_requirements = None
+        if mentor_feedback and mentor_feedback.key_requirements:
+            mentor_requirements = mentor_feedback.key_requirements
 
-        # 요구사항 분석
-        requirements_analysis = await analyze_requirements(resume_data, job_data)
+        # 기술 스택 커버리지 및 요구사항 통합 분석
+        requirements_analysis = await analyze_requirements(
+            resume_data, job_data, chat_messages, mentor_requirements
+        )
 
         return {
-            "tech_coverage": tech_coverage,
             "requirements": requirements_analysis,
         }
 
@@ -177,130 +173,135 @@ class ReportPipeline:
         mentor_feedback: MentorFeedback | None,
         chat_messages: list[dict] | None,
     ) -> dict:
-        """11개 섹션 리포트 빌드"""
+        """10개 섹션 리포트 빌드"""
+        ai_data = ai_analysis.get("requirements", {})
 
         # 1. 기본 정보
+        # AI가 뽑은 30자 이내 제목 사용
+        short_title = ai_data.get("short_title", job_data.get("title", ""))
         basic_info = BasicInfo(
-            job_title=job_data.get("title"),
-            job_position=job_data.get("department") or job_data.get("title"),
+            job_title=short_title,
+            job_position=job_data.get("title", ""),
+            report_date=datetime.now().strftime("%Y-%m-%d"),
         )
 
-        # 2. 공고 핵심 요구사항 비교
-        mentor_reqs = mentor_feedback.key_requirements if mentor_feedback else []
-        ai_reqs = ai_analysis.get("requirements", {}).get("top_requirements", [])[:3]
-        common_reqs = list(set(mentor_reqs) & set(ai_reqs))
+        # 2. 기술 스택 커버리지
+        tech_matches = ai_data.get("tech_matches", [])
+        
+        total_techs = len(tech_matches)
+        if total_techs > 0:
+            score = 0
+            for tm in tech_matches:
+                if tm.get("status") == "충족":
+                    score += 1.0
+                elif tm.get("status") == "부분충족":
+                    score += 0.5
+            coverage_rate = (score / total_techs) * 100
+        else:
+            coverage_rate = 0.0
 
-        requirement_comparison = RequirementComparison(
-            mentor_selected=mentor_reqs,
-            ai_selected=ai_reqs,
-            common_items=common_reqs,
-            mentor_perspective=ai_analysis.get("requirements", {}).get("mentor_perspective_diff", ""),
-            ai_perspective=ai_analysis.get("requirements", {}).get("ai_perspective_diff", ""),
-        )
+        missing_required = [tm.get("tech") for tm in tech_matches if tm.get("status") == "미충족"]
 
-        # 3. 기술 스택 커버리지
-        tech_data = ai_analysis.get("tech_coverage", {})
+        # 자격요건 + 우대사항을 합쳐서 기술 요구사항으로 분석
+        # (크롤러가 자격요건을 제대로 파싱하지 못하는 경우 대비)
+        all_requirements = job_data.get("qualifications", []) + job_data.get("preferred_qualifications", [])
+
         tech_coverage = TechCoverage(
-            required_techs=job_data.get("qualifications", []),
-            preferred_techs=job_data.get("preferred_qualifications", []),
-            owned_techs=resume_data.get("skills", []),
-            coverage_rate=tech_data.get("coverage_rate", 0.0),
-            missing_required=tech_data.get("missing_required", []),
-            missing_preferred=tech_data.get("missing_preferred", []),
+            required_techs=filter_tech_requirements(all_requirements),
+            preferred_techs=[],  # 이미 all_requirements에 포함됨
+            owned_techs=resume_data.get("skills", []) or resume_data.get("owned_techs", []),
+            coverage_rate=round(coverage_rate, 1),
+            missing_required=missing_required,
+            missing_preferred=[],
         )
 
-        # 4. 역량 매칭 비교
-        matches = []
+        # 3. 역량 매칭 비교 (기존 2, 4 통합)
+        # AI가 선정한 3가지 요구사항 + 이유
+        ai_top = [
+            AIRequirement(requirement=item.get("item", ""), reason=item.get("reason", ""))
+            for item in ai_data.get("top_requirements", [])
+        ]
+        
+        capability_matches = []
         if mentor_feedback:
+            ai_assessments = ai_data.get("assessments", [])
             for assessment in mentor_feedback.requirement_assessments:
-                ai_assessment = ai_analysis.get("requirements", {}).get("assessments", {}).get(
-                    assessment.requirement, {"level": FulfillmentLevel.NOT_FULFILLED, "reason": ""}
-                )
-                matches.append(CapabilityMatch(
+                # AI 평가 매칭
+                ai_ass = next((a for a in ai_assessments if a.get("requirement") == assessment.requirement), None)
+                
+                capability_matches.append(CapabilityMatch(
                     requirement=assessment.requirement,
                     mentor_assessment=assessment.fulfillment,
                     mentor_reason=assessment.reason,
-                    ai_assessment=ai_assessment.get("level", FulfillmentLevel.NOT_FULFILLED),
-                    ai_reason=ai_assessment.get("reason", ""),
-                    is_matched=assessment.fulfillment == ai_assessment.get("level"),
+                    ai_assessment=ai_ass.get("level", "미충족") if ai_ass else "미충족",
+                    ai_reason=ai_ass.get("reason", "") if ai_ass else "",
+                    is_matched=(assessment.fulfillment == (ai_ass.get("level") if ai_ass else None))
                 ))
 
-        capability_matching = CapabilityMatching(matches=matches)
-
-        # 5. 강점 통합 분석
-        mentor_strengths = set(mentor_feedback.strengths) if mentor_feedback else set()
-        ai_strengths = set(ai_analysis.get("requirements", {}).get("strengths", []))
-        common_strengths = list(mentor_strengths & ai_strengths)
-
-        strengths_analysis = StrengthsAnalysis(
-            common_strengths=common_strengths,
-            mentor_only_strengths=list(mentor_strengths - ai_strengths),
-            ai_only_strengths=list(ai_strengths - mentor_strengths),
+        capability_matching = CapabilityMatching(
+            ai_top_requirements=ai_top,
+            matches=capability_matches
         )
 
-        # 6. 보완점 통합 분석
-        mentor_improvements = set(mentor_feedback.improvements) if mentor_feedback else set()
-        ai_improvements = set(ai_analysis.get("requirements", {}).get("improvements", []))
-        common_improvements = list(mentor_improvements & ai_improvements)
+        # 4. 강점 통합 분석
+        mentor_strengths = mentor_feedback.strengths if mentor_feedback else []
+        ai_strengths_raw = ai_data.get("strengths", [])
+        ai_strengths = [s.get("item") for s in ai_strengths_raw]
+        
+        strengths_analysis = StrengthsAnalysis(
+            common_strengths=list(set(mentor_strengths) & set(ai_strengths)),
+            mentor_only_strengths=list(set(mentor_strengths) - set(ai_strengths)),
+            ai_only_strengths=list(set(ai_strengths) - set(mentor_strengths)),
+            ai_reason=". ".join([f"{s.get('item')}: {s.get('reason')}" for s in ai_strengths_raw])
+        )
+
+        # 5. 보완점 통합 분석
+        mentor_improvements = mentor_feedback.improvements if mentor_feedback else []
+        ai_improvements_raw = ai_data.get("improvements", [])
+        ai_improvements = [i.get("item") for i in ai_improvements_raw]
 
         improvements_analysis = ImprovementsAnalysis(
-            common_improvements=common_improvements,
-            mentor_only_improvements=list(mentor_improvements - ai_improvements),
-            ai_only_improvements=list(ai_improvements - ai_improvements),
+            common_improvements=list(set(mentor_improvements) & set(ai_improvements)),
+            mentor_only_improvements=list(set(mentor_improvements) - set(ai_improvements)),
+            ai_only_improvements=list(set(ai_improvements) - set(mentor_improvements)),
+            ai_reason=". ".join([f"{i.get('item')}: {i.get('reason')}" for i in ai_improvements_raw])
         )
 
-        # 7. 2주 액션 플랜
-        mentor_actions = mentor_feedback.action_items if mentor_feedback else []
-        ai_actions = ai_analysis.get("requirements", {}).get("action_items", [])[:2]
-        # 우선순위 Top 3 통합
-        all_actions = mentor_actions + ai_actions
-        top_priorities = all_actions[:3]
-
+        # 6. 2주 액션 플랜
         action_plan = ActionPlan(
-            mentor_actions=mentor_actions,
-            ai_actions=ai_actions,
-            top_priorities=top_priorities,
+            mentor_actions=mentor_feedback.action_items if mentor_feedback else [],
+            ai_actions=ai_data.get("action_items", [])
         )
 
-        # 8. 종합 평가 요약
-        mentor_fit = mentor_feedback.job_fit if mentor_feedback else FitLevel.MEDIUM
-        mentor_pass = mentor_feedback.pass_probability if mentor_feedback else FitLevel.MEDIUM
-        ai_fit = ai_analysis.get("requirements", {}).get("job_fit", FitLevel.MEDIUM)
-        ai_pass = ai_analysis.get("requirements", {}).get("pass_probability", FitLevel.MEDIUM)
-
-        # 현직자와 AI 평가 종합 (보수적으로)
+        # 7. 종합 평가 요약 (현직자 기준)
         overall_evaluation = OverallEvaluation(
-            job_fit=mentor_fit if mentor_feedback else ai_fit,
-            pass_probability=mentor_pass if mentor_feedback else ai_pass,
+            job_fit=mentor_feedback.job_fit if mentor_feedback else "중",
+            pass_probability=mentor_feedback.pass_probability if mentor_feedback else "중",
         )
 
-        # 9. 총평
+        # 8. 총평
         final_comment = FinalComment(
             mentor_comment=mentor_feedback.overall_comment if mentor_feedback else "",
-            ai_comment=ai_analysis.get("requirements", {}).get("overall_comment", ""),
+            ai_comment=ai_data.get("overall_comment", "")
         )
 
-        # 10. 사용된 데이터
+        # 9. 사용된 데이터
         data_sources = DataSources(
             resume_used=bool(resume_data),
             job_posting_used=bool(job_data),
             chat_used=bool(chat_messages),
-            ai_analysis_used=True,
+            ai_analysis_used=True
         )
 
-        # 11. 신뢰도
-        unverifiable = ai_analysis.get("requirements", {}).get("unverifiable_items", [])
-        confidence = ai_analysis.get("requirements", {}).get("confidence_score", 70.0)
-
+        # 10. 확인 불가 항목 및 신뢰도
         reliability = Reliability(
-            unverifiable_items=unverifiable,
-            confidence_score=confidence,
-            confidence_reason=ai_analysis.get("requirements", {}).get("confidence_reason", ""),
+            unverifiable_items=ai_data.get("unverifiable_items", []),
+            confidence_score=ai_data.get("confidence_score", 0.0),
+            confidence_reason=ai_data.get("confidence_reason", "")
         )
 
         return {
             "basic_info": basic_info.model_dump(),
-            "requirement_comparison": requirement_comparison.model_dump(),
             "tech_coverage": tech_coverage.model_dump(),
             "capability_matching": capability_matching.model_dump(),
             "strengths_analysis": strengths_analysis.model_dump(),
