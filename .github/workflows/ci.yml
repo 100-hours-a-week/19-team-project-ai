@@ -5,9 +5,13 @@ on:
     # feature -> develop 또는 develop -> main PR 시 실행
     branches: [develop, main]
     types: [opened, synchronize, reopened]
+    paths-ignore:
+      - '.github/workflows/**'
   push:
     # develop 또는 main으로 push(머지 포함)될 때 실행
     branches: [develop, main]
+    paths-ignore:
+      - '.github/workflows/**'
   workflow_dispatch:
     # 수동 실행 시 작업을 선택할 수 있는 디스패처 구성
     inputs:

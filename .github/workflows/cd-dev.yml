@@ -109,8 +109,14 @@ jobs:
             chmod 644 .env.ai
             echo "🔐 .env.ai 주입 완료"
 
-            # 이미지 태그를 환경 변수로 설정하여 compose pull & up
-            export AI_TAG="${IMAGE_TAG}"
+            # 이미지 태그를 .env 파일에 영구 저장
+            ENV_FILE="${COMPOSE_DIR}/.env"
+            if grep -q '^AI_TAG=' "${ENV_FILE}" 2>/dev/null; then
+              sed -i "s|^AI_TAG=.*|AI_TAG=${IMAGE_TAG}|" "${ENV_FILE}"
+            else
+              echo "AI_TAG=${IMAGE_TAG}" >> "${ENV_FILE}"
+            fi
+            echo "🏷️ AI_TAG=${IMAGE_TAG} → .env 저장 완료"
 
             echo "📥 Pulling new image..."
             docker compose pull ai
