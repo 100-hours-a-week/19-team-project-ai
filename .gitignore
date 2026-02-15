@@ -38,9 +38,9 @@ env/
 # Environment Variables (API Keys, Secrets)
 # =====================================================
 .env
-.env.local
-.env.*.local
+
 *.env
+.env.*
 secrets.yaml
 secrets.json
 
