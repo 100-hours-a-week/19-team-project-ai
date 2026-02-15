@@ -261,13 +261,13 @@ class MentorRetriever:
         # 3차 필터링: 결과가 부족할 경우 응답률 높은 순으로 확장 (Fallback)
         if len(filtered) < top_k:
             filtered_set = set(c.user_id for c in filtered)
-            
+
             # 이미 포함된 멘토 제외한 나머지를 응답률 순으로 정렬
             fallback_candidates = [c for c in candidates if c.user_id not in filtered_set]
-            
+
             # 응답률(response_rate) 내림차순, 그다음 유사도 순
             fallback_candidates.sort(key=lambda x: (x.response_rate, x.similarity_score), reverse=True)
-            
+
             for c in fallback_candidates:
                 c.filter_type = "response_rate"
                 filtered.append(c)
