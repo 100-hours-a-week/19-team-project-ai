@@ -3,6 +3,8 @@ from dotenv import load_dotenv
 from fastapi import FastAPI
 from prometheus_fastapi_instrumentator import Instrumentator
 
+# .env.ai가 있으면 먼저 로드 (배포 환경 용), 없으면 기본 .env 로드
+load_dotenv(".env.ai")
 load_dotenv()
 
 app = FastAPI(

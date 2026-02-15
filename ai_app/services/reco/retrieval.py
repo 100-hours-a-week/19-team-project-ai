@@ -355,17 +355,27 @@ class MentorRetriever:
             추천 결과 리스트 (멘토 정보 + 임베딩 유사도)
         """
         # 사용자 프로필 조회
-        user_profile = self.get_user_profile(user_id)
+        try:
+            user_profile = self.get_user_profile(user_id)
+        except Exception as e:
+            logger.error(f"Error fetching profile for user {user_id}: {e}")
+            return []
+
         if not user_profile:
-            logger.warning(f"User {user_id} not found")
+            logger.warning(f"User {user_id} not found in database")
             return []
 
         user_skills = set(user_profile["skills"])
         user_jobs = set(user_profile["jobs"])
+        introduction = user_profile.get("introduction", "")
 
         # 프로필 텍스트 생성 (임베딩용)
         profile_text = self.get_user_profile_text(user_id)
         if not profile_text:
+            logger.warning(
+                f"User {user_id} has insufficient profile data "
+                f"(jobs: {len(user_jobs)}, skills: {len(user_skills)}, intro: {bool(introduction)})"
+            )
             return []
 
         # 임베딩 생성
