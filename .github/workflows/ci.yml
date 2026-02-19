@@ -73,20 +73,22 @@ jobs:
         uses: astral-sh/setup-uv@v4
         with:
           enable-cache: true
-          cache-dependency-glob: "pyproject.toml"
+          cache-dependency-glob: |
+            pyproject.toml
+            uv.lock
       
       - name: Install Dependencies
-        run: uv pip install --system -e ".[dev]"
+        run: uv sync --locked --extra dev
       
       # 린트 및 자동 수정 적용
       - name: Run Lint and Format (Ruff)
         id: ruff-fix
         run: |
           cd ${{ env.WORKING_DIRECTORY }}
-          ruff check . --fix
-          ruff format .
-          ruff check .
-          ruff format --check .
+          uv run ruff check . --fix
+          uv run ruff format .
+          uv run ruff check .
+          uv run ruff format --check .
           
           # 변경사항 확인
           cd ..
@@ -111,24 +113,24 @@ jobs:
       
       # [Type Check] MyPy를 사용한 정적 타입 분석
       - name: Static Type Check (MyPy)
-        run: mypy . --ignore-missing-imports || true
+        run: uv run mypy . --ignore-missing-imports || true
       
       # [Security Scan] Frontend의 audit과 대응되는 보안 검사 추가
       - name: Security Scan (Bandit)
-        run: bandit -r ${{ env.WORKING_DIRECTORY }} -x tests/
+        run: uv run bandit -r ${{ env.WORKING_DIRECTORY }} -x tests/
       
       # [Unit Tests] 단위 테스트 수행
       - name: Run Unit Tests
         run: |
           if [ -d "tests/unit" ]; then
-            pytest tests/unit -v --cov=${{ env.WORKING_DIRECTORY }}
+            uv run pytest tests/unit -v --cov=${{ env.WORKING_DIRECTORY }}
           else
             echo "No unit tests found"
           fi
 
       # [Build Check] 머지 전 빌드 가능 여부 확인 단계 추가
       - name: Build Check
-        run: python -m build --wheel
+        run: uv run python -m build --wheel
         env:
           NODE_ENV: production # 컨텍스트 유지를 위한 설정
       
@@ -136,7 +138,7 @@ jobs:
       - name: Verify Application Starts
         run: |
           export PYTHONPATH=$PYTHONPATH:$(pwd)/${{ env.WORKING_DIRECTORY }}
-          timeout 10s python -c "from api.main import app; print('Application loaded successfully')" || true
+          timeout 10s uv run python -c "from api.main import app; print('Application loaded successfully')" || true
 
   # ===========================================
   # 2. 통합 검증 단계 (Integration Tests)
@@ -162,16 +164,18 @@ jobs:
         uses: astral-sh/setup-uv@v4
         with:
           enable-cache: true
-          cache-dependency-glob: "pyproject.toml"
+          cache-dependency-glob: |
+            pyproject.toml
+            uv.lock
       
       # [Integration] develop 브랜치 푸시 시에만 통합 테스트 실행
       - name: Install Dependencies
-        run: uv pip install --system -e ".[dev]"
+        run: uv sync --locked --extra dev
       
       - name: Integration Test
         run: |
           if [ -d "tests/integration" ]; then
-            pytest tests/integration -v
+            uv run pytest tests/integration -v
           else
             echo "⚠️ Integration tests not yet implemented"
           fi
@@ -274,7 +278,9 @@ jobs:
         uses: astral-sh/setup-uv@v4
         with:
           enable-cache: true
-          cache-dependency-glob: "pyproject.toml"
+          cache-dependency-glob: |
+            pyproject.toml
+            uv.lock
       
       - name: Get Version
         id: version
@@ -284,15 +290,15 @@ jobs:
           echo "Generated version: $VERSION"
       
       - name: Install dependencies
-        run: uv pip install --system -e ".[dev]"
+        run: uv sync --locked --extra dev
       
       - name: Run Full Tests
         run: |
           if [ -d "tests" ] || [ -d "${{ env.WORKING_DIRECTORY }}/tests" ]; then
             if [ -d "tests" ]; then
-              pytest tests/ -v || echo "Tests failed but continuing"
+              uv run pytest tests/ -v || echo "Tests failed but continuing"
             else
-              pytest ${{ env.WORKING_DIRECTORY }}/tests -v || echo "Tests failed but continuing"
+              uv run pytest ${{ env.WORKING_DIRECTORY }}/tests -v || echo "Tests failed but continuing"
             fi
           else
             echo "No tests found, skipping"
@@ -300,7 +306,7 @@ jobs:
       
       - name: Create Release Package
         run: |
-          python -m build --wheel
+          uv run python -m build --wheel
       
       - name: Verify Build Output
         run: |
@@ -386,18 +392,20 @@ jobs:
         uses: astral-sh/setup-uv@v4
         with:
           enable-cache: true
-          cache-dependency-glob: "pyproject.toml"
+          cache-dependency-glob: |
+            pyproject.toml
+            uv.lock
       
       - name: Install dependencies
-        run: uv pip install --system -e ".[dev]"
+        run: uv sync --locked --extra dev
       
       - name: Run Full Tests
         run: |
           if [ -d "tests" ] || [ -d "${{ env.WORKING_DIRECTORY }}/tests" ]; then
             if [ -d "tests" ]; then
-              pytest tests/ -v || echo "Tests failed but continuing"
+              uv run pytest tests/ -v || echo "Tests failed but continuing"
             else
-              pytest ${{ env.WORKING_DIRECTORY }}/tests -v || echo "Tests failed but continuing"
+              uv run pytest ${{ env.WORKING_DIRECTORY }}/tests -v || echo "Tests failed but continuing"
             fi
           else
             echo "No tests found, skipping"
