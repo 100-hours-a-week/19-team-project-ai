@@ -24,6 +24,7 @@ on:
           - integration
           - release-dev
           - release-prod
+          - release-prod-v2
           - all
 
 permissions:
@@ -253,14 +254,13 @@ jobs:
             console.log('✅ CD-Dev workflow triggered successfully');
 
   # ===========================================
-  # 4. 프로덕션 릴리즈 (main 브랜치 - Artifact 기반)
+  # 4. 프로덕션 릴리즈 V1 (main push 시 자동, Wheel + cd-prod)
   # ===========================================
   release-prod:
     if: |
       (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
       (github.event_name == 'workflow_dispatch' && (github.event.inputs.job_to_run == 'release-prod' || github.event.inputs.job_to_run == 'all'))
     runs-on: ubuntu-latest
-    
     steps:
       - uses: actions/checkout@v4
         with:
@@ -276,7 +276,6 @@ jobs:
           enable-cache: true
           cache-dependency-glob: "pyproject.toml"
       
-      # Get Version
       - name: Get Version
         id: version
         run: |
@@ -284,11 +283,9 @@ jobs:
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "Generated version: $VERSION"
       
-      # Install dependencies
       - name: Install dependencies
         run: uv pip install --system -e ".[dev]"
       
-      # Full Regression Test (optional)
       - name: Run Full Tests
         run: |
           if [ -d "tests" ] || [ -d "${{ env.WORKING_DIRECTORY }}/tests" ]; then
@@ -301,12 +298,10 @@ jobs:
             echo "No tests found, skipping"
           fi
       
-      # Production Build (Wheel Package)
       - name: Create Release Package
         run: |
           python -m build --wheel
       
-      # Verify Build Output
       - name: Verify Build Output
         run: |
           echo "Current directory: $(pwd)"
@@ -319,7 +314,6 @@ jobs:
             exit 1
           fi
       
-      # Archive Build Artifacts
       - name: Archive Build Artifacts
         if: success()
         uses: actions/upload-artifact@v4
@@ -328,7 +322,6 @@ jobs:
           path: dist/*.whl
           retention-days: 7
       
-      # Archive Deployment Files (소스 코드 및 스크립트 포함)
       - name: Archive Deployment Files
         if: success()
         uses: actions/upload-artifact@v4
@@ -341,7 +334,6 @@ jobs:
             scripts/verify-slo-cloudwatch.sh
           retention-days: 7
       
-      # Create Release Tag
       - name: Create Release Tag
         run: |
           git config user.name "github-actions[bot]"
@@ -353,7 +345,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         continue-on-error: true
       
-      - name: Trigger CD-Prod Workflow
+      - name: Trigger CD-Prod Workflow (V1)
         if: success()
         uses: actions/github-script@v7
         with:
@@ -370,4 +362,95 @@ jobs:
                 branch: 'main'
               }
             });
-            console.log('✅ CD-Prod workflow triggered successfully');
+            console.log('✅ CD-Prod (V1) workflow triggered successfully');
+
+  # ===========================================
+  # 5. 프로덕션 릴리즈 V2 (수동 디스패치 전용 - Docker + cd-prod-v2)
+  # ===========================================
+  release-prod-v2:
+    if: |
+      github.event_name == 'workflow_dispatch' &&
+      (github.event.inputs.job_to_run == 'release-prod-v2' || github.event.inputs.job_to_run == 'all')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+          cache-dependency-glob: "pyproject.toml"
+      
+      - name: Install dependencies
+        run: uv pip install --system -e ".[dev]"
+      
+      - name: Run Full Tests
+        run: |
+          if [ -d "tests" ] || [ -d "${{ env.WORKING_DIRECTORY }}/tests" ]; then
+            if [ -d "tests" ]; then
+              pytest tests/ -v || echo "Tests failed but continuing"
+            else
+              pytest ${{ env.WORKING_DIRECTORY }}/tests -v || echo "Tests failed but continuing"
+            fi
+          else
+            echo "No tests found, skipping"
+          fi
+      
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ap-northeast-2
+      
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+      
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      
+      - name: Docker image tag (V2)
+        id: docker-meta
+        run: |
+          SHA_SHORT="${GITHUB_SHA::7}"
+          IMAGE_TAG="main-${SHA_SHORT}"
+          echo "image_tag=${IMAGE_TAG}" >> $GITHUB_OUTPUT
+          echo "sha_short=${SHA_SHORT}" >> $GITHUB_OUTPUT
+          echo "🐳 Docker image tag (V2): ${IMAGE_TAG}"
+      
+      - name: Build and Push Docker Image (V2)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ steps.login-ecr.outputs.registry }}/${{ secrets.ECR_REPOSITORY_AI }}:${{ steps.docker-meta.outputs.image_tag }}
+            ${{ steps.login-ecr.outputs.registry }}/${{ secrets.ECR_REPOSITORY_AI }}:main-latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          platforms: linux/arm64
+      
+      - name: Trigger CD-Prod-V2 Workflow
+        if: success()
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.PAT }}
+          script: |
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'cd-prod-v2.yml',
+              ref: 'main',
+              inputs: {
+                use_existing_image: 'true'
+              }
+            });
+            console.log('✅ CD-Prod-V2 workflow triggered (use_existing_image=true)');
