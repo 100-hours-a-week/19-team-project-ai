@@ -73,10 +73,10 @@ jobs:
         uses: astral-sh/setup-uv@v4
         with:
           enable-cache: true
-          cache-dependency-glob: "pyproject.toml"
+          cache-dependency-glob: "pyproject.toml uv.lock"
       
       - name: Install Dependencies
-        run: uv pip install --system -e ".[dev]"
+        run: uv pip install --system -e ".[dev]" --locked
       
       # 린트 및 자동 수정 적용
       - name: Run Lint and Format (Ruff)
@@ -162,11 +162,11 @@ jobs:
         uses: astral-sh/setup-uv@v4
         with:
           enable-cache: true
-          cache-dependency-glob: "pyproject.toml"
+          cache-dependency-glob: "pyproject.toml uv.lock"
       
       # [Integration] develop 브랜치 푸시 시에만 통합 테스트 실행
       - name: Install Dependencies
-        run: uv pip install --system -e ".[dev]"
+        run: uv pip install --system -e ".[dev]" --locked
       
       - name: Integration Test
         run: |
@@ -274,7 +274,7 @@ jobs:
         uses: astral-sh/setup-uv@v4
         with:
           enable-cache: true
-          cache-dependency-glob: "pyproject.toml"
+          cache-dependency-glob: "pyproject.toml uv.lock"
       
       - name: Get Version
         id: version
@@ -284,7 +284,7 @@ jobs:
           echo "Generated version: $VERSION"
       
       - name: Install dependencies
-        run: uv pip install --system -e ".[dev]"
+        run: uv pip install --system -e ".[dev]" --locked
       
       - name: Run Full Tests
         run: |
@@ -386,10 +386,10 @@ jobs:
         uses: astral-sh/setup-uv@v4
         with:
           enable-cache: true
-          cache-dependency-glob: "pyproject.toml"
+          cache-dependency-glob: "pyproject.toml uv.lock"
       
       - name: Install dependencies
-        run: uv pip install --system -e ".[dev]"
+        run: uv pip install --system -e ".[dev]" --locked
       
       - name: Run Full Tests
         run: |
