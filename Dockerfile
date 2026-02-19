@@ -15,12 +15,13 @@ RUN apt-get update && \
 
 # 의존성 먼저 설치 (레이어 캐시 활용 — 코드 변경 시 재설치 방지)
 COPY pyproject.toml MANIFEST.in uv.lock ./
-RUN mkdir -p ai_app && \
-    pip install uv && \
-    uv pip install --system --no-cache -e . --locked
+RUN mkdir -p ai_app
+ENV UV_NO_DEV=1
+RUN pip install uv && uv sync --frozen --no-install-project
 
 # 애플리케이션 코드는 마지막에 복사 (코드 변경 시 이 레이어만 갱신)
 COPY ai_app ./ai_app
+RUN uv sync --locked
 
 # Create non-root user
 RUN useradd -m -u 1001 aiuser && \
@@ -40,4 +41,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
 # Run application
-CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uv", "run", "uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]
