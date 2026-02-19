@@ -14,10 +14,10 @@ RUN apt-get update && \
         && rm -rf /var/lib/apt/lists/*
 
 # 의존성 먼저 설치 (레이어 캐시 활용 — 코드 변경 시 재설치 방지)
-COPY pyproject.toml MANIFEST.in ./
+COPY pyproject.toml MANIFEST.in uv.lock ./
 RUN mkdir -p ai_app && \
-    pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -e .
+    pip install uv && \
+    uv pip install --system --no-cache -e . --locked
 
 # 애플리케이션 코드는 마지막에 복사 (코드 변경 시 이 레이어만 갱신)
 COPY ai_app ./ai_app
