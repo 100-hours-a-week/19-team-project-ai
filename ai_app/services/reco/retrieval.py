@@ -1,10 +1,11 @@
 """멘토 검색 모듈 - 필터링 + 임베딩 유사도 기반 추천"""
 
 import logging
+from dataclasses import dataclass
 from typing import Any
 
 from sqlalchemy import text
-from sqlalchemy.engine import Connection
+from sqlalchemy.engine import Connection, Row
 
 from services.reco.embedder import ProfileEmbedder, get_embedder
 
@@ -12,6 +13,52 @@ logger = logging.getLogger(__name__)
 
 # 필터링 fallback 임계값
 MIN_CANDIDATES_FOR_JOB_FILTER = 5
+
+
+@dataclass
+class MentorCandidate:
+    """멘토 후보 데이터"""
+
+    user_id: int
+    nickname: str
+    introduction: str
+    company_name: str | None
+    verified: bool
+    rating_avg: float
+    rating_count: int
+    response_rate: float
+    skills: list[str]
+    jobs: list[str]
+    similarity_score: float
+    last_active_at: str | None
+    filter_type: str | None = None
+    ground_truth: dict | None = None
+    # 내부 필터링용
+    _job_matched: bool = False
+    _skill_matched: bool = False
+
+    def to_dict(self, include_internal: bool = False) -> dict[str, Any]:
+        """딕셔너리로 변환"""
+        result = {
+            "user_id": self.user_id,
+            "nickname": self.nickname,
+            "company_name": self.company_name,
+            "verified": self.verified,
+            "rating_avg": self.rating_avg,
+            "rating_count": self.rating_count,
+            "response_rate": self.response_rate,
+            "skills": self.skills,
+            "jobs": self.jobs,
+            "introduction": self.introduction,
+            "similarity_score": self.similarity_score,
+            "filter_type": self.filter_type,
+            "ground_truth": self.ground_truth,
+            "last_active_at": self.last_active_at,
+        }
+        if include_internal:
+            result["_job_matched"] = self._job_matched
+            result["_skill_matched"] = self._skill_matched
+        return result
 
 
 class MentorRetriever:
@@ -84,6 +131,150 @@ class MentorRetriever:
             parts.append(f"자기소개: {introduction}")
 
         return ". ".join(parts) if parts else None
+
+    # ========== 헬퍼 메서드 ==========
+
+    # 멘토 후보 조회 쿼리 (고정 문자열 - SQL injection 방지)
+    _MENTOR_CANDIDATES_QUERY = """
+        SELECT
+            u.id as user_id,
+            u.nickname,
+            u.introduction,
+            ep.company_name,
+            ep.verified,
+            ep.rating_avg,
+            ep.rating_count,
+            ep.responded_request_count,
+            ep.accepted_request_count,
+            ep.rejected_request_count,
+            ep.last_active_at,
+            1 - (ep.embedding <=> CAST(:query_embedding AS vector)) as embedding_similarity,
+            ARRAY_AGG(DISTINCT s.name) FILTER (WHERE s.name IS NOT NULL) as skills,
+            ARRAY_AGG(DISTINCT j.name) FILTER (WHERE j.name IS NOT NULL) as jobs
+        FROM expert_profiles ep
+        JOIN users u ON ep.user_id = u.id
+        LEFT JOIN user_skills us ON u.id = us.user_id
+        LEFT JOIN skills s ON us.skill_id = s.id
+        LEFT JOIN user_jobs uj ON u.id = uj.user_id
+        LEFT JOIN jobs j ON uj.job_id = j.id
+        WHERE ep.embedding IS NOT NULL
+          AND ep.user_id != :user_id
+          AND (:only_verified = false OR ep.verified = true)
+        GROUP BY u.id, u.nickname, u.introduction,
+                 ep.company_name, ep.verified, ep.rating_avg, ep.rating_count,
+                 ep.responded_request_count, ep.accepted_request_count,
+                 ep.rejected_request_count, ep.last_active_at, ep.embedding
+        ORDER BY ep.embedding <=> CAST(:query_embedding AS vector)
+        LIMIT :candidate_limit
+    """
+
+    # 텍스트 검색 쿼리 (고정 문자열)
+    _SEARCH_BY_TEXT_QUERY = """
+        SELECT
+            u.id as user_id,
+            u.nickname,
+            u.introduction,
+            ep.company_name,
+            ep.verified,
+            ep.rating_avg,
+            1 - (ep.embedding <=> CAST(:query_embedding AS vector)) as similarity,
+            ARRAY_AGG(DISTINCT s.name) FILTER (WHERE s.name IS NOT NULL) as skills
+        FROM expert_profiles ep
+        JOIN users u ON ep.user_id = u.id
+        LEFT JOIN user_skills us ON u.id = us.user_id
+        LEFT JOIN skills s ON us.skill_id = s.id
+        WHERE ep.embedding IS NOT NULL
+          AND (:only_verified = false OR ep.verified = true)
+        GROUP BY u.id, u.nickname, u.introduction,
+                 ep.company_name, ep.verified, ep.rating_avg, ep.embedding
+        ORDER BY ep.embedding <=> CAST(:query_embedding AS vector)
+        LIMIT :top_k
+    """
+
+    def _row_to_candidate(
+        self,
+        row: Row,
+        user_skills: set[str],
+        user_jobs: set[str],
+    ) -> MentorCandidate:
+        """DB Row를 MentorCandidate로 변환"""
+        mentor_skills = set(row.skills or [])
+        mentor_jobs = set(getattr(row, "jobs", None) or [])
+
+        response_rate = 0.0
+        if row.responded_request_count and row.responded_request_count > 0:
+            response_rate = row.accepted_request_count / row.responded_request_count * 100
+
+        return MentorCandidate(
+            user_id=row.user_id,
+            nickname=row.nickname,
+            introduction=row.introduction or "",
+            company_name=row.company_name,
+            verified=row.verified,
+            rating_avg=round(row.rating_avg, 1) if row.rating_avg else 0.0,
+            rating_count=row.rating_count or 0,
+            response_rate=round(response_rate, 1),
+            skills=row.skills or [],
+            jobs=getattr(row, "jobs", None) or [],
+            similarity_score=round(float(row.embedding_similarity), 4),
+            last_active_at=row.last_active_at.isoformat() if row.last_active_at else None,
+            _job_matched=bool(user_jobs & mentor_jobs),
+            _skill_matched=bool(user_skills & mentor_skills),
+        )
+
+    def _filter_candidates(
+        self,
+        candidates: list[MentorCandidate],
+        top_k: int,
+    ) -> list[MentorCandidate]:
+        """후보 필터링 (직무 우선, 기술스택 fallback, 응답률 fallback)
+
+        Args:
+            candidates: 전체 후보 리스트 (임베딩 유사도순으로 정렬됨)
+            top_k: 반환할 최대 개수
+
+        Returns:
+            필터링된 후보 리스트
+        """
+        # 1차 필터링: 직무 일치
+        job_filtered = [c for c in candidates if c._job_matched]
+
+        # 2차 필터링: 직무 결과가 5개 이하면 기술스택으로 확장
+        if len(job_filtered) <= MIN_CANDIDATES_FOR_JOB_FILTER:
+            skill_filtered = [c for c in candidates if c._skill_matched]
+
+            # 직무 일치 우선
+            for c in job_filtered:
+                c.filter_type = "job"
+            for c in skill_filtered:
+                if c.filter_type is None:
+                    c.filter_type = "skill"
+
+            # 직무 일치 먼저, 기술스택 일치 그 다음
+            job_filtered_set = set(c.user_id for c in job_filtered)
+            filtered = job_filtered + [c for c in skill_filtered if c.user_id not in job_filtered_set]
+        else:
+            for c in job_filtered:
+                c.filter_type = "job"
+            filtered = job_filtered
+
+        # 3차 필터링: 결과가 부족할 경우 응답률 높은 순으로 확장 (Fallback)
+        if len(filtered) < top_k:
+            filtered_set = set(c.user_id for c in filtered)
+
+            # 이미 포함된 멘토 제외한 나머지를 응답률 순으로 정렬
+            fallback_candidates = [c for c in candidates if c.user_id not in filtered_set]
+
+            # 응답률(response_rate) 내림차순, 그다음 유사도 순
+            fallback_candidates.sort(key=lambda x: (x.response_rate, x.similarity_score), reverse=True)
+
+            for c in fallback_candidates:
+                c.filter_type = "response_rate"
+                filtered.append(c)
+                if len(filtered) >= top_k:
+                    break
+
+        return filtered[:top_k]
 
     def verify_mentor_ground_truth(
         self,
@@ -164,177 +355,63 @@ class MentorRetriever:
             추천 결과 리스트 (멘토 정보 + 임베딩 유사도)
         """
         # 사용자 프로필 조회
-        user_profile = self.get_user_profile(user_id)
+        try:
+            user_profile = self.get_user_profile(user_id)
+        except Exception as e:
+            logger.error(f"Error fetching profile for user {user_id}: {e}")
+            return []
+
         if not user_profile:
-            logger.warning(f"User {user_id} not found")
+            logger.warning(f"User {user_id} not found in database")
             return []
 
         user_skills = set(user_profile["skills"])
         user_jobs = set(user_profile["jobs"])
+        introduction = user_profile.get("introduction", "")
 
         # 프로필 텍스트 생성 (임베딩용)
         profile_text = self.get_user_profile_text(user_id)
         if not profile_text:
+            logger.warning(
+                f"User {user_id} has insufficient profile data "
+                f"(jobs: {len(user_jobs)}, skills: {len(user_skills)}, intro: {bool(introduction)})"
+            )
             return []
 
         # 임베딩 생성
         user_embedding = self.embedder.embed_text(profile_text)
         embedding_list = user_embedding.tolist()
 
-        # 후보 멘토 조회 (충분한 후보 확보)
+        # 후보 멘토 조회 (고정 쿼리 + 바인딩 파라미터)
         candidate_limit = max(top_k * 10, 100)
 
-        if only_verified:
-            query = text("""
-                SELECT
-                    u.id as user_id,
-                    u.nickname,
-                    u.introduction,
-                    ep.company_name,
-                    ep.verified,
-                    ep.rating_avg,
-                    ep.rating_count,
-                    ep.responded_request_count,
-                    ep.accepted_request_count,
-                    ep.rejected_request_count,
-                    ep.last_active_at,
-                    1 - (ep.embedding <=> CAST(:query_embedding AS vector)) as embedding_similarity,
-                    ARRAY_AGG(DISTINCT s.name) FILTER (WHERE s.name IS NOT NULL) as skills,
-                    ARRAY_AGG(DISTINCT j.name) FILTER (WHERE j.name IS NOT NULL) as jobs
-                FROM expert_profiles ep
-                JOIN users u ON ep.user_id = u.id
-                LEFT JOIN user_skills us ON u.id = us.user_id
-                LEFT JOIN skills s ON us.skill_id = s.id
-                LEFT JOIN user_jobs uj ON u.id = uj.user_id
-                LEFT JOIN jobs j ON uj.job_id = j.id
-                WHERE ep.user_id != :user_id
-                    AND ep.embedding IS NOT NULL
-                    AND ep.verified = true
-                GROUP BY u.id, u.nickname, u.introduction,
-                         ep.company_name, ep.verified, ep.rating_avg, ep.rating_count,
-                         ep.responded_request_count, ep.accepted_request_count,
-                         ep.rejected_request_count, ep.last_active_at, ep.embedding
-                ORDER BY ep.embedding <=> CAST(:query_embedding AS vector)
-                LIMIT :candidate_limit
-            """)
-        else:
-            query = text("""
-                SELECT
-                    u.id as user_id,
-                    u.nickname,
-                    u.introduction,
-                    ep.company_name,
-                    ep.verified,
-                    ep.rating_avg,
-                    ep.rating_count,
-                    ep.responded_request_count,
-                    ep.accepted_request_count,
-                    ep.rejected_request_count,
-                    ep.last_active_at,
-                    1 - (ep.embedding <=> CAST(:query_embedding AS vector)) as embedding_similarity,
-                    ARRAY_AGG(DISTINCT s.name) FILTER (WHERE s.name IS NOT NULL) as skills,
-                    ARRAY_AGG(DISTINCT j.name) FILTER (WHERE j.name IS NOT NULL) as jobs
-                FROM expert_profiles ep
-                JOIN users u ON ep.user_id = u.id
-                LEFT JOIN user_skills us ON u.id = us.user_id
-                LEFT JOIN skills s ON us.skill_id = s.id
-                LEFT JOIN user_jobs uj ON u.id = uj.user_id
-                LEFT JOIN jobs j ON uj.job_id = j.id
-                WHERE ep.user_id != :user_id
-                    AND ep.embedding IS NOT NULL
-                GROUP BY u.id, u.nickname, u.introduction,
-                         ep.company_name, ep.verified, ep.rating_avg, ep.rating_count,
-                         ep.responded_request_count, ep.accepted_request_count,
-                         ep.rejected_request_count, ep.last_active_at, ep.embedding
-                ORDER BY ep.embedding <=> CAST(:query_embedding AS vector)
-                LIMIT :candidate_limit
-            """)
-
         result = self.conn.execute(
-            query,
+            text(self._MENTOR_CANDIDATES_QUERY),
             {
                 "query_embedding": str(embedding_list),
                 "user_id": user_id,
+                "only_verified": only_verified,
                 "candidate_limit": candidate_limit,
             },
         )
 
         # 후보 데이터 변환
-        all_candidates = []
-        for row in result:
-            mentor_skills = set(row.skills or [])
-            mentor_jobs = set(row.jobs or [])
-            embed_score = float(row.embedding_similarity)
+        all_candidates = [self._row_to_candidate(row, user_skills, user_jobs) for row in result]
 
-            response_rate = 0.0
-            if row.responded_request_count and row.responded_request_count > 0:
-                response_rate = row.accepted_request_count / row.responded_request_count * 100
-
-            # 필터 조건 미리 계산
-            job_matched = bool(user_jobs & mentor_jobs)
-            skill_matched = bool(user_skills & mentor_skills)
-
-            all_candidates.append(
-                {
-                    "user_id": row.user_id,
-                    "nickname": row.nickname,
-                    "company_name": row.company_name,
-                    "verified": row.verified,
-                    "rating_avg": round(row.rating_avg, 1) if row.rating_avg else 0.0,
-                    "rating_count": row.rating_count or 0,
-                    "response_rate": round(response_rate, 1),
-                    "skills": row.skills or [],
-                    "jobs": row.jobs or [],
-                    "introduction": row.introduction or "",
-                    "similarity_score": round(embed_score, 4),
-                    "filter_type": None,  # 필터링 후 설정
-                    "ground_truth": None,
-                    "last_active_at": row.last_active_at.isoformat() if row.last_active_at else None,
-                    "_job_matched": job_matched,
-                    "_skill_matched": skill_matched,
-                }
-            )
-
-        # 1차 필터링: 직무 일치
-        job_filtered = [c for c in all_candidates if c["_job_matched"]]
-
-        # 2차 필터링: 직무 결과가 5개 이하면 기술스택으로 확장
-        if len(job_filtered) <= MIN_CANDIDATES_FOR_JOB_FILTER:
-            # 기술스택 하나 이상 일치 (직무 일치 포함)
-            skill_filtered = [c for c in all_candidates if c["_skill_matched"]]
-
-            # 직무 일치 우선, 그 다음 기술스택 일치
-            for c in job_filtered:
-                c["filter_type"] = "job"
-            for c in skill_filtered:
-                if c["filter_type"] is None:
-                    c["filter_type"] = "skill"
-
-            # 직무 일치 먼저, 기술스택 일치 그 다음 (각각 임베딩 순 유지)
-            filtered_candidates = job_filtered + [c for c in skill_filtered if c not in job_filtered]
-        else:
-            for c in job_filtered:
-                c["filter_type"] = "job"
-            filtered_candidates = job_filtered
-
-        # Top-K 선택 (이미 임베딩 유사도 순으로 정렬됨)
-        top_candidates = filtered_candidates[:top_k]
-
-        # 내부 필터 플래그 제거
-        for c in top_candidates:
-            del c["_job_matched"]
-            del c["_skill_matched"]
+        # 필터링 및 Top-K 선택
+        top_candidates = self._filter_candidates(all_candidates, top_k)
 
         # Ground Truth 검증 (옵션)
         if include_gt:
             for candidate in top_candidates:
                 gt_result = self.verify_mentor_ground_truth(
-                    mentor_user_id=candidate["user_id"],
+                    mentor_user_id=candidate.user_id,
                     top_k=top_k,
                 )
-                candidate["ground_truth"] = gt_result
+                candidate.ground_truth = gt_result
 
-        return top_candidates
+        # 딕셔너리로 변환하여 반환
+        return [c.to_dict() for c in top_candidates]
 
     def search_by_text(
         self,
@@ -356,53 +433,13 @@ class MentorRetriever:
         query_embedding = self.embedder.embed_text(query_text)
         embedding_list = query_embedding.tolist()
 
-        if only_verified:
-            query = text("""
-                SELECT
-                    u.id as user_id,
-                    u.nickname,
-                    u.introduction,
-                    ep.company_name,
-                    ep.verified,
-                    ep.rating_avg,
-                    1 - (ep.embedding <=> CAST(:query_embedding AS vector)) as similarity,
-                    ARRAY_AGG(DISTINCT s.name) FILTER (WHERE s.name IS NOT NULL) as skills
-                FROM expert_profiles ep
-                JOIN users u ON ep.user_id = u.id
-                LEFT JOIN user_skills us ON u.id = us.user_id
-                LEFT JOIN skills s ON us.skill_id = s.id
-                WHERE ep.embedding IS NOT NULL
-                    AND ep.verified = true
-                GROUP BY u.id, u.nickname, u.introduction,
-                         ep.company_name, ep.verified, ep.rating_avg, ep.embedding
-                ORDER BY ep.embedding <=> CAST(:query_embedding AS vector)
-                LIMIT :top_k
-            """)
-        else:
-            query = text("""
-                SELECT
-                    u.id as user_id,
-                    u.nickname,
-                    u.introduction,
-                    ep.company_name,
-                    ep.verified,
-                    ep.rating_avg,
-                    1 - (ep.embedding <=> CAST(:query_embedding AS vector)) as similarity,
-                    ARRAY_AGG(DISTINCT s.name) FILTER (WHERE s.name IS NOT NULL) as skills
-                FROM expert_profiles ep
-                JOIN users u ON ep.user_id = u.id
-                LEFT JOIN user_skills us ON u.id = us.user_id
-                LEFT JOIN skills s ON us.skill_id = s.id
-                WHERE ep.embedding IS NOT NULL
-                GROUP BY u.id, u.nickname, u.introduction,
-                         ep.company_name, ep.verified, ep.rating_avg, ep.embedding
-                ORDER BY ep.embedding <=> CAST(:query_embedding AS vector)
-                LIMIT :top_k
-            """)
-
         result = self.conn.execute(
-            query,
-            {"query_embedding": str(embedding_list), "top_k": top_k},
+            text(self._SEARCH_BY_TEXT_QUERY),
+            {
+                "query_embedding": str(embedding_list),
+                "only_verified": only_verified,
+                "top_k": top_k,
+            },
         )
 
         return [
@@ -439,7 +476,7 @@ class MentorRetriever:
         )
         self.conn.commit()
 
-        logger.info(f"Updated embedding for expert {user_id}")
+        logger.debug(f"Updated embedding for expert {user_id}")
         return True
 
     def compute_embedding(self, user_id: int) -> dict[str, Any] | None:
@@ -460,7 +497,7 @@ class MentorRetriever:
         embedding = self.embedder.embed_text(profile_text)
         embedding_list = embedding.tolist()
 
-        logger.info(f"Computed embedding for user {user_id}, dim={len(embedding_list)}")
+        logger.debug(f"Computed embedding for user {user_id}, dim={len(embedding_list)}")
 
         return {
             "user_id": user_id,
@@ -480,7 +517,7 @@ class MentorRetriever:
             if self.update_expert_embedding(row.user_id):
                 updated_count += 1
 
-        logger.info(f"Updated {updated_count} expert embeddings")
+        logger.debug(f"Updated {updated_count} expert embeddings")
         return updated_count
 
     def evaluate_silver_ground_truth(

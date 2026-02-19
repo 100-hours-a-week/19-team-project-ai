@@ -12,7 +12,7 @@ from schemas.reco import (
     MentorRecommendResponse,
 )
 from services.reco.retrieval import MentorRetriever
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Connection
 
 
@@ -55,12 +55,41 @@ class RecoController:
             )
 
             if not results:
+                # 11번 유저처럼 결과가 없는 원인 정밀 진단
+                user_exists_query = text("SELECT 1 FROM users WHERE id = :user_id")
+                user_exists = conn.execute(user_exists_query, {"user_id": user_id}).scalar()
+
+                if not user_exists:
+                    raise HTTPException(
+                        status_code=404,
+                        detail={
+                            "code": ResponseCode.NOT_FOUND.value,
+                            "data": {
+                                "message": f"ID가 {user_id}인 사용자를 찾을 수 없습니다.",
+                                "user_id": user_id,
+                            },
+                        },
+                    )
+
+                profile_text = retriever.get_user_profile_text(user_id)
+                if not profile_text:
+                    raise HTTPException(
+                        status_code=400,
+                        detail={
+                            "code": ResponseCode.BAD_REQUEST.value,
+                            "data": {
+                                "message": "사용자의 프로필 정보(직무, 기술스택, 자기소개)가 부족하여 추천을 진행할 수 없습니다. 프로필을 먼저 완성해 주세요.",
+                                "user_id": user_id,
+                            },
+                        },
+                    )
+
                 raise HTTPException(
                     status_code=404,
                     detail={
                         "code": ResponseCode.NOT_FOUND.value,
                         "data": {
-                            "message": "사용자를 찾을 수 없거나 추천할 멘토가 없습니다.",
+                            "message": "조건에 맞는 추천 멘토를 찾을 수 없습니다. 필터링 조건을 변경해 보세요.",
                             "user_id": user_id,
                         },
                     },

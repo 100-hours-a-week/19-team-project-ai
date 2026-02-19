@@ -1,6 +1,7 @@
 """프로필 임베딩 생성 모듈"""
 
 import logging
+from functools import lru_cache
 
 import numpy as np
 from sentence_transformers import SentenceTransformer
@@ -10,8 +11,6 @@ logger = logging.getLogger(__name__)
 
 class ProfileEmbedder:
     """프로필 텍스트 임베딩 생성"""
-
-    _instance: "ProfileEmbedder | None" = None
 
     def __init__(self, model_name: str = "intfloat/multilingual-e5-large-instruct"):
         self.model_name = model_name
@@ -43,9 +42,7 @@ class ProfileEmbedder:
         return self.model.get_sentence_embedding_dimension()
 
 
-# 싱글톤
+@lru_cache(maxsize=1)
 def get_embedder() -> ProfileEmbedder:
-    """임베더 싱글톤"""
-    if ProfileEmbedder._instance is None:
-        ProfileEmbedder._instance = ProfileEmbedder()
-    return ProfileEmbedder._instance
+    """임베더 싱글톤 (thread-safe via lru_cache)"""
+    return ProfileEmbedder()

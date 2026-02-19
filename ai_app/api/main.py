@@ -1,7 +1,10 @@
-from api.endpoints import health_router, jobs_router, reco_router, resumes_router
+from api.endpoints import health_router, reco_router, repo_router, resumes_router
 from dotenv import load_dotenv
 from fastapi import FastAPI
+from prometheus_fastapi_instrumentator import Instrumentator
 
+# .env.ai가 있으면 먼저 로드 (배포 환경 용), 없으면 기본 .env 로드
+load_dotenv(".env.ai")
 load_dotenv()
 
 app = FastAPI(
@@ -9,6 +12,15 @@ app = FastAPI(
     description="AI-powered resume processing and mentor matching service",
     version="0.1.0",
 )
+
+# Prometheus 메트릭 계측 (/metrics 엔드포인트 자동 생성)
+Instrumentator(
+    should_group_status_codes=False,  # 200, 201 등 개별 status code 유지
+    should_ignore_untemplated=True,  # 등록되지 않은 경로 무시
+    excluded_handlers=["/health", "/api/ai/health", "/api/ai/metrics"],  # health/metrics는 집계 제외
+    inprogress_name="ai_inprogress_requests",
+    inprogress_labels=True,
+).instrument(app).expose(app, endpoint="/api/ai/metrics", include_in_schema=False)
 
 
 # Root health check for CD/monitoring
@@ -20,5 +32,5 @@ async def root_health():
 
 app.include_router(health_router.router, prefix="/api/ai", tags=["Health"])
 app.include_router(resumes_router.router, prefix="/api/ai")
-app.include_router(jobs_router.router, prefix="/api/ai")
 app.include_router(reco_router.router, prefix="/api/ai")
+app.include_router(repo_router.router, prefix="/api/ai")

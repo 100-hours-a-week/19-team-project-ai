@@ -27,9 +27,9 @@ class MentorRecommendation(BaseModel):
     jobs: list[str] = Field(default_factory=list, description="직무")
     introduction: str = Field(default="", description="자기소개")
     similarity_score: float = Field(..., description="임베딩 유사도 (0~1)")
-    filter_type: Literal["job", "skill"] | None = Field(
+    filter_type: Literal["job", "skill", "response_rate"] | None = Field(
         default=None,
-        description="필터 타입 (job: 직무 일치, skill: 기술스택 일치)",
+        description="필터 타입 (job: 직무 일치, skill: 기술스택 일치, response_rate: 응답률 기반)",
     )
     ground_truth: GroundTruthResult | None = Field(default=None, description="Silver GT 검증 결과")
     last_active_at: datetime | None = Field(default=None, description="마지막 활동 시간")

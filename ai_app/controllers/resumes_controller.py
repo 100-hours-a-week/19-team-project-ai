@@ -1,5 +1,6 @@
 """이력서 컨트롤러 - 이력서 추출 파이프라인"""
 
+from functools import lru_cache
 from typing import Any
 
 import httpx
@@ -137,7 +138,7 @@ class ResumesController:
         enable_pii_masking: bool = True,
     ) -> ResumeData:
         """
-        [임시] PDF bytes에서 직접 이력서 추출 파이프라인 실행
+        PDF bytes에서 직접 이력서 추출 파이프라인 실행
 
         Args:
             resume_id: 이력서 ID
@@ -198,13 +199,7 @@ class ResumesController:
         return ResumeData(**stored)
 
 
-# 싱글톤 인스턴스
-_controller: ResumesController | None = None
-
-
+@lru_cache(maxsize=1)
 def get_resumes_controller() -> ResumesController:
-    """컨트롤러 싱글톤 반환"""
-    global _controller
-    if _controller is None:
-        _controller = ResumesController()
-    return _controller
+    """컨트롤러 싱글톤 (thread-safe via lru_cache)"""
+    return ResumesController()

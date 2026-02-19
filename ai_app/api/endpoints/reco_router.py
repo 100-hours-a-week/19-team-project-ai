@@ -59,7 +59,7 @@ async def recommend_mentors(
 @router.post(
     "/embeddings/update",
     response_model=ApiResponse[dict],
-    summary="멘토 임베딩 일괄 업데이트 (테스트용)",
+    summary="[테스트용] 멘토 임베딩 일괄 업데이트",
     description="모든 멘토의 프로필 임베딩을 일괄 업데이트합니다.",
 )
 async def update_all_embeddings(

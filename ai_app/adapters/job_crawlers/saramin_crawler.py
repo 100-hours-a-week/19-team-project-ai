@@ -1,11 +1,14 @@
 """사람인 채용공고 크롤러"""
 
+import logging
 import re
 
 from bs4 import BeautifulSoup
-from schemas.jobs import CompanyInfo, JobPosting, JobSource, SalaryInfo
+from schemas.jobs import CompanyInfo, JobPosting, JobSource, JobType, SalaryInfo
 
 from adapters.job_crawlers.base_crawler import BaseJobCrawler, CrawlerConfig
+
+logger = logging.getLogger(__name__)
 
 
 class SaraminCrawler(BaseJobCrawler):
@@ -34,9 +37,9 @@ class SaraminCrawler(BaseJobCrawler):
         if not main_html and not detail_html:
             return None
 
-        return self._parse_detail_page(main_html, detail_html, source_id, main_url)
+        return await self._parse_detail_page(main_html, detail_html, source_id, main_url)
 
-    def _parse_detail_page(
+    async def _parse_detail_page(
         self, main_html: str | None, detail_html: str | None, source_id: str, url: str
     ) -> JobPosting | None:
         """상세 페이지 HTML 파싱"""
@@ -98,9 +101,11 @@ class SaraminCrawler(BaseJobCrawler):
         responsibilities = []
         qualifications = []
         preferred_qualifications = []
+        tech_stack = []
         benefits = []
         hiring_process = []
         etc = []
+        full_text = ""
 
         # 상세 페이지에서 직무 내용 추출
         if detail_html:
@@ -109,28 +114,82 @@ class SaraminCrawler(BaseJobCrawler):
 
             if user_content:
                 full_text = user_content.get_text("\n", strip=True)
+                # BaseJobCrawler의 공통 메서드 사용
                 parsed = self._parse_job_content_text(full_text)
-                responsibilities = parsed.get("responsibilities", [])
-                qualifications = parsed.get("qualifications", [])
-                preferred_qualifications = parsed.get("preferred", [])
-                benefits = parsed.get("benefits", [])
-                hiring_process = parsed.get("process", [])
-                etc = parsed.get("etc", [])
+                resp = parsed.get("responsibilities")
+                responsibilities = resp if isinstance(resp, list) else []
+                qual = parsed.get("qualifications")
+                qualifications = qual if isinstance(qual, list) else []
+                pref = parsed.get("preferred")
+                preferred_qualifications = pref if isinstance(pref, list) else []
+                ts = parsed.get("tech_stack")
+                tech_stack = ts if isinstance(ts, list) else []
+                ben = parsed.get("benefits")
+                benefits = ben if isinstance(ben, list) else []
+
+                # benefits 텍스트에서 고용형태 추출
+                if not job_type:
+                    benefits_text = " ".join(benefits)
+                    if "정규직" in benefits_text and "계약직" in benefits_text:
+                        job_type = JobType.ANY
+                    elif "정규직" in benefits_text:
+                        job_type = JobType.FULL_TIME
+                    elif "계약직" in benefits_text:
+                        job_type = JobType.CONTRACT
+
+                proc = parsed.get("process")
+                hiring_process = proc if isinstance(proc, list) else []
+                et = parsed.get("etc")
+                etc = et if isinstance(et, list) else []
 
                 # 마감일/근무지 추출
                 if not deadline or not location:
-                    deadline_location = parsed.get("deadline_location", {})
+                    dl_loc = parsed.get("deadline_location", {})
+                    deadline_location = dl_loc if isinstance(dl_loc, dict) else {}
                     if not deadline:
                         deadline = deadline_location.get("deadline", "")
                     if not location:
                         location = deadline_location.get("location", "")
+
+        # ===== LLM fallback: 키워드 매칭이 핵심 필드를 추출하지 못한 경우 =====
+        if not responsibilities and not qualifications and full_text:
+            logger.info(f"키워드 매칭 실패, LLM fallback 시작 (source_id={source_id})")
+            try:
+                from services.repo.job_parser import parse_job_content_with_llm
+
+                llm_result = await parse_job_content_with_llm(full_text)
+
+                # 키워드 매칭이 핵심 필드 추출에 실패했으면
+                # 다른 필드도 신뢰할 수 없으므로 전부 LLM 결과로 교체
+                responsibilities = llm_result.get("responsibilities", [])
+                qualifications = llm_result.get("qualifications", [])
+                preferred_qualifications = llm_result.get("preferred_qualifications", [])
+                tech_stack = llm_result.get("tech_stack", [])
+                benefits = llm_result.get("benefits", [])
+                hiring_process = llm_result.get("hiring_process", [])
+                etc = llm_result.get("etc", [])
+
+                # LLM 결과에서 고용형태 추출
+                if not isinstance(job_type, JobType):
+                    all_text = " ".join(benefits)
+                    if "정규직" in all_text and "계약직" in all_text:
+                        job_type = JobType.ANY
+                    elif "정규직" in all_text:
+                        job_type = JobType.FULL_TIME
+                    elif "계약직" in all_text:
+                        job_type = JobType.CONTRACT
+
+                logger.info(f"LLM fallback 완료 (source_id={source_id})")
+
+            except Exception as e:
+                logger.error(f"LLM fallback 실패 (source_id={source_id}): {e}")
 
         return JobPosting(
             source=self.source,
             source_id=source_id,
             title=title,
             company=CompanyInfo(name=company_name, location=location),
-            job_type=job_type,
+            job_type=job_type if isinstance(job_type, JobType) else None,
             job_category=job_categories,
             experience_level=experience,
             education=education,
@@ -139,137 +198,10 @@ class SaraminCrawler(BaseJobCrawler):
             responsibilities=responsibilities,
             qualifications=qualifications,
             preferred_qualifications=preferred_qualifications,
+            tech_stack=tech_stack,
             benefits=benefits,
             hiring_process=hiring_process,
             etc=etc,
             deadline=deadline,
             url=url,
         )
-
-    def _extract_list_items(self, element) -> list[str]:
-        """HTML 요소에서 리스트 아이템 추출"""
-        items = []
-
-        # li 태그 먼저 확인
-        li_items = element.select("li")
-        if li_items:
-            for li in li_items:
-                text = li.get_text(strip=True)
-                if text and len(text) > 1:
-                    items.append(text)
-            return items
-
-        # br 태그로 분리된 텍스트
-        text = element.get_text("\n", strip=True)
-        lines = [line.strip() for line in text.split("\n") if line.strip()]
-
-        for line in lines:
-            # - 또는 • 로 시작하는 항목 정리
-            line = re.sub(r"^[-•·]\s*", "", line)
-            if line and len(line) > 1:
-                items.append(line)
-
-        return items
-
-    def _parse_job_content_text(self, text: str) -> dict:
-        """전체 텍스트에서 섹션별로 파싱"""
-        result = {
-            "responsibilities": [],
-            "qualifications": [],
-            "preferred": [],
-            "benefits": [],
-            "process": [],
-            "etc": [],
-            "deadline_location": {},
-        }
-
-        current_section = None
-        lines = text.split("\n")
-
-        for line in lines:
-            line = line.strip()
-            if not line:
-                continue
-
-            # 섹션 헤더 감지 (정확한 매칭)
-            if "주요업무" in line:
-                current_section = "responsibilities"
-                continue
-            elif "자격요건" in line:
-                current_section = "qualifications"
-                continue
-            elif "우대사항" in line or "우대조건" in line:
-                current_section = "preferred"
-                continue
-            elif "마감일 및 근무지" in line or "마감일" in line and "근무지" in line:
-                current_section = "deadline_location"
-                continue
-            elif "복지 및 혜택" in line or "복리후생" in line:
-                current_section = "benefits"
-                continue
-            elif "채용절차" in line or "전형절차" in line:
-                current_section = "process"
-                continue
-            elif "모집부문" in line or "상세내용" in line or "사용 기술" in line:
-                current_section = "etc"
-                continue
-            elif "서비스 소개" in line or "회사 소개" in line:
-                current_section = "company_intro"
-                continue
-
-            # 현재 섹션에 내용 추가
-            if current_section and len(line) > 1:
-                # - 또는 • 등 제거
-                clean_line = re.sub(r"^[-•·]\s*", "", line)
-                # 숫자. 형태 제거
-                clean_line = re.sub(r"^\d+\.\s*", "", clean_line)
-
-                if not clean_line:
-                    continue
-
-                if current_section == "deadline_location":
-                    if "마감일" in clean_line:
-                        match = re.search(r"마감일\s*[:：]\s*(.+)", clean_line)
-                        if match:
-                            result["deadline_location"]["deadline"] = match.group(1).strip()
-                        else:
-                            result["deadline_location"]["deadline"] = clean_line.replace("마감일", "").strip(" :：")
-                    elif "근무지" in clean_line:
-                        # 근무지 뒤에 주소가 같은 줄에 있는 경우
-                        match = re.search(r"근무지\s*[:：]?\s*[-]?\s*(.+)", clean_line)
-                        if match and match.group(1).strip():
-                            result["deadline_location"]["location"] = match.group(1).strip()
-                        # 근무지만 있는 경우 (주소는 다음 줄)
-                    elif not result["deadline_location"].get("location"):
-                        # 근무지 키워드 없이 주소가 오는 경우 (이전 줄이 "근무지"였을 때)
-                        # 주소 패턴 확인 (서울, 경기 등으로 시작하거나 지역명 포함)
-                        if any(
-                            loc in clean_line
-                            for loc in [
-                                "서울",
-                                "경기",
-                                "부산",
-                                "대구",
-                                "인천",
-                                "광주",
-                                "대전",
-                                "울산",
-                                "세종",
-                                "강원",
-                                "충북",
-                                "충남",
-                                "전북",
-                                "전남",
-                                "경북",
-                                "경남",
-                                "제주",
-                            ]
-                        ):
-                            result["deadline_location"]["location"] = clean_line
-                elif current_section == "company_intro":
-                    # 회사 소개는 스킵
-                    continue
-                elif current_section in result and isinstance(result[current_section], list):
-                    result[current_section].append(clean_line)
-
-        return result
