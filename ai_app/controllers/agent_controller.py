@@ -1,4 +1,4 @@
-"""Agent 컨트롤러 — D1 멘토 탐색 SSE 스트리밍 조율"""
+"""Agent 컨트롤러 — LangGraph 기반 SSE 스트리밍 조율"""
 
 import json
 import logging
@@ -6,17 +6,15 @@ import os
 from collections.abc import AsyncGenerator
 
 from schemas.agent import AgentReplyRequest
-from services.agent.intent_router import IntentRouter
-from services.agent.mentor_search import run_d1_pipeline
-from services.agent.session import Session, get_session_store
+from services.agent.graph import get_agent_graph
+from services.agent.session import get_session_store
 from sqlalchemy import create_engine
-from sqlalchemy.engine import Connection
 
 logger = logging.getLogger(__name__)
 
 
 class AgentController:
-    """Agent HTTP 레이어 조율자"""
+    """Agent HTTP 레이어 조율자 (LangGraph 기반)"""
 
     def __init__(self, database_url: str | None = None):
         self.database_url = database_url or os.getenv(
@@ -24,7 +22,6 @@ class AgentController:
             "postgresql://postgres:postgres@localhost:5432/devmentor",
         )
         self._engine = None
-        self._intent_router = IntentRouter()
 
     @property
     def engine(self):
@@ -32,7 +29,7 @@ class AgentController:
             self._engine = create_engine(self.database_url)
         return self._engine
 
-    def get_connection(self) -> Connection:
+    def get_connection(self):
         return self.engine.connect()
 
     # ============== 세션 관리 ==============
@@ -54,19 +51,18 @@ class AgentController:
         session = store.get(session_id)
         return session.to_dict() if session else None
 
-    # ============== D1 멘토 탐색 스트리밍 ==============
+    # ============== LangGraph 기반 스트리밍 ==============
 
     async def stream_reply(
         self,
         request: AgentReplyRequest,
     ) -> AsyncGenerator[str, None]:
         """
-        Agent 답변 SSE 스트리밍
+        Agent 답변 SSE 스트리밍 (LangGraph 기반)
 
         1. 세션 가져오기/생성
-        2. 의도 분류
-        3. D1이면 멘토 탐색 파이프라인 실행
-        4. SSE 이벤트 생성
+        2. LangGraph 실행 (의도분류 → D1/D2/D3 분기)
+        3. 그래프 결과의 events를 SSE로 스트리밍
 
         Yields:
             SSE 형식 문자열 ("event: ...\ndata: ...\n\n")
@@ -80,48 +76,34 @@ class AgentController:
         # 세션 ID 전송
         yield _sse_format("session", {"session_id": session.session_id})
 
-        # 의도 분류
-        intent_result = await self._intent_router.classify(
-            message=request.message,
-            history=session.get_history(),
-        )
-        session.last_intent = intent_result.intent
+        # LangGraph 실행
+        graph = get_agent_graph()
 
-        yield _sse_format("intent", intent_result.model_dump())
+        with self.get_connection() as conn:
+            result = await graph.ainvoke({
+                "message": request.message,
+                "history": session.get_history(),
+                "top_k": request.top_k,
+                "conn": conn,
+                "events": [],
+            })
 
-        # 의도별 분기
-        if intent_result.intent == "D1":
-            # D1: 멘토 탐색
-            reply_text = ""
-            with self.get_connection() as conn:
-                async for event in run_d1_pipeline(
-                    message=request.message,
-                    conn=conn,
-                    top_k=request.top_k,
-                ):
-                    yield _sse_format(event["event"], event["data"])
+        # 의도 저장
+        if result.get("intent_result"):
+            session.last_intent = result["intent_result"].intent
 
-                    # reply_text 누적 (세션 이력용)
-                    if event["event"] == "text":
-                        reply_text += event["data"].get("chunk", "")
+        # SSE 이벤트 스트리밍
+        reply_text = ""
+        for event in result.get("events", []):
+            yield _sse_format(event["event"], event["data"])
 
-            # 세션에 어시스턴트 응답 추가
-            if reply_text:
-                session.add_assistant_message(reply_text.strip())
+            # reply_text 누적 (세션 이력용)
+            if event["event"] == "text":
+                reply_text += event["data"].get("chunk", "")
 
-        elif intent_result.intent == "D2":
-            # D2: 질문 개선 (미구현)
-            msg = "질문 개선 기능은 준비 중이에요! 🚧 멘토 탐색을 원하시면 조건을 말씀해주세요."
-            yield _sse_format("text", {"chunk": msg})
-            yield _sse_format("done", {})
-            session.add_assistant_message(msg)
-
-        elif intent_result.intent == "D3":
-            # D3: AI멘토 대화 (미구현)
-            msg = "AI 멘토 대화 기능은 준비 중이에요! 🚧 멘토 탐색을 원하시면 조건을 말씀해주세요."
-            yield _sse_format("text", {"chunk": msg})
-            yield _sse_format("done", {})
-            session.add_assistant_message(msg)
+        # 세션에 어시스턴트 응답 추가
+        if reply_text:
+            session.add_assistant_message(reply_text.strip())
 
 
 def _sse_format(event: str, data: dict) -> str:
