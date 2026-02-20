@@ -152,8 +152,26 @@ jobs:
           echo "============================================"
 
           if [ ! -d "$COMPOSE_DIR" ]; then
-            echo "❌ Compose directory not found: $COMPOSE_DIR"
-            exit 1
+            echo "⚠️ Compose directory not found, creating: $COMPOSE_DIR"
+            sudo mkdir -p "$COMPOSE_DIR"
+            sudo chown -R ubuntu:ubuntu "$COMPOSE_DIR"
+          fi
+
+          if [ ! -f "$COMPOSE_DIR/docker-compose.yml" ]; then
+            echo "⚠️ docker-compose.yml not found, creating minimal config"
+            echo "services:
+          ai:
+            image: ${FULL_IMAGE}
+            env_file: .env.ai
+            ports:
+              - \"8000:8000\"
+            restart: unless-stopped" > "$COMPOSE_DIR/docker-compose.yml"
+            chown ubuntu:ubuntu "$COMPOSE_DIR/docker-compose.yml"
+          fi
+
+          if [ ! -f "$COMPOSE_DIR/.env" ]; then
+            echo "AI_TAG=${IMAGE_TAG}" > "$COMPOSE_DIR/.env"
+            chown ubuntu:ubuntu "$COMPOSE_DIR/.env"
           fi
 
           echo "🐳 Image: ${FULL_IMAGE}"
