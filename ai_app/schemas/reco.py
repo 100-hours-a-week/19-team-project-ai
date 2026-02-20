@@ -65,7 +65,7 @@ class MentorSearchRequest(BaseModel):
     """멘토 검색 요청"""
 
     query: str = Field(..., description="검색어 (예: 백엔드 MSA 경험)")
-    top_k: int = Field(default=5, ge=1, le=20, description="검색 개수")
+    top_k: int = Field(default=3, ge=1, le=20, description="검색 개수")
     only_verified: bool = Field(default=False, description="인증 멘토만 검색")
 
 
