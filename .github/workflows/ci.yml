@@ -117,7 +117,7 @@ jobs:
       
       # [Security Scan] Frontend의 audit과 대응되는 보안 검사 추가
       - name: Security Scan (Bandit)
-        run: uv run bandit -r ${{ env.WORKING_DIRECTORY }} -x tests/
+        run: uv run bandit -c pyproject.toml -r ${{ env.WORKING_DIRECTORY }} -x tests/
       
       # [Unit Tests] 단위 테스트 수행
       - name: Run Unit Tests
