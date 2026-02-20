@@ -279,7 +279,7 @@ class MentorRetriever:
     def verify_mentor_ground_truth(
         self,
         mentor_user_id: int,
-        top_k: int = 5,
+        top_k: int = 3,
     ) -> dict[str, Any]:
         """
         개별 멘토에 대한 Silver Ground Truth 검증
@@ -334,7 +334,7 @@ class MentorRetriever:
     def recommend_mentors(
         self,
         user_id: int,
-        top_k: int = 5,
+        top_k: int = 3,
         only_verified: bool = False,
         include_gt: bool = False,
     ) -> list[dict[str, Any]]:
@@ -416,7 +416,7 @@ class MentorRetriever:
     def search_by_text(
         self,
         query_text: str,
-        top_k: int = 5,
+        top_k: int = 3,
         only_verified: bool = False,
     ) -> list[dict[str, Any]]:
         """

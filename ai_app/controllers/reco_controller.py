@@ -40,7 +40,7 @@ class RecoController:
     async def recommend_mentors(
         self,
         user_id: int,
-        top_k: int = 5,
+        top_k: int = 3,
         only_verified: bool = False,
         include_eval: bool = False,
     ) -> MentorRecommendResponse:

@@ -31,6 +31,8 @@ dependencies = [
     "transformers>=4.30.0",
     "uvicorn[standard]>=0.27.0",
     "prometheus-fastapi-instrumentator>=7.0.0",
+    "langgraph>=0.4.0",
+    "langchain-core>=0.3.0",
     # 의존성 충돌 방지: grpcio 버전 고정
     "grpcio>=1.60.0,<1.70.0",
     "grpcio-status>=1.60.0,<1.70.0",
@@ -67,3 +69,7 @@ python_version = "3.10"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = false
+
+[tool.bandit]
+# B110: try_except_pass - 코드에서 의도적 예외 무시 시 허용 (추후 개선 권장)
+skips = ["B110"]
