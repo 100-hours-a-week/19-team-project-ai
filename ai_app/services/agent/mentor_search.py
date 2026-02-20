@@ -9,10 +9,11 @@ from typing import Any
 from adapters.llm_client import LLMClient, get_llm_client
 from prompts import load_prompt
 from schemas.agent import MentorCard, MentorConditions
-from services.agent.slot_filling import SlotFiller
-from services.reco.embedder import ProfileEmbedder, get_embedder
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
+
+from services.agent.slot_filling import SlotFiller
+from services.reco.embedder import ProfileEmbedder, get_embedder
 
 logger = logging.getLogger(__name__)
 
@@ -111,20 +112,22 @@ def vector_search(
         if row.responded_request_count and row.responded_request_count > 0:
             response_rate = row.accepted_request_count / row.responded_request_count * 100
 
-        candidates.append({
-            "user_id": row.user_id,
-            "nickname": row.nickname,
-            "introduction": row.introduction or "",
-            "company_name": row.company_name,
-            "verified": row.verified,
-            "rating_avg": round(row.rating_avg, 1) if row.rating_avg else 0.0,
-            "rating_count": row.rating_count or 0,
-            "response_rate": round(response_rate, 1),
-            "skills": row.skills or [],
-            "jobs": row.jobs or [],
-            "similarity_score": round(float(row.embedding_similarity), 4),
-            "last_active_at": row.last_active_at,
-        })
+        candidates.append(
+            {
+                "user_id": row.user_id,
+                "nickname": row.nickname,
+                "introduction": row.introduction or "",
+                "company_name": row.company_name,
+                "verified": row.verified,
+                "rating_avg": round(row.rating_avg, 1) if row.rating_avg else 0.0,
+                "rating_count": row.rating_count or 0,
+                "response_rate": round(response_rate, 1),
+                "skills": row.skills or [],
+                "jobs": row.jobs or [],
+                "similarity_score": round(float(row.embedding_similarity), 4),
+                "last_active_at": row.last_active_at,
+            }
+        )
 
     logger.info(f"벡터 검색 완료: {len(candidates)}명 후보")
     return candidates
@@ -198,11 +201,13 @@ def rule_rerank(
             except Exception:
                 pass
 
-        scored.append({
-            **cand,
-            "rerank_score": round(score, 4),
-            "filter_type": filter_type,
-        })
+        scored.append(
+            {
+                **cand,
+                "rerank_score": round(score, 4),
+                "filter_type": filter_type,
+            }
+        )
 
     # 재정렬 점수 내림차순 정렬
     scored.sort(key=lambda x: x["rerank_score"], reverse=True)
@@ -210,21 +215,23 @@ def rule_rerank(
     # Top K 선택 & MentorCard 변환
     cards = []
     for item in scored[:top_k]:
-        cards.append(MentorCard(
-            user_id=item["user_id"],
-            nickname=item["nickname"],
-            company_name=item.get("company_name"),
-            verified=item.get("verified", False),
-            rating_avg=item.get("rating_avg", 0.0),
-            rating_count=item.get("rating_count", 0),
-            response_rate=item.get("response_rate", 0.0),
-            skills=item.get("skills", []),
-            jobs=item.get("jobs", []),
-            introduction=item.get("introduction", ""),
-            similarity_score=item["similarity_score"],
-            rerank_score=item["rerank_score"],
-            filter_type=item.get("filter_type"),
-        ))
+        cards.append(
+            MentorCard(
+                user_id=item["user_id"],
+                nickname=item["nickname"],
+                company_name=item.get("company_name"),
+                verified=item.get("verified", False),
+                rating_avg=item.get("rating_avg", 0.0),
+                rating_count=item.get("rating_count", 0),
+                response_rate=item.get("response_rate", 0.0),
+                skills=item.get("skills", []),
+                jobs=item.get("jobs", []),
+                introduction=item.get("introduction", ""),
+                similarity_score=item["similarity_score"],
+                rerank_score=item["rerank_score"],
+                filter_type=item.get("filter_type"),
+            )
+        )
 
     logger.info(f"재정렬 완료: {len(cards)}명 최종 선택")
     return cards

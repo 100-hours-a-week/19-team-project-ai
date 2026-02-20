@@ -1,13 +1,12 @@
 """Agent LangGraph — StateGraph 기반 파이프라인 오케스트레이션"""
 
-import json
 import logging
 from typing import Annotated, Any, TypedDict
 
 from langgraph.graph import END, StateGraph
-
-from adapters.llm_client import LLMClient, get_llm_client
 from schemas.agent import IntentResult, MentorCard, MentorConditions
+from sqlalchemy.engine import Connection
+
 from services.agent.intent_router import IntentRouter
 from services.agent.mentor_search import (
     build_query_text,
@@ -17,8 +16,7 @@ from services.agent.mentor_search import (
     vector_search,
 )
 from services.agent.slot_filling import SlotFiller
-from services.reco.embedder import ProfileEmbedder, get_embedder
-from sqlalchemy.engine import Connection
+from services.reco.embedder import get_embedder
 
 logger = logging.getLogger(__name__)
 
@@ -100,7 +98,10 @@ async def vector_search_node(state: AgentState) -> dict:
             "candidates": [],
             "cards": [],
             "events": [
-                {"event": "text", "data": {"chunk": "조건에 맞는 멘토를 찾지 못했어요. 조건을 변경해서 다시 시도해보세요! 🙏"}},
+                {
+                    "event": "text",
+                    "data": {"chunk": "조건에 맞는 멘토를 찾지 못했어요. 조건을 변경해서 다시 시도해보세요! 🙏"},
+                },
                 {"event": "done", "data": {}},
             ],
         }

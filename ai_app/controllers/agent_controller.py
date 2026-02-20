@@ -80,13 +80,15 @@ class AgentController:
         graph = get_agent_graph()
 
         with self.get_connection() as conn:
-            result = await graph.ainvoke({
-                "message": request.message,
-                "history": session.get_history(),
-                "top_k": request.top_k,
-                "conn": conn,
-                "events": [],
-            })
+            result = await graph.ainvoke(
+                {
+                    "message": request.message,
+                    "history": session.get_history(),
+                    "top_k": request.top_k,
+                    "conn": conn,
+                    "events": [],
+                }
+            )
 
         # 의도 저장
         if result.get("intent_result"):
