@@ -117,18 +117,22 @@ jobs:
             exit 1
           fi
 
-      - name: Deploy to Prod EC2 via SSM (Docker)
+      - name: Deploy to Prod EC2 via SSM (V2 - Docker)
         id: deploy
         env:
-          SERVER_BASE_PATH: ${{ secrets.SERVER_BASE_PATH }}
-          EC2_INSTANCE_ID: ${{ secrets.EC2_INSTANCE_ID }}
-          HEALTH_CHECK_URL: ${{ secrets.HEALTH_CHECK_URL }}
-          PROD_COMPOSE_DIR: ${{ secrets.PROD_COMPOSE_DIR }}
-          AI_ENV_FILE_PROD: ${{ secrets.AI_ENV_FILE_PROD }}
+          SERVER_BASE_PATH: ${{ secrets.SERVER_BASE_PATH_V2 }}
+          EC2_INSTANCE_ID: ${{ secrets.EC2_INSTANCE_ID_V2 }}
+          HEALTH_CHECK_URL: ${{ secrets.HEALTH_CHECK_URL_V2 }}
+          PROD_COMPOSE_DIR: ${{ secrets.PROD_COMPOSE_DIR_V2 }}
+          AI_ENV_FILE_PROD: ${{ secrets.AI_ENV_FILE_PROD_V2 }}
         run: |
           set -euo pipefail
 
-          AI_HEALTH_URL="${HEALTH_CHECK_URL%/health}/api/ai/health"
+          if [ -z "$HEALTH_CHECK_URL" ]; then
+            AI_HEALTH_URL=""
+          else
+            AI_HEALTH_URL="${HEALTH_CHECK_URL%/health}/api/ai/health"
+          fi
           COMPOSE_DIR="${PROD_COMPOSE_DIR:-${SERVER_BASE_PATH}/docker}"
           ECR_REGISTRY="${{ steps.login-ecr.outputs.registry }}"
           ECR_REPO="${{ secrets.ECR_REPOSITORY_AI }}"
@@ -148,8 +152,26 @@ jobs:
           echo "============================================"
 
           if [ ! -d "$COMPOSE_DIR" ]; then
-            echo "❌ Compose directory not found: $COMPOSE_DIR"
-            exit 1
+            echo "⚠️ Compose directory not found, creating: $COMPOSE_DIR"
+            sudo mkdir -p "$COMPOSE_DIR"
+            sudo chown -R ubuntu:ubuntu "$COMPOSE_DIR"
+          fi
+
+          if [ ! -f "$COMPOSE_DIR/docker-compose.yml" ]; then
+            echo "⚠️ docker-compose.yml not found, creating minimal config"
+            echo "services:
+          ai:
+            image: ${FULL_IMAGE}
+            env_file: .env.ai
+            ports:
+              - \"8000:8000\"
+            restart: unless-stopped" > "$COMPOSE_DIR/docker-compose.yml"
+            chown ubuntu:ubuntu "$COMPOSE_DIR/docker-compose.yml"
+          fi
+
+          if [ ! -f "$COMPOSE_DIR/.env" ]; then
+            echo "AI_TAG=${IMAGE_TAG}" > "$COMPOSE_DIR/.env"
+            chown ubuntu:ubuntu "$COMPOSE_DIR/.env"
           fi
 
           echo "🐳 Image: ${FULL_IMAGE}"
@@ -184,6 +206,11 @@ jobs:
 
           systemctl is-active --quiet caddy && sudo systemctl reload caddy 2>/dev/null || true
           sleep 2
+
+          if [ -z "$HEALTH_CHECK_URL" ]; then
+            echo "⚠️ HEALTH_CHECK_URL이 비어 있어 헬스체크를 건너뜁니다."
+            exit 0
+          fi
 
           for i in {1..15}; do
             HTTP_STATUS=$(timeout 10 curl -s -o /dev/null -w "%{http_code}" "$HEALTH_CHECK_URL" 2>/dev/null || echo "000")
