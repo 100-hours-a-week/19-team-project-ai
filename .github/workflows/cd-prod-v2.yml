@@ -141,6 +141,7 @@ jobs:
 
           DEPLOY_SCRIPT=$(cat <<'SCRIPT_END'
           set -euo pipefail
+          export PATH="/usr/local/bin:/usr/bin:/bin:$PATH"
           COMPOSE_DIR="$1"
           FULL_IMAGE="$2"
           IMAGE_TAG="$3"

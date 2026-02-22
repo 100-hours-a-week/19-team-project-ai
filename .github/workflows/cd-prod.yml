@@ -236,6 +236,28 @@ jobs:
           pip install "$WHEEL_FILE" --force-reinstall --no-cache-dir > /tmp/pip_install.log 2>&1 && {
             echo "✅ 패키지 설치 완료"
             tail -20 /tmp/pip_install.log
+
+            # ai_app 디렉터리에 배포 코드 동기화 (PM2가 이 경로에서 실행됨)
+            if [ -d "$AI_APP_DIR" ]; then
+              echo "ai_app 디렉터리에 배포 코드 동기화 중..."
+              AI_APP_SOURCE=$(python -c "import ai_app; import os; print(os.path.dirname(ai_app.__file__))" 2>/dev/null) || true
+              if [ -n "$AI_APP_SOURCE" ] && [ -d "$AI_APP_SOURCE" ]; then
+                rsync -a --delete "$AI_APP_SOURCE/" "$AI_APP_DIR/" 2>/dev/null || {
+                  rm -rf "$AI_APP_DIR"/*
+                  cp -r "$AI_APP_SOURCE"/* "$AI_APP_DIR/"
+                }
+                echo "✅ ai_app 동기화 완료 (site-packages → $AI_APP_DIR)"
+              else
+                echo "⚠️ ai_app 모듈 경로를 찾을 수 없습니다. 기존 코드 유지"
+              fi
+            else
+              mkdir -p "$AI_APP_DIR"
+              AI_APP_SOURCE=$(python -c "import ai_app; import os; print(os.path.dirname(ai_app.__file__))" 2>/dev/null) || true
+              if [ -n "$AI_APP_SOURCE" ] && [ -d "$AI_APP_SOURCE" ]; then
+                cp -r "$AI_APP_SOURCE"/* "$AI_APP_DIR/"
+                echo "✅ ai_app 초기 복사 완료"
+              fi
+            fi
           } || {
             echo "❌ 패키지 설치 실패"
             tail -50 /tmp/pip_install.log
