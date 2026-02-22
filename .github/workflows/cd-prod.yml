@@ -240,7 +240,12 @@ jobs:
             # ai_app 디렉터리에 배포 코드 동기화 (PM2가 이 경로에서 실행됨)
             if [ -d "$AI_APP_DIR" ]; then
               echo "ai_app 디렉터리에 배포 코드 동기화 중..."
-              AI_APP_SOURCE=$(python -c "import ai_app; import os; print(os.path.dirname(ai_app.__file__))" 2>/dev/null) || true
+              PYTHON_VER=$($AI_DIR/venv/bin/python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null) || true
+              if [ -n "$PYTHON_VER" ]; then
+                AI_APP_SOURCE="$AI_DIR/venv/lib/python${PYTHON_VER}/site-packages/ai_app"
+              else
+                AI_APP_SOURCE=$(python -c "import ai_app; import os; print(os.path.dirname(ai_app.__file__))" 2>/dev/null) || true
+              fi
               if [ -n "$AI_APP_SOURCE" ] && [ -d "$AI_APP_SOURCE" ]; then
                 rsync -a --delete "$AI_APP_SOURCE/" "$AI_APP_DIR/" 2>/dev/null || {
                   rm -rf "$AI_APP_DIR"/*
@@ -252,7 +257,12 @@ jobs:
               fi
             else
               mkdir -p "$AI_APP_DIR"
-              AI_APP_SOURCE=$(python -c "import ai_app; import os; print(os.path.dirname(ai_app.__file__))" 2>/dev/null) || true
+              PYTHON_VER=$($AI_DIR/venv/bin/python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null) || true
+              if [ -n "$PYTHON_VER" ]; then
+                AI_APP_SOURCE="$AI_DIR/venv/lib/python${PYTHON_VER}/site-packages/ai_app"
+              else
+                AI_APP_SOURCE=$(python -c "import ai_app; import os; print(os.path.dirname(ai_app.__file__))" 2>/dev/null) || true
+              fi
               if [ -n "$AI_APP_SOURCE" ] && [ -d "$AI_APP_SOURCE" ]; then
                 cp -r "$AI_APP_SOURCE"/* "$AI_APP_DIR/"
                 echo "✅ ai_app 초기 복사 완료"
