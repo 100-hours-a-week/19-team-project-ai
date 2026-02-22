@@ -167,3 +167,4 @@ rsync -a --delete "$AI_APP_SOURCE/" "$AI_APP_DIR/"
 | ai_app/ | PM2가 cwd/PYTHONPATH로 사용하는 실제 실행 경로 |
 | 수정 내용 | pip install 후 site-packages/ai_app를 ai_app/로 복사 |
 | 결과 | main 머지 → CD → 서버 ai_app 갱신 → PM2가 최신 코드 실행 |
+
