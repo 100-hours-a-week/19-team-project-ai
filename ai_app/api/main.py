@@ -51,4 +51,3 @@ app.include_router(agent_router.router, prefix="/api/ai")
 
 # FastAPI 자동 트레이싱 (otel-collector → Tempo)
 FastAPIInstrumentor.instrument_app(app)
-
