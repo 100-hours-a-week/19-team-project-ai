@@ -4,7 +4,7 @@ from api.endpoints import agent_router, health_router, reco_router, repo_router,
 from dotenv import load_dotenv
 from fastapi import FastAPI
 from opentelemetry import trace
-from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
@@ -14,8 +14,8 @@ from prometheus_fastapi_instrumentator import Instrumentator
 load_dotenv(".env.ai")
 load_dotenv()
 
-# OpenTelemetry 트레이서 프로바이더 설정 (Tempo로 트레이스 전송)
-_otlp_endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "10.0.7.8:4318")
+# OpenTelemetry 트레이서 프로바이더 설정 (Tempo로 트레이스 전송, 4318=HTTP)
+_otlp_endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://10.0.7.8:4318")
 _provider = TracerProvider()
 _provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter(endpoint=_otlp_endpoint)))
 trace.set_tracer_provider(_provider)
