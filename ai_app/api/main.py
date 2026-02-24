@@ -1,11 +1,26 @@
+import os
+
 from api.endpoints import agent_router, health_router, reco_router, repo_router, resumes_router
 from dotenv import load_dotenv
 from fastapi import FastAPI
+from opentelemetry import trace
+from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from prometheus_fastapi_instrumentator import Instrumentator
 
 # .env.ai가 있으면 먼저 로드 (배포 환경 용), 없으면 기본 .env 로드
 load_dotenv(".env.ai")
 load_dotenv()
+
+# OpenTelemetry 트레이서 프로바이더 설정 (Tempo로 트레이스 전송)
+_otlp_endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "10.0.7.8:4317")
+_provider = TracerProvider()
+_provider.add_span_processor(
+    BatchSpanProcessor(OTLPSpanExporter(endpoint=_otlp_endpoint, insecure=True))  # noqa: S501
+)
+trace.set_tracer_provider(_provider)
 
 app = FastAPI(
     title="AI Resume & Mentoring Platform",
@@ -35,3 +50,6 @@ app.include_router(resumes_router.router, prefix="/api/ai")
 app.include_router(reco_router.router, prefix="/api/ai")
 app.include_router(repo_router.router, prefix="/api/ai")
 app.include_router(agent_router.router, prefix="/api/ai")
+
+# FastAPI 자동 트레이싱 (otel-collector → Tempo)
+FastAPIInstrumentor.instrument_app(app)
