@@ -15,7 +15,7 @@ load_dotenv(".env.ai")
 load_dotenv()
 
 # OpenTelemetry 트레이서 프로바이더 설정 (Tempo로 트레이스 전송)
-_otlp_endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "10.0.7.8:4317")
+_otlp_endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "10.0.7.8:4318")
 _provider = TracerProvider()
 _provider.add_span_processor(
     BatchSpanProcessor(OTLPSpanExporter(endpoint=_otlp_endpoint, insecure=True))  # noqa: S501
