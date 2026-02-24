@@ -36,6 +36,11 @@ dependencies = [
     # 의존성 충돌 방지: grpcio 버전 고정
     "grpcio>=1.60.0,<1.70.0",
     "grpcio-status>=1.60.0,<1.70.0",
+    "prometheus-fastapi-instrumentator>=7.0.0",
+    "opentelemetry-api>=1.20.0",
+    "opentelemetry-sdk>=1.20.0",
+    "opentelemetry-instrumentation-fastapi>=0.41b0",
+    "opentelemetry-exporter-otlp>=1.20.0",
 ]
 
 [project.optional-dependencies]
@@ -51,6 +56,10 @@ dev = [
 
 [tool.setuptools]
 include-package-data = true  # MANIFEST.in 사용
+
+# Wheel에 prompts/*.md 명시적 포함 (배포 시 누락 방지)
+[tool.setuptools.package-data]
+ai_app = ["prompts/*.md"]
 
 [tool.setuptools.packages.find]
 where = ["."]
