@@ -5,6 +5,7 @@ import logging
 import os
 from collections.abc import AsyncGenerator
 
+from middleware.otel_lgtm_metrics import tracked_db_connection
 from schemas.agent import AgentReplyRequest
 from services.agent.graph import get_agent_graph
 from services.agent.session import get_session_store
@@ -30,7 +31,7 @@ class AgentController:
         return self._engine
 
     def get_connection(self):
-        return self.engine.connect()
+        return tracked_db_connection(self.engine)
 
     # ============== 세션 관리 ==============
 
