@@ -3,6 +3,7 @@ import os
 from api.endpoints import agent_router, health_router, reco_router, repo_router, resumes_router
 from dotenv import load_dotenv
 from fastapi import FastAPI
+from middleware.otel_lgtm_metrics import install_lgtm_metrics
 from opentelemetry import trace
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
@@ -25,6 +26,9 @@ app = FastAPI(
     description="AI-powered resume processing and mentor matching service",
     version="0.1.0",
 )
+
+# LGTM 대시보드 호환 커스텀 메트릭 추가
+install_lgtm_metrics(app)
 
 # Prometheus 메트릭 계측 (/metrics 엔드포인트 자동 생성)
 Instrumentator(

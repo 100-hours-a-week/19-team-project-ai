@@ -1,8 +1,10 @@
 """멘토 추천 API 컨트롤러"""
 
 import os
+from typing import ContextManager
 
 from fastapi import HTTPException
+from middleware.otel_lgtm_metrics import tracked_db_connection
 from schemas.common import ResponseCode
 from schemas.reco import (
     EvaluationDetail,
@@ -13,7 +15,6 @@ from schemas.reco import (
 )
 from services.reco.retrieval import MentorRetriever
 from sqlalchemy import create_engine, text
-from sqlalchemy.engine import Connection
 
 
 class RecoController:
@@ -33,9 +34,9 @@ class RecoController:
             self._engine = create_engine(self.database_url)
         return self._engine
 
-    def get_connection(self) -> Connection:
+    def get_connection(self) -> ContextManager:
         """DB 연결 반환"""
-        return self.engine.connect()
+        return tracked_db_connection(self.engine)
 
     async def recommend_mentors(
         self,
