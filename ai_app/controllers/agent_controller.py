@@ -3,13 +3,11 @@
 import json
 import logging
 import os
-from collections.abc import AsyncGenerator
 
 from middleware.otel_lgtm_metrics import tracked_db_connection
 from schemas.agent import AgentReplyRequest
 from services.agent.graph import get_agent_graph
 from services.agent.session import get_session_store
-from sqlalchemy import create_engine
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +25,8 @@ class AgentController:
     @property
     def engine(self):
         if self._engine is None:
+            from sqlalchemy import create_engine
+
             self._engine = create_engine(self.database_url)
         return self._engine
 
@@ -57,7 +57,7 @@ class AgentController:
     async def stream_reply(
         self,
         request: AgentReplyRequest,
-    ) -> AsyncGenerator[str, None]:
+    ):
         """
         Agent 답변 SSE 스트리밍 (LangGraph 기반)
 
@@ -77,7 +77,7 @@ class AgentController:
         # 세션 ID 전송
         yield _sse_format("session", {"session_id": session.session_id})
 
-        # LangGraph 실행
+        # LangGraph 실행 (DB 연결 불필요)
         graph = get_agent_graph()
 
         with self.get_connection() as conn:

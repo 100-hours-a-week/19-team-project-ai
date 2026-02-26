@@ -5,7 +5,6 @@ from typing import Annotated, Any, TypedDict
 
 from langgraph.graph import END, StateGraph
 from schemas.agent import IntentResult, MentorCard, MentorConditions
-from sqlalchemy.engine import Connection
 
 from services.agent.intent_router import IntentRouter
 from services.agent.mentor_search import (
@@ -36,7 +35,6 @@ class AgentState(TypedDict, total=False):
     message: str
     history: list[dict]
     top_k: int
-    conn: Connection
 
     # ---- 중간 결과 ----
     intent_result: IntentResult
@@ -82,7 +80,6 @@ async def extract_conditions_node(state: AgentState) -> dict:
 async def vector_search_node(state: AgentState) -> dict:
     """벡터 검색 노드"""
     conditions = state["conditions"]
-    conn = state["conn"]
 
     # 쿼리 빌드 & 임베딩
     query_text = build_query_text(conditions)
@@ -90,8 +87,8 @@ async def vector_search_node(state: AgentState) -> dict:
     query_embedding = embedder.embed_text(query_text)
     embedding_list = query_embedding.tolist()
 
-    # pgvector 검색
-    candidates = vector_search(embedding_list, conn, top_n=50)
+    # 백엔드 API 경유 벡터 검색
+    candidates = await vector_search(embedding_list, top_n=50)
 
     if not candidates:
         return {
