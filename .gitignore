@@ -182,4 +182,5 @@ docker-compose.override.yml
 
 
 step/
+scripts/
 
