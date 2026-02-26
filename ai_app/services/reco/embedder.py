@@ -25,10 +25,11 @@ class ProfileEmbedder:
             logger.info("Embedding model loaded successfully")
         return self._model
 
-    def embed_text(self, text: str) -> np.ndarray:
-        """단일 텍스트 임베딩 생성"""
+    def embed_text(self, text: str, is_query: bool = True) -> np.ndarray:
+        """단일 텍스트 임베딩 생성 (E5 prefix 처리)"""
         if "e5" in self.model_name.lower():
-            text = f"query: {text}"
+            prefix = "query" if is_query else "passage"
+            text = f"{prefix}: {text}"
         return self.model.encode(text, normalize_embeddings=True)
 
     def embed_texts(self, texts: list[str]) -> np.ndarray:

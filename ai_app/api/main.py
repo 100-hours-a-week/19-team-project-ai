@@ -47,6 +47,14 @@ async def root_health():
     return {"status": "ok"}
 
 
+@app.on_event("startup")
+async def preload_embedding_model():
+    """임베딩 모델을 서버 시작 시 미리 로드하여 첫 요청 지연(Cold Start) 제거"""
+    from services.reco.embedder import get_embedder
+
+    get_embedder().model  # lazy loading 트리거
+
+
 app.include_router(health_router.router, prefix="/api/ai", tags=["Health"])
 app.include_router(resumes_router.router, prefix="/api/ai")
 app.include_router(reco_router.router, prefix="/api/ai")
