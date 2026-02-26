@@ -1,11 +1,7 @@
 import os
-from dotenv import load_dotenv
-
-# .env.ai가 있으면 먼저 로드 (배포 환경 용), 없으면 기본 .env 로드
-load_dotenv(".env.ai")
-load_dotenv()
 
 from api.endpoints import agent_router, health_router, reco_router, repo_router, resumes_router
+from dotenv import load_dotenv
 from fastapi import FastAPI
 from middleware.otel_lgtm_metrics import install_lgtm_metrics
 from opentelemetry import trace
@@ -14,6 +10,10 @@ from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from prometheus_fastapi_instrumentator import Instrumentator
+
+# .env.ai가 있으면 먼저 로드 (배포 환경 용), 없으면 기본 .env 로드
+load_dotenv(".env.ai")
+load_dotenv()
 
 # OpenTelemetry 트레이서 프로바이더 설정 (Tempo로 트레이스 전송, 4318=HTTP)
 _otlp_endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://10.0.7.8:4318")

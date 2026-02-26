@@ -109,7 +109,6 @@ class VectorSearchClient:
             logger.error(f"벡터 검색 실패: {e}")
             raise
 
-
     async def get_expert_embeddings_exist(self, user_ids: list[int]) -> list[int]:
         """임베딩이 존재하는 멘토 ID 목록 조회"""
         pool = await get_pool()

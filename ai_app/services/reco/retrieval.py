@@ -6,6 +6,7 @@ from typing import Any
 
 from adapters.backend_client import BackendAPIClient, get_backend_client
 from adapters.db_client import VectorSearchClient, get_vector_search_client
+
 from services.reco.embedder import ProfileEmbedder, get_embedder
 
 logger = logging.getLogger(__name__)
@@ -318,19 +319,17 @@ class MentorRetriever:
 
         # 5) 검색 결과에 멘토 상세 정보 결합 (병렬로 상위 후보들의 정보만 가져옴)
         import asyncio
+
         experts_map = {}
-        semaphore = asyncio.Semaphore(10) # 10개 병렬
+        semaphore = asyncio.Semaphore(10)  # 10개 병렬
 
         async def _fetch_expert(uid):
             async with semaphore:
                 details = await self.backend_client.get_expert_details(uid)
                 return uid, details
 
-        fetch_tasks = [
-            _fetch_expert(sr["user_id"]) 
-            for sr in search_results
-        ]
-        
+        fetch_tasks = [_fetch_expert(sr["user_id"]) for sr in search_results]
+
         try:
             fetch_results = await asyncio.gather(*fetch_tasks)
             experts_map = {uid: details for uid, details in fetch_results if details}
@@ -341,17 +340,16 @@ class MentorRetriever:
         for sr in search_results:
             uid = sr["user_id"]
             expert_data = experts_map.get(uid, {})
-            raw_candidates.append({
-                **expert_data,
-                "user_id": uid,
-                "similarity_score": sr["similarity_score"],
-            })
+            raw_candidates.append(
+                {
+                    **expert_data,
+                    "user_id": uid,
+                    "similarity_score": sr["similarity_score"],
+                }
+            )
 
         # 6) 후보 데이터 변환
-        all_candidates = [
-            self._candidate_to_mentor(c, user_skills, user_jobs)
-            for c in raw_candidates
-        ]
+        all_candidates = [self._candidate_to_mentor(c, user_skills, user_jobs) for c in raw_candidates]
 
         # 7) 필터링 및 Top-K 선택
         top_candidates = self._filter_candidates(all_candidates, top_k)
@@ -494,8 +492,9 @@ class MentorRetriever:
         - 3단계: 백엔드 API를 통해 일괄 업데이트 요청
         """
         import asyncio
+
         logger.info("🚀 시작: 멘토 임베딩 일괄 업데이트 (Batch 모드)")
-        
+
         updated_total = 0
         cursor = None
         page_num = 1
@@ -510,14 +509,15 @@ class MentorRetriever:
                 experts, cursor, has_more = await self.backend_client.get_experts_page(cursor=cursor, size=500)
                 if not experts:
                     break
-                
+
                 # 2. 임베딩할 텍스트 리스트 준비
                 valid_experts = []
                 texts_to_embed = []
                 for expert in experts:
                     user_id = expert.get("user_id")
-                    if not user_id: continue
-                    
+                    if not user_id:
+                        continue
+
                     profile_text = self._build_profile_text(expert)
                     if profile_text:
                         valid_experts.append(expert)
@@ -526,10 +526,10 @@ class MentorRetriever:
                 if texts_to_embed:
                     # 3. 일괄 임베딩 생성 (Batch Embedding)
                     embeddings = self.embedder.embed_texts(texts_to_embed)
-                    
+
                     # 4. 로컬 DB 및 백엔드 저장 (병렬 처리)
                     semaphore = asyncio.Semaphore(10)
-                    
+
                     async def _save_task(expert_data, embedding_arr):
                         async with semaphore:
                             uid = expert_data["user_id"]
@@ -537,18 +537,15 @@ class MentorRetriever:
                             try:
                                 # 백엔드 API를 통해 저장 요청 (백엔드가 DB 업데이트 담당)
                                 return await self.backend_client.save_embedding(uid, emb_list)
-                            except Exception: 
+                            except Exception:
                                 return False
 
-                    save_tasks = [
-                        _save_task(valid_experts[i], embeddings[i]) 
-                        for i in range(len(valid_experts))
-                    ]
-                    
+                    save_tasks = [_save_task(valid_experts[i], embeddings[i]) for i in range(len(valid_experts))]
+
                     results = await asyncio.gather(*save_tasks)
                     page_updated = sum(1 for r in results if r)
                     updated_total += page_updated
-                    
+
                     logger.info(f"📦 페이지 {page_num} 완료: {page_updated}명 업데이트 (누적: {updated_total}명)")
 
                 if not has_more:
@@ -588,7 +585,7 @@ class MentorRetriever:
         # 실시간 요청 시 부하 방지를 위해 기본 샘플 사이즈 제한
         if sample_size is None:
             sample_size = 5
-            
+
         if sample_size:
             expert_ids = expert_ids[:sample_size]
 

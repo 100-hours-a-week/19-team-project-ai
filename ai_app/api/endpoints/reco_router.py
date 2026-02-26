@@ -69,10 +69,12 @@ async def update_all_embeddings(
     """모든 멘토 임베딩 업데이트 (Background)"""
     # 백그라운드에서 작업 실행
     background_tasks.add_task(controller.update_all_embeddings)
-    
+
     return ApiResponse(
         code=ResponseCode.OK,
-        data={"message": "모든 멘토 임베딩 업데이트 작업이 백그라운드에서 시작되었습니다. 로그를 통해 진행 상황을 확인하세요."},
+        data={
+            "message": "모든 멘토 임베딩 업데이트 작업이 백그라운드에서 시작되었습니다. 로그를 통해 진행 상황을 확인하세요."
+        },
     )
 
 

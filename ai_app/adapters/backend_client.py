@@ -3,7 +3,7 @@
 import logging
 import os
 from functools import lru_cache
-from typing import Any, Dict, List, Optional
+from typing import Any, List, Optional
 
 import httpx
 
@@ -91,6 +91,7 @@ class BackendAPIClient:
         except Exception as e:
             logger.error(f"임베딩 저장 실패 ({user_id}): {e}")
             return False
+
     async def get_expert_details(self, user_id: int) -> Optional[dict[str, Any]]:
         """특정 전문가의 상세 정보 조회 (nickname, company_name 등)"""
         url = f"{self.v1_url}/experts/{user_id}"
@@ -98,7 +99,7 @@ class BackendAPIClient:
             async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
                 resp = await client.get(url)
                 resp.raise_for_status()
-            
+
             return resp.json().get("data")
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 404:
@@ -111,7 +112,9 @@ class BackendAPIClient:
 
     # ---------- 멘토 목록 ----------
 
-    async def get_experts_page(self, cursor: str | None = None, size: int = 100) -> tuple[list[dict[str, Any]], str | None, bool]:
+    async def get_experts_page(
+        self, cursor: str | None = None, size: int = 100
+    ) -> tuple[list[dict[str, Any]], str | None, bool]:
         """멘토 목록 한 페이지 조회 (Pagination)"""
         url = f"{self.v1_url}/experts"
         params: dict[str, Any] = {"size": size}
@@ -137,14 +140,14 @@ class BackendAPIClient:
         """전체 멘토 목록 조회 (전체 데이터 포함 - 소규모용)"""
         all_experts: list[dict[str, Any]] = []
         cursor: str | None = None
-        
+
         try:
             while True:
                 experts, cursor, has_more = await self.get_experts_page(cursor)
                 all_experts.extend(experts)
                 if not has_more:
                     break
-            
+
             logger.info(f"전체 멘토 {len(all_experts)}명 조회 완료")
             return all_experts
         except Exception:

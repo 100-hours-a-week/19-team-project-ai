@@ -1,12 +1,11 @@
 """멘토 추천 API 컨트롤러"""
 
-import os
 import logging
+import os
 from typing import ContextManager
 
-from fastapi import HTTPException
+from adapters.backend_client import BackendAPIClient, get_backend_client
 from middleware.otel_lgtm_metrics import tracked_db_connection
-from schemas.common import ResponseCode
 from schemas.reco import (
     EvaluationDetail,
     EvaluationResponse,
@@ -14,9 +13,8 @@ from schemas.reco import (
     MentorRecommendation,
     MentorRecommendResponse,
 )
-from adapters.backend_client import BackendAPIClient, get_backend_client
 from services.reco.retrieval import MentorRetriever
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine
 
 
 class RecoController:
