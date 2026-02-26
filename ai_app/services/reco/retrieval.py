@@ -309,7 +309,7 @@ class MentorRetriever:
         embedding_list = user_embedding.tolist()
 
         # 4) 벡터 유사도 검색 (직접 DB)
-        candidate_limit = max(top_k * 10, 100)
+        candidate_limit = max(top_k * 5, 30)
 
         search_results = await self.vector_search_client.search_similar_experts(
             query_embedding=embedding_list,
