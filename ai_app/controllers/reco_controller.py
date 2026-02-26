@@ -1,11 +1,11 @@
 """멘토 추천 API 컨트롤러"""
 
+import logging
 import os
 from typing import ContextManager
 
-from fastapi import HTTPException
+from adapters.backend_client import BackendAPIClient, get_backend_client
 from middleware.otel_lgtm_metrics import tracked_db_connection
-from schemas.common import ResponseCode
 from schemas.reco import (
     EvaluationDetail,
     EvaluationResponse,
@@ -14,29 +14,31 @@ from schemas.reco import (
     MentorRecommendResponse,
 )
 from services.reco.retrieval import MentorRetriever
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine
 
 
 class RecoController:
     """멘토 추천 API 컨트롤러"""
 
-    def __init__(self, database_url: str | None = None):
-        self.database_url = database_url or os.getenv(
-            "DATABASE_URL",
-            "postgresql://postgres:postgres@localhost:5432/devmentor",
-        )
+    def __init__(self, backend_client: BackendAPIClient | None = None):
+        self.backend_client = backend_client or get_backend_client()
+        self.database_url = os.getenv("DATABASE_URL")
         self._engine = None
 
     @property
     def engine(self):
         """Lazy loading으로 엔진 생성"""
-        if self._engine is None:
+        if self._engine is None and self.database_url:
             self._engine = create_engine(self.database_url)
         return self._engine
 
     def get_connection(self) -> ContextManager:
         """DB 연결 반환"""
         return tracked_db_connection(self.engine)
+
+    def _get_retriever(self) -> MentorRetriever:
+        """MentorRetriever 인스턴스 생성"""
+        return MentorRetriever(backend_client=self.backend_client)
 
     async def recommend_mentors(
         self,
@@ -46,135 +48,107 @@ class RecoController:
         include_eval: bool = False,
     ) -> MentorRecommendResponse:
         """사용자에게 멘토 추천"""
-        with self.get_connection() as conn:
-            retriever = MentorRetriever(conn)
-            results = retriever.recommend_mentors(
-                user_id=user_id,
-                top_k=top_k,
-                only_verified=only_verified,
-                include_gt=include_eval,  # GT 검증도 함께 수행
+        retriever = self._get_retriever()
+        results = await retriever.recommend_mentors(
+            user_id=user_id,
+            top_k=top_k,
+            only_verified=only_verified,
+            include_gt=include_eval,
+        )
+
+        if not results:
+            # [임시 주석 처리] 백엔드 인증 미처리로 user_exists 호출 시 401 발생
+            # TODO: 백엔드 인증 처리 완료 후 아래 주석 해제
+            # user_exists = await self.backend_client.user_exists(user_id)
+            #
+            # if not user_exists:
+            #     raise HTTPException(
+            #         status_code=404,
+            #         detail={
+            #             "code": ResponseCode.NOT_FOUND.value,
+            #             "data": {
+            #                 "message": f"ID가 {user_id}인 사용자를 찾을 수 없습니다.",
+            #                 "user_id": user_id,
+            #             },
+            #         },
+            #     )
+            #
+            # profile_text = await retriever.get_user_profile_text(user_id)
+            # if not profile_text:
+            #     raise HTTPException(
+            #         status_code=400,
+            #         detail={
+            #             "code": ResponseCode.BAD_REQUEST.value,
+            #             "data": {
+            #                 "message": "사용자의 프로필 정보(직무, 기술스택, 자기소개)가 부족하여 추천을 진행할 수 없습니다. 프로필을 먼저 완성해 주세요.",
+            #                 "user_id": user_id,
+            #             },
+            #         },
+            #     )
+            #
+            # raise HTTPException(
+            #     status_code=404,
+            #     detail={
+            #         "code": ResponseCode.NOT_FOUND.value,
+            #         "data": {
+            #             "message": "조건에 맞는 추천 멘토를 찾을 수 없습니다. 필터링 조건을 변경해 보세요.",
+            #             "user_id": user_id,
+            #         },
+            #     },
+            # )
+
+            # Fallback: 응답률 높은 순으로 멘토 추천
+            logger = logging.getLogger(__name__)
+            logger.info(f"유사도 기반 추천 결과 없음 (user_id={user_id}), 응답률 기반 fallback 실행")
+
+            results = await retriever.fallback_by_response_rate(top_k=top_k)
+
+        recommendations = [MentorRecommendation(**result) for result in results]
+
+        # 평가 결과 포함 (요청 시에만 일부 샘플에 대해 수행)
+        evaluation = None
+        if include_eval:
+            eval_result = await retriever.evaluate_silver_ground_truth(sample_size=3)
+            evaluation = EvaluationSummary(
+                hit_at_1=eval_result["hit_at_1"],
+                hit_at_3=eval_result["hit_at_3"],
+                hit_at_5=eval_result["hit_at_5"],
+                hit_at_10=eval_result["hit_at_10"],
+                mrr=eval_result["mrr"],
+                total=eval_result["total"],
             )
 
-            if not results:
-                # 11번 유저처럼 결과가 없는 원인 정밀 진단
-                user_exists_query = text("SELECT 1 FROM users WHERE id = :user_id")
-                user_exists = conn.execute(user_exists_query, {"user_id": user_id}).scalar()
-
-                if not user_exists:
-                    raise HTTPException(
-                        status_code=404,
-                        detail={
-                            "code": ResponseCode.NOT_FOUND.value,
-                            "data": {
-                                "message": f"ID가 {user_id}인 사용자를 찾을 수 없습니다.",
-                                "user_id": user_id,
-                            },
-                        },
-                    )
-
-                profile_text = retriever.get_user_profile_text(user_id)
-                if not profile_text:
-                    raise HTTPException(
-                        status_code=400,
-                        detail={
-                            "code": ResponseCode.BAD_REQUEST.value,
-                            "data": {
-                                "message": "사용자의 프로필 정보(직무, 기술스택, 자기소개)가 부족하여 추천을 진행할 수 없습니다. 프로필을 먼저 완성해 주세요.",
-                                "user_id": user_id,
-                            },
-                        },
-                    )
-
-                raise HTTPException(
-                    status_code=404,
-                    detail={
-                        "code": ResponseCode.NOT_FOUND.value,
-                        "data": {
-                            "message": "조건에 맞는 추천 멘토를 찾을 수 없습니다. 필터링 조건을 변경해 보세요.",
-                            "user_id": user_id,
-                        },
-                    },
-                )
-
-            recommendations = [MentorRecommendation(**result) for result in results]
-
-            # 평가 결과 포함 (옵션)
-            evaluation = None
-            if include_eval:
-                eval_result = retriever.evaluate_silver_ground_truth()
-                evaluation = EvaluationSummary(
-                    hit_at_1=eval_result["hit_at_1"],
-                    hit_at_3=eval_result["hit_at_3"],
-                    hit_at_5=eval_result["hit_at_5"],
-                    hit_at_10=eval_result["hit_at_10"],
-                    mrr=eval_result["mrr"],
-                    total=eval_result["total"],
-                )
-
-            return MentorRecommendResponse(
-                user_id=user_id,
-                recommendations=recommendations,
-                total_count=len(recommendations),
-                evaluation=evaluation,
-            )
+        return MentorRecommendResponse(
+            user_id=user_id,
+            recommendations=recommendations,
+            total_count=len(recommendations),
+            evaluation=evaluation,
+        )
 
     async def update_all_embeddings(self) -> int:
         """모든 멘토 임베딩 일괄 업데이트"""
-        with self.get_connection() as conn:
-            retriever = MentorRetriever(conn)
-            return retriever.update_all_expert_embeddings()
+        retriever = self._get_retriever()
+        return await retriever.update_all_expert_embeddings()
 
     async def compute_and_send_embedding(self, user_id: int) -> dict:
         """
-        개별 멘토 임베딩 계산 후 백엔드 API로 전송
-
-        회원가입 또는 프로필(기술스택, 직무) 변경 시 호출
-
-        Returns:
-            {"success": bool, "user_id": int, "message": str}
+        개별 멘토 임베딩 계산 후 백엔드 API 및 로컬 DB 저장
         """
-        import httpx
+        retriever = self._get_retriever()
+        success = await retriever.update_expert_embedding(user_id)
 
-        backend_url = os.getenv("BACKEND_API_URL", "http://localhost:8080/api/v1")
-
-        with self.get_connection() as conn:
-            retriever = MentorRetriever(conn)
-            embedding_data = retriever.compute_embedding(user_id)
-
-            if not embedding_data:
-                return {
-                    "success": False,
-                    "user_id": user_id,
-                    "message": "프로필 정보가 없어 임베딩을 생성할 수 없습니다.",
-                }
-
-            # 백엔드 API로 임베딩 전송
-            try:
-                async with httpx.AsyncClient(timeout=30.0) as client:
-                    response = await client.post(
-                        f"{backend_url}/experts/embeddings",
-                        json=embedding_data,
-                    )
-                    response.raise_for_status()
-
-                return {
-                    "success": True,
-                    "user_id": user_id,
-                    "message": "임베딩이 계산되어 백엔드로 전송되었습니다.",
-                    "embedding_dim": len(embedding_data["embedding"]),
-                }
-            except httpx.HTTPStatusError as e:
-                return {
-                    "success": False,
-                    "user_id": user_id,
-                    "message": f"백엔드 API 오류: {e.response.status_code}",
-                }
-            except httpx.RequestError as e:
-                return {
-                    "success": False,
-                    "user_id": user_id,
-                    "message": f"백엔드 연결 실패: {e!s}",
-                }
+        if success:
+            return {
+                "success": True,
+                "user_id": user_id,
+                "message": "임베딩이 성공적으로 업데이트되었습니다 (로컬 DB 및 백엔드).",
+            }
+        else:
+            return {
+                "success": False,
+                "user_id": user_id,
+                "message": "임베딩 업데이트에 실패했습니다. 프로필 존재 여부와 네트워크 상태를 확인하세요.",
+            }
 
     async def evaluate_silver_ground_truth(
         self,
@@ -182,25 +156,24 @@ class RecoController:
         include_details: bool = False,
     ) -> EvaluationResponse:
         """Silver Ground Truth 평가 실행"""
-        with self.get_connection() as conn:
-            retriever = MentorRetriever(conn)
-            result = retriever.evaluate_silver_ground_truth(
-                sample_size=sample_size,
-            )
+        retriever = self._get_retriever()
+        result = await retriever.evaluate_silver_ground_truth(
+            sample_size=sample_size,
+        )
 
-            details = []
-            if include_details:
-                details = [EvaluationDetail(**d) for d in result["details"]]
+        details = []
+        if include_details:
+            details = [EvaluationDetail(**d) for d in result["details"]]
 
-            return EvaluationResponse(
-                hit_at_1=result["hit_at_1"],
-                hit_at_3=result["hit_at_3"],
-                hit_at_5=result["hit_at_5"],
-                hit_at_10=result["hit_at_10"],
-                mrr=result["mrr"],
-                total=result["total"],
-                details=details,
-            )
+        return EvaluationResponse(
+            hit_at_1=result["hit_at_1"],
+            hit_at_3=result["hit_at_3"],
+            hit_at_5=result["hit_at_5"],
+            hit_at_10=result["hit_at_10"],
+            mrr=result["mrr"],
+            total=result["total"],
+            details=details,
+        )
 
 
 # 싱글톤

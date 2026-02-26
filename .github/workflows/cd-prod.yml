@@ -1,132 +1,45 @@
-name: Re-Fit AI CD (Prod)
+name: Re-Fit AI CD (V2 - Docker)
 
 on:
   workflow_dispatch:
     inputs:
-      run_id:
-        description: 'CI workflow run ID (자동 입력 또는 직접 입력)'
-        required: false
-        type: string
       sha:
-        description: 'Commit SHA (자동 입력 또는 직접 입력)'
+        description: 'Commit SHA (빈칸이면 main 브랜치 HEAD 사용)'
         required: false
         type: string
-      branch:
-        description: 'Branch name'
-        required: true
-        type: choice
-        default: 'main'
-        options:
-          - main
-      use_latest_artifact:
-        description: 'run_id/sha를 입력하지 않으면 선택한 브랜치의 최신 아티팩트 사용'
+      image_tag:
+        description: 'Docker image tag (e.g., main-abc1234, main-latest). use_existing_image=true이고 빈칸이면 main-latest 사용'
+        required: false
+        type: string
+      use_existing_image:
+        description: 'true: CI에서 이미 푸시된 이미지 사용, false: 이 워크플로우에서 빌드'
         required: true
         type: boolean
-        default: true
+        default: false
+
+permissions:
+  contents: read
+  actions: read
 
 env:
   PYTHON_VERSION: '3.11'
 
 jobs:
   deploy:
+    name: Deploy AI to Prod (V2 - Docker)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    concurrency:
+      group: deploy-ai-prod-v2
+      cancel-in-progress: false
     environment: production
-    outputs:
-      deployment_success: ${{ steps.deploy.outputs.success }}
-      deployment_sha: ${{ steps.deploy-vars.outputs.sha }}
+
     steps:
-      - name: Find Latest Artifact (if needed)
-        if: inputs.use_latest_artifact == true && (inputs.run_id == '' || inputs.sha == '')
-        id: find-artifact
-        uses: actions/github-script@v7
+      - name: Checkout
+        if: inputs.use_existing_image == false
+        uses: actions/checkout@v4
         with:
-          github-token: ${{ secrets.PAT }}
-          script: |
-            const branch = '${{ inputs.branch }}';
-            console.log(`Finding latest artifact for branch: ${branch}`);
-
-            const runs = await github.rest.actions.listWorkflowRuns({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              workflow_id: 'ci.yml',
-              branch: branch,
-              status: 'success',
-              per_page: 10
-            });
-
-            if (runs.data.workflow_runs.length === 0) {
-              core.setFailed(`No successful CI runs found for branch: ${branch}`);
-              return;
-            }
-
-            for (const run of runs.data.workflow_runs) {
-              const artifacts = await github.rest.actions.listWorkflowRunArtifacts({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                run_id: run.id
-              });
-
-              const buildArtifact = artifacts.data.artifacts.find(
-                a => a.name.startsWith('ai-wheel-')
-              );
-
-              if (buildArtifact) {
-                const sha = run.head_sha;
-                console.log(`Found artifact from run #${run.run_number}`);
-                console.log(`   Run ID: ${run.id}`);
-                console.log(`   SHA: ${sha}`);
-                console.log(`   Created: ${run.created_at}`);
-
-                core.setOutput('run_id', run.id.toString());
-                core.setOutput('sha', sha);
-                core.setOutput('run_number', run.run_number.toString());
-                return;
-              }
-            }
-
-            core.setFailed(`No artifacts found in recent CI runs for branch: ${branch}`);
-
-      - name: Set Deployment Variables
-        id: deploy-vars
-        run: |
-          if [ "${{ inputs.use_latest_artifact }}" == "true" ] && [ -z "${{ inputs.run_id }}" ]; then
-            echo "run_id=${{ steps.find-artifact.outputs.run_id }}" >> $GITHUB_OUTPUT
-            echo "sha=${{ steps.find-artifact.outputs.sha }}" >> $GITHUB_OUTPUT
-            echo "Using latest artifact from run #${{ steps.find-artifact.outputs.run_number }}"
-          else
-            echo "run_id=${{ inputs.run_id }}" >> $GITHUB_OUTPUT
-            echo "sha=${{ inputs.sha }}" >> $GITHUB_OUTPUT
-            echo "Using manually specified artifact"
-          fi
-
-      - name: Download Wheel Package
-        uses: actions/download-artifact@v4
-        with:
-          name: ai-wheel-${{ steps.deploy-vars.outputs.sha }}
-          path: build-output/dist
-          github-token: ${{ secrets.PAT }}
-          run-id: ${{ steps.deploy-vars.outputs.run_id }}
-
-      - name: Download Deployment Files
-        uses: actions/download-artifact@v4
-        with:
-          name: ai-deploy-files-${{ steps.deploy-vars.outputs.sha }}
-          path: build-output
-          github-token: ${{ secrets.PAT }}
-          run-id: ${{ steps.deploy-vars.outputs.run_id }}
-
-      - name: Verify Downloaded Files
-        run: |
-          echo "=== Verifying downloaded files ==="
-          ls -la build-output/
-
-          if [ -d "build-output/dist" ] && [ -n "$(ls -A build-output/dist/*.whl 2>/dev/null)" ]; then
-            echo "✅ Wheel package found"
-            ls -lh build-output/dist/
-          else
-            echo "❌ Wheel package not found"
-            exit 1
-          fi
+          ref: ${{ inputs.sha || 'main' }}
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -135,252 +48,190 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ap-northeast-2
 
-      - name: Upload Wheel Package to S3
-        id: s3_upload
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set Deployment Variables
+        id: deploy-vars
         run: |
-          set -euo pipefail
-          COMMIT_SHA=${{ steps.deploy-vars.outputs.sha }}
-          S3_KEY="artifacts/ai/${COMMIT_SHA}/$(basename build-output/dist/*.whl)"
+          if [ "${{ inputs.use_existing_image }}" == "true" ]; then
+            if [ -n "${{ inputs.image_tag }}" ]; then
+              IMAGE_TAG="${{ inputs.image_tag }}"
+              echo "📦 Using specified image tag: ${IMAGE_TAG}"
+            else
+              IMAGE_TAG="main-latest"
+              echo "📦 Using main-latest (no image_tag provided)"
+            fi
+            SHA_SHORT=$(echo "${IMAGE_TAG}" | sed -n 's/^main-\([a-f0-9]\{7\}\)$/\1/p')
+            [ -z "${SHA_SHORT}" ] && SHA_SHORT="latest"
+            echo "image_tag=${IMAGE_TAG}" >> $GITHUB_OUTPUT
+            echo "sha=${IMAGE_TAG}" >> $GITHUB_OUTPUT
+            echo "sha_short=${SHA_SHORT}" >> $GITHUB_OUTPUT
+          else
+            SHA="${{ inputs.sha || github.sha }}"
+            SHA_SHORT="${SHA:0:7}"
+            if [ -n "${{ inputs.image_tag }}" ]; then
+              IMAGE_TAG="${{ inputs.image_tag }}"
+            else
+              IMAGE_TAG="main-${SHA_SHORT}"
+            fi
+            echo "image_tag=${IMAGE_TAG}" >> $GITHUB_OUTPUT
+            echo "sha=${SHA}" >> $GITHUB_OUTPUT
+            echo "sha_short=${SHA_SHORT}" >> $GITHUB_OUTPUT
+            echo "📦 Using image: ${IMAGE_TAG}"
+          fi
 
-          echo "Uploading wheel package to s3://${{ secrets.S3_ARTIFACTS_BUCKET }}/$S3_KEY"
-          aws s3 cp build-output/dist/*.whl s3://${{ secrets.S3_ARTIFACTS_BUCKET }}/$S3_KEY
+      - name: Set up Docker Buildx
+        if: inputs.use_existing_image == false
+        uses: docker/setup-buildx-action@v3
 
-          echo "s3_key=$S3_KEY" >> $GITHUB_OUTPUT
+      - name: Build and Push Docker Image
+        if: inputs.use_existing_image == false
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ steps.login-ecr.outputs.registry }}/${{ secrets.ECR_REPOSITORY_AI }}:${{ steps.deploy-vars.outputs.image_tag }}
+            ${{ steps.login-ecr.outputs.registry }}/${{ secrets.ECR_REPOSITORY_AI }}:main-latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          platforms: linux/arm64
 
-      - name: Deploy via SSM
+      - name: Verify Image Exists in ECR
+        if: inputs.use_existing_image == true
+        run: |
+          IMAGE_TAG="${{ steps.deploy-vars.outputs.image_tag }}"
+          REPO="${{ secrets.ECR_REPOSITORY_AI }}"
+
+          aws ecr describe-images \
+            --repository-name "${REPO}" \
+            --image-ids imageTag="${IMAGE_TAG}" \
+            --region ap-northeast-2 > /dev/null 2>&1
+
+          if [ $? -eq 0 ]; then
+            echo "✅ Image found: ${REPO}:${IMAGE_TAG}"
+          else
+            echo "❌ Image not found: ${REPO}:${IMAGE_TAG}"
+            exit 1
+          fi
+
+      - name: Deploy to Prod EC2 via SSM (V2 - Docker)
         id: deploy
         env:
-          SERVER_BASE_PATH: ${{ secrets.SERVER_BASE_PATH }}
-          EC2_INSTANCE_ID: ${{ secrets.EC2_INSTANCE_ID }}
-          HEALTH_CHECK_URL: ${{ secrets.HEALTH_CHECK_URL }}
-          S3_BUCKET: ${{ secrets.S3_ARTIFACTS_BUCKET }}
-          S3_KEY: ${{ steps.s3_upload.outputs.s3_key }}
+          SERVER_BASE_PATH: ${{ secrets.SERVER_BASE_PATH_V2 }}
+          EC2_INSTANCE_ID: ${{ secrets.EC2_INSTANCE_ID_V2 }}
+          HEALTH_CHECK_URL: ${{ secrets.HEALTH_CHECK_URL_V2 }}
+          PROD_COMPOSE_DIR: ${{ secrets.PROD_COMPOSE_DIR_V2 }}
+          AI_ENV_FILE_PROD: ${{ secrets.AI_ENV_FILE_PROD_V2 }}
         run: |
           set -euo pipefail
 
-          AI_HEALTH_URL="${HEALTH_CHECK_URL%/health}/api/ai/health"
-
-          BASE_PATH="$SERVER_BASE_PATH"
-          AI_DIR="${BASE_PATH}/app/ai"
-          AI_APP_DIR="${AI_DIR}/ai_app"
-          BACKUP_DIR="${BASE_PATH}/backups/ai"
-          TEMP_DIR="${AI_DIR}/deploy_temp"
-          PM2_CONFIG="${BASE_PATH}/infra/pm2/ecosystem.ai.config.js"
+          if [ -z "$HEALTH_CHECK_URL" ]; then
+            AI_HEALTH_URL=""
+          else
+            AI_HEALTH_URL="${HEALTH_CHECK_URL%/health}/api/ai/health"
+          fi
+          COMPOSE_DIR="${PROD_COMPOSE_DIR:-${SERVER_BASE_PATH}/docker}"
+          ECR_REGISTRY="${{ steps.login-ecr.outputs.registry }}"
+          ECR_REPO="${{ secrets.ECR_REPOSITORY_AI }}"
+          IMAGE_TAG="${{ steps.deploy-vars.outputs.image_tag }}"
+          FULL_IMAGE="${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG}"
 
           DEPLOY_SCRIPT=$(cat <<'SCRIPT_END'
           set -euo pipefail
-          BASE_PATH="$1"
-          AI_DIR="$2"
-          AI_APP_DIR="$3"
-          BACKUP_DIR="$4"
-          TEMP_DIR="$5"
-          PM2_CONFIG="$6"
-          S3_BUCKET="$7"
-          S3_KEY="$8"
-          HEALTH_CHECK_URL="$9"
-
-          APP_NAME="ai-service"
-          TIMESTAMP=$(date +%Y%m%d%H%M%S)
-
-          trap 'sudo -u ubuntu pm2 status || true; exit $?' ERR
+          export PATH="/usr/local/bin:/usr/bin:/bin:$PATH"
+          COMPOSE_DIR="$1"
+          FULL_IMAGE="$2"
+          IMAGE_TAG="$3"
+          HEALTH_CHECK_URL="$4"
+          AI_ENV_FILE="$5"
 
           echo "============================================"
-          echo "Re-Fit AI 프로덕션 배포 시작: $(date)"
+          echo "Re-Fit AI 프로덕션 배포 (V2-Docker): $(date)"
           echo "============================================"
 
-          mkdir -p $BACKUP_DIR $TEMP_DIR
-
-          # S3에서 패키지 다운로드
-          echo "S3에서 패키지 다운로드 중..."
-          aws s3 cp s3://$S3_BUCKET/$S3_KEY $TEMP_DIR/ --region ap-northeast-2 || {
-            echo "에러: S3에서 패키지 다운로드 실패"
-            exit 1
-          }
-
-          WHEEL_FILE=$(ls $TEMP_DIR/*.whl | head -1)
-          if [ ! -f "$WHEEL_FILE" ]; then
-            echo "에러: Wheel 패키지가 없습니다"
-            rm -rf $TEMP_DIR
-            exit 1
+          if [ ! -d "$COMPOSE_DIR" ]; then
+            echo "⚠️ Compose directory not found, creating: $COMPOSE_DIR"
+            sudo mkdir -p "$COMPOSE_DIR"
+            sudo chown -R ubuntu:ubuntu "$COMPOSE_DIR"
           fi
 
-          # Wheel 파일 크기 검증
-          WHEEL_SIZE=$(stat -c%s "$WHEEL_FILE" 2>/dev/null || echo 0)
-          if [ "$WHEEL_SIZE" -lt 10000 ]; then
-            echo "에러: Wheel 파일 크기가 너무 작습니다 (${WHEEL_SIZE} bytes)"
-            rm -rf $TEMP_DIR
-            exit 1
-          fi
-          echo "✅ Wheel 파일 크기: ${WHEEL_SIZE} bytes"
-
-          # 기존 코드 백업
-          if [ -d "$AI_APP_DIR" ]; then
-            echo "기존 코드 백업 중..."
-            cp -r "$AI_APP_DIR" "$BACKUP_DIR/code_$TIMESTAMP"
-            sudo chown -R ubuntu:ubuntu "$BACKUP_DIR/code_$TIMESTAMP" 2>/dev/null || true
-            echo "✅ 백업 완료: $BACKUP_DIR/code_$TIMESTAMP"
+          if [ ! -f "$COMPOSE_DIR/docker-compose.yml" ]; then
+            echo "⚠️ docker-compose.yml not found, creating minimal config"
+            echo "services:
+          ai:
+            image: ${FULL_IMAGE}
+            env_file: .env.ai
+            ports:
+              - \"8000:8000\"
+            restart: unless-stopped" > "$COMPOSE_DIR/docker-compose.yml"
+            chown ubuntu:ubuntu "$COMPOSE_DIR/docker-compose.yml"
           fi
 
-          # Wheel 파일 백업 (롤백용)
-          echo "Wheel 파일 백업 중..."
-          mkdir -p "$BACKUP_DIR/wheel_$TIMESTAMP"
-          cp "$WHEEL_FILE" "$BACKUP_DIR/wheel_$TIMESTAMP/"
-          sudo chown -R ubuntu:ubuntu "$BACKUP_DIR/wheel_$TIMESTAMP" 2>/dev/null || true
-          echo "✅ Wheel 백업 완료"
+          if [ ! -f "$COMPOSE_DIR/.env" ]; then
+            echo "AI_TAG=${IMAGE_TAG}" > "$COMPOSE_DIR/.env"
+            chown ubuntu:ubuntu "$COMPOSE_DIR/.env"
+          fi
 
-          # 새 패키지 설치
-          echo "새 패키지 설치 중..."
-          cd $AI_DIR
-          source venv/bin/activate
+          echo "🐳 Image: ${FULL_IMAGE}"
+          echo "📁 Compose dir: ${COMPOSE_DIR}"
 
-          pip install "$WHEEL_FILE" --force-reinstall --no-cache-dir > /tmp/pip_install.log 2>&1 && {
-            echo "✅ 패키지 설치 완료"
-            tail -20 /tmp/pip_install.log
+          aws ecr get-login-password --region ap-northeast-2 | \
+            docker login --username AWS --password-stdin "$(echo ${FULL_IMAGE} | cut -d/ -f1)"
 
-            # ai_app 디렉터리에 배포 코드 동기화 (PM2가 이 경로에서 실행됨)
-            if [ -d "$AI_APP_DIR" ]; then
-              echo "ai_app 디렉터리에 배포 코드 동기화 중..."
-              PYTHON_VER=$($AI_DIR/venv/bin/python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null) || true
-              if [ -n "$PYTHON_VER" ]; then
-                AI_APP_SOURCE="$AI_DIR/venv/lib/python${PYTHON_VER}/site-packages/ai_app"
-              else
-                AI_APP_SOURCE=$(python -c "import ai_app; import os; print(os.path.dirname(ai_app.__file__))" 2>/dev/null) || true
-              fi
-              if [ -n "$AI_APP_SOURCE" ] && [ -d "$AI_APP_SOURCE" ]; then
-                rsync -a --delete "$AI_APP_SOURCE/" "$AI_APP_DIR/" 2>/dev/null || {
-                  rm -rf "$AI_APP_DIR"/*
-                  cp -r "$AI_APP_SOURCE"/* "$AI_APP_DIR/"
-                }
-                echo "✅ ai_app 동기화 완료 (site-packages → $AI_APP_DIR)"
-              else
-                echo "⚠️ ai_app 모듈 경로를 찾을 수 없습니다. 기존 코드 유지"
-              fi
-            else
-              mkdir -p "$AI_APP_DIR"
-              PYTHON_VER=$($AI_DIR/venv/bin/python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null) || true
-              if [ -n "$PYTHON_VER" ]; then
-                AI_APP_SOURCE="$AI_DIR/venv/lib/python${PYTHON_VER}/site-packages/ai_app"
-              else
-                AI_APP_SOURCE=$(python -c "import ai_app; import os; print(os.path.dirname(ai_app.__file__))" 2>/dev/null) || true
-              fi
-              if [ -n "$AI_APP_SOURCE" ] && [ -d "$AI_APP_SOURCE" ]; then
-                cp -r "$AI_APP_SOURCE"/* "$AI_APP_DIR/"
-                echo "✅ ai_app 초기 복사 완료"
-              fi
-            fi
-          } || {
-            echo "❌ 패키지 설치 실패"
-            tail -50 /tmp/pip_install.log
+          cd "$COMPOSE_DIR"
 
-            # 롤백
-            if [ -d "$BACKUP_DIR/code_$TIMESTAMP" ]; then
-              rm -rf "$AI_APP_DIR"
-              cp -r "$BACKUP_DIR/code_$TIMESTAMP" "$AI_APP_DIR"
-              sudo chown -R ubuntu:ubuntu "$AI_APP_DIR" 2>/dev/null || true
-            fi
-            sudo lsof -ti:8000 | xargs -r sudo kill -9 2>/dev/null || true
-            sudo -u ubuntu pm2 restart ${APP_NAME} 2>/dev/null || true
-            rm -rf $TEMP_DIR
-            exit 1
-          }
+          if [ -n "$AI_ENV_FILE" ]; then
+            echo "$AI_ENV_FILE" > .env.ai
+            chmod 644 .env.ai
+            echo "🔐 .env.ai 주입 완료"
+          fi
 
-          rm -rf $TEMP_DIR
-          sudo chown -R ubuntu:ubuntu "$AI_APP_DIR" 2>/dev/null || true
+          if grep -q '^AI_TAG=' .env 2>/dev/null; then
+            sed -i "s|^AI_TAG=.*|AI_TAG=${IMAGE_TAG}|" .env
+          else
+            echo "AI_TAG=${IMAGE_TAG}" >> .env
+          fi
 
-          # PM2 프로세스 정리
-          echo "AI 관련 PM2 프로세스 정리 중..."
-          sudo lsof -ti:8000 | xargs -r sudo kill -9 2>/dev/null || true
-          sudo -u ubuntu pm2 list | grep -E 'ai-service|ai-serv' | awk '{print $2}' | while read -r process_name; do
-            if [ -n "$process_name" ] && [ "$process_name" != "name" ]; then
-              sudo -u ubuntu pm2 stop "$process_name" 2>/dev/null || true
-              sudo -u ubuntu pm2 delete "$process_name" 2>/dev/null || true
-            fi
-          done
-          sleep 1
+          echo "📥 Pulling new image..."
+          docker compose pull ai || docker compose pull 2>/dev/null || true
 
-          # PM2로 서비스 시작
-          echo "AI 서비스 시작 중..."
-          sudo -u ubuntu pm2 start $PM2_CONFIG --only ${APP_NAME} --env production || exit 1
+          echo "🔄 Restarting ai service..."
+          docker compose up -d ai || docker compose up -d 2>/dev/null || true
 
-          sleep 3
-          sudo -u ubuntu pm2 describe ${APP_NAME} > /dev/null || exit 1
-
-          # 서비스 초기화 대기 (AI 모델 로딩 고려)
-          echo "서비스 초기화 대기 중... (30초)"
-          echo "AI 모델 로딩 중... (시간이 걸릴 수 있습니다)"
+          # 사용하지 않는 이미지 정리 (dangling + 미사용 태그 이미지로 디스크/메모리 확보)
+          docker image prune -f 2>/dev/null || true
+          docker image prune -a -f 2>/dev/null || true
+          echo "서비스 초기화 대기 (30초)..."
           sleep 30
 
-          # Caddy 리로드
           systemctl is-active --quiet caddy && sudo systemctl reload caddy 2>/dev/null || true
           sleep 2
 
-          # 헬스체크 (최대 15회 재시도, 간격 증가)
-          echo "헬스체크 시작..."
-          HEALTH_OK=false
-          for i in {1..15}; do
-            HTTP_STATUS=$(timeout 10 curl -s -o /dev/null -w "%{http_code}" "$HEALTH_CHECK_URL" 2>/dev/null || echo "000")
-            if [ "$HTTP_STATUS" = "200" ]; then
-              echo "✅ 헬스체크 성공! (HTTP $HTTP_STATUS) - 시도 $i/15"
-              HEALTH_OK=true
-              break
-            fi
-            echo "⚠️  시도 $i/15: HTTP $HTTP_STATUS (AI 모델 로딩 중일 수 있음)"
-
-            # 점진적 대기 시간 증가 (처음엔 짧게, 나중엔 길게)
-            if [ $i -le 5 ]; then
-              WAIT_TIME=5
-            elif [ $i -le 10 ]; then
-              WAIT_TIME=8
-            else
-              WAIT_TIME=10
-            fi
-            [ $i -lt 15 ] && sleep $WAIT_TIME
-          done
-
-          if [ "$HEALTH_OK" = "true" ]; then
-            sudo -u ubuntu pm2 save 2>/dev/null || true
-
-            # 7일 이상 된 백업 정리
-            (find $BACKUP_DIR -name "code_*" -type d -mtime +7 -exec rm -rf {} + 2>/dev/null) &
-            (find $BACKUP_DIR -name "wheel_*" -type d -mtime +7 -exec rm -rf {} + 2>/dev/null) &
-
-            echo ""
-            echo "============================================"
-            echo "Re-Fit AI 프로덕션 배포 완료: $(date)"
-            echo "============================================"
+          if [ -z "$HEALTH_CHECK_URL" ]; then
+            echo "⚠️ HEALTH_CHECK_URL이 비어 있어 헬스체크를 건너뜁니다."
             exit 0
           fi
 
-          # 헬스체크 실패 - 롤백
-          echo ""
-          echo "❌ 헬스체크 실패 - 롤백 시작"
-          echo "=== PM2 로그 (최근 30줄) ==="
-          sudo -u ubuntu pm2 logs ${APP_NAME} --lines 30 --nostream || true
-
-          if [ -d "$BACKUP_DIR/code_$TIMESTAMP" ]; then
-            rm -rf "$AI_APP_DIR"
-            cp -r "$BACKUP_DIR/code_$TIMESTAMP" "$AI_APP_DIR"
-            sudo chown -R ubuntu:ubuntu "$AI_APP_DIR" 2>/dev/null || true
-
-            sudo lsof -ti:8000 | xargs -r sudo kill -9 2>/dev/null || true
-            sudo -u ubuntu pm2 restart ${APP_NAME} 2>/dev/null || true
-            sleep 5
-
+          for i in {1..15}; do
             HTTP_STATUS=$(timeout 10 curl -s -o /dev/null -w "%{http_code}" "$HEALTH_CHECK_URL" 2>/dev/null || echo "000")
             if [ "$HTTP_STATUS" = "200" ]; then
-              echo "✅ 롤백 성공 - 이전 버전으로 복구됨"
-              sudo -u ubuntu pm2 save 2>/dev/null || true
-            else
-              echo "⚠️  롤백 후에도 헬스체크 실패 (HTTP $HTTP_STATUS)"
+              echo "✅ 헬스체크 성공!"
+              exit 0
             fi
-          fi
+            echo "⚠️ 시도 $i/15: HTTP $HTTP_STATUS"
+            [ $i -lt 15 ] && sleep 5
+          done
+
+          echo "❌ 헬스체크 실패"
           exit 1
           SCRIPT_END
           )
 
-          # SSM 명령 실행
           DEPLOY_SCRIPT_ENCODED=$(echo "$DEPLOY_SCRIPT" | base64 -w 0)
-          SSM_COMMAND="bash -c \"echo '$DEPLOY_SCRIPT_ENCODED' | base64 -d | bash -s -- '$BASE_PATH' '$AI_DIR' '$AI_APP_DIR' '$BACKUP_DIR' '$TEMP_DIR' '$PM2_CONFIG' '$S3_BUCKET' '$S3_KEY' '$AI_HEALTH_URL'\""
+          SSM_COMMAND="bash -c \"echo '$DEPLOY_SCRIPT_ENCODED' | base64 -d | bash -s -- '$COMPOSE_DIR' '$FULL_IMAGE' '$IMAGE_TAG' '$AI_HEALTH_URL' '$AI_ENV_FILE_PROD'\""
           PARAMETERS_JSON=$(jq -n --arg cmd "$SSM_COMMAND" '{commands: [$cmd]}')
 
           COMMAND_ID=$(aws ssm send-command \
@@ -394,9 +245,6 @@ jobs:
 
           [ -n "$COMMAND_ID" ] || exit 1
 
-          echo "SSM Command ID: $COMMAND_ID"
-
-          # SSM 명령 실행 상태 확인
           for i in {1..60}; do
             STATUS=$(aws ssm get-command-invocation \
               --command-id "$COMMAND_ID" \
@@ -412,73 +260,75 @@ jobs:
                 --region ap-northeast-2 \
                 --query 'StandardOutputContent' \
                 --output text
-              echo "success=true" >> $GITHUB_OUTPUT
               exit 0
             elif [ "$STATUS" = "Failed" ] || [ "$STATUS" = "Cancelled" ] || [ "$STATUS" = "TimedOut" ]; then
-              echo "SSM Command failed with status: $STATUS"
-              echo "=== Standard Output ==="
               aws ssm get-command-invocation \
                 --command-id "$COMMAND_ID" \
                 --instance-id "$EC2_INSTANCE_ID" \
                 --region ap-northeast-2 \
-                --query 'StandardOutputContent' \
-                --output text
-              echo "=== Standard Error ==="
+                --query 'StandardOutputContent' --output text
               aws ssm get-command-invocation \
                 --command-id "$COMMAND_ID" \
                 --instance-id "$EC2_INSTANCE_ID" \
                 --region ap-northeast-2 \
-                --query 'StandardErrorContent' \
-                --output text
-              echo "success=false" >> $GITHUB_OUTPUT
+                --query 'StandardErrorContent' --output text
               exit 1
             fi
-            [ $i -eq 1 ] && echo "Waiting for SSM command to complete..."
-            [ $i -eq 30 ] && echo "Still waiting... (30/60 checks)"
-            sleep 5
+            [ $i -lt 60 ] && sleep 5
           done
 
-          echo "SSM Command timeout after 60 checks"
-          echo "success=false" >> $GITHUB_OUTPUT
+          echo "SSM Command timeout"
           exit 1
 
-  notify-result:
-    runs-on: ubuntu-latest
-    needs: [deploy]
-    if: always()
-    steps:
-      - name: Notify Discord on Final Result
+      - name: Notify Discord - Success
+        if: success()
         env:
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
-          DEPLOY_RESULT: ${{ needs.deploy.result }}
-          SHA: ${{ needs.deploy.outputs.deployment_sha }}
-          RUN_ID: ${{ github.run_id }}
         run: |
-          if [ "$DEPLOY_RESULT" = "success" ]; then
-            EMOJI="✅"
-            COLOR=3066993
-            TITLE="AI 프로덕션 배포 성공"
-            MESSAGE="프로덕션 배포가 성공적으로 완료되었습니다."
-          else
-            EMOJI="🚨"
-            COLOR=15158332
-            TITLE="AI 프로덕션 배포 실패"
-            MESSAGE="프로덕션 배포 과정에서 문제가 발생했습니다."
-          fi
+          SHA_SHORT="${{ steps.deploy-vars.outputs.sha_short }}"
+          IMAGE_TAG="${{ steps.deploy-vars.outputs.image_tag }}"
 
           payload=$(cat <<EOF
           {
             "embeds": [{
-              "title": "$EMOJI $TITLE",
-              "color": $COLOR,
-              "description": "$MESSAGE",
+              "title": "🚀 AI 프로덕션 배포 완료 (V2-Docker)",
+              "description": "Docker 기반 AI 프로덕션 배포가 성공적으로 완료되었습니다.",
+              "color": 3066993,
               "fields": [
                 {"name": "서비스", "value": "Re-Fit AI (Prod)", "inline": true},
-                {"name": "브랜치", "value": "\`main\`", "inline": true},
-                {"name": "커밋", "value": "\`${SHA:0:7}\`", "inline": true},
-                {"name": "워크플로우", "value": "[상세 보기](https://github.com/${{ github.repository }}/actions/runs/$RUN_ID)", "inline": false}
+                {"name": "이미지 태그", "value": "\`${IMAGE_TAG}\`", "inline": true},
+                {"name": "커밋 SHA", "value": "\`${SHA_SHORT}\`", "inline": true},
+                {"name": "워크플로우", "value": "[상세 보기](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})", "inline": false}
               ],
-              "footer": { "text": "Re-Fit AI Prod Deployment System" },
+              "footer": { "text": "Re-Fit AI Prod Deployment (V2-Docker)" },
+              "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            }]
+          }
+          EOF
+          )
+          curl -H "Content-Type: application/json" -X POST -d "$payload" "$DISCORD_WEBHOOK"
+
+      - name: Notify Discord - Failure
+        if: failure()
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+        run: |
+          SHA_SHORT="${{ steps.deploy-vars.outputs.sha_short }}"
+          IMAGE_TAG="${{ steps.deploy-vars.outputs.image_tag }}"
+
+          payload=$(cat <<EOF
+          {
+            "embeds": [{
+              "title": "🚨 AI 프로덕션 배포 실패 (V2-Docker)",
+              "description": "Docker 기반 AI 프로덕션 배포가 실패했습니다.",
+              "color": 15158332,
+              "fields": [
+                {"name": "서비스", "value": "Re-Fit AI (Prod)", "inline": true},
+                {"name": "이미지 태그", "value": "\`${IMAGE_TAG}\`", "inline": true},
+                {"name": "커밋 SHA", "value": "\`${SHA_SHORT}\`", "inline": true},
+                {"name": "워크플로우", "value": "[상세 보기](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})", "inline": false}
+              ],
+              "footer": { "text": "Re-Fit AI Prod Deployment (V2-Docker)" },
               "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
             }]
           }

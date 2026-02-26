@@ -24,7 +24,6 @@ on:
           - integration
           - release-dev
           - release-prod
-          - release-prod-v2
           - all
 
 permissions:
@@ -68,6 +67,15 @@ jobs:
             echo "🔄 pyproject.toml 업데이트됨!"
             echo "changed=true" >> $GITHUB_OUTPUT
           fi
+      
+      # .venv 캐시로 uv sync 시간 대폭 단축 (lock 미변경 시 복원만 수행)
+      - name: Cache uv virtualenv
+        uses: actions/cache@v4
+        with:
+          path: .venv
+          key: uv-venv-${{ runner.os }}-${{ hashFiles('pyproject.toml', 'uv.lock') }}
+          restore-keys: |
+            uv-venv-${{ runner.os }}-
       
       - name: Install uv
         uses: astral-sh/setup-uv@v4
@@ -159,6 +167,14 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
+      
+      - name: Cache uv virtualenv
+        uses: actions/cache@v4
+        with:
+          path: .venv
+          key: uv-venv-${{ runner.os }}-${{ hashFiles('pyproject.toml', 'uv.lock') }}
+          restore-keys: |
+            uv-venv-${{ runner.os }}-
       
       - name: Install uv
         uses: astral-sh/setup-uv@v4
@@ -258,125 +274,12 @@ jobs:
             console.log('✅ CD-Dev workflow triggered successfully');
 
   # ===========================================
-  # 4. 프로덕션 릴리즈 V1 (main push 시 자동, Wheel + cd-prod)
+  # 4. 프로덕션 릴리즈 (main push 시 자동 - Docker + cd-prod)
   # ===========================================
   release-prod:
     if: |
       (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
       (github.event_name == 'workflow_dispatch' && (github.event.inputs.job_to_run == 'release-prod' || github.event.inputs.job_to_run == 'all'))
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-      
-      - name: Install uv
-        uses: astral-sh/setup-uv@v4
-        with:
-          enable-cache: true
-          cache-dependency-glob: |
-            pyproject.toml
-            uv.lock
-      
-      - name: Get Version
-        id: version
-        run: |
-          VERSION=$(grep -E "^version\s*=" pyproject.toml | sed 's/.*"\(.*\)"/\1/' || echo "0.1.0")
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "Generated version: $VERSION"
-      
-      - name: Install dependencies
-        run: uv sync --locked --extra dev
-      
-      - name: Run Full Tests
-        run: |
-          if [ -d "tests" ] || [ -d "${{ env.WORKING_DIRECTORY }}/tests" ]; then
-            if [ -d "tests" ]; then
-              uv run pytest tests/ -v || echo "Tests failed but continuing"
-            else
-              uv run pytest ${{ env.WORKING_DIRECTORY }}/tests -v || echo "Tests failed but continuing"
-            fi
-          else
-            echo "No tests found, skipping"
-          fi
-      
-      - name: Create Release Package
-        run: |
-          uv run python -m build --wheel
-      
-      - name: Verify Build Output
-        run: |
-          echo "Current directory: $(pwd)"
-          if [ -d "dist" ] && [ -n "$(ls -A dist/*.whl 2>/dev/null)" ]; then
-            echo "Wheel package created"
-            ls -lh dist/
-            echo "Absolute path: $(pwd)/dist"
-          else
-            echo "Wheel package not found"
-            exit 1
-          fi
-      
-      - name: Archive Build Artifacts
-        if: success()
-        uses: actions/upload-artifact@v4
-        with:
-          name: ai-wheel-${{ github.sha }}
-          path: dist/*.whl
-          retention-days: 7
-      
-      - name: Archive Deployment Files
-        if: success()
-        uses: actions/upload-artifact@v4
-        with:
-          name: ai-deploy-files-${{ github.sha }}
-          path: |
-            ai_app/**/*.py
-            pyproject.toml
-            README.md
-            scripts/verify-slo-cloudwatch.sh
-          retention-days: 7
-      
-      - name: Create Release Tag
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          TAG_NAME="v${{ steps.version.outputs.version }}-${GITHUB_SHA::7}"
-          git tag -a "$TAG_NAME" -m "Release $TAG_NAME" || true
-          git push origin "$TAG_NAME" || true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        continue-on-error: true
-      
-      - name: Trigger CD-Prod Workflow (V1)
-        if: success()
-        uses: actions/github-script@v7
-        with:
-          github-token: ${{ secrets.PAT }}
-          script: |
-            await github.rest.actions.createWorkflowDispatch({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              workflow_id: 'cd-prod.yml',
-              ref: 'main',
-              inputs: {
-                run_id: '${{ github.run_id }}',
-                sha: '${{ github.sha }}',
-                branch: 'main'
-              }
-            });
-            console.log('✅ CD-Prod (V1) workflow triggered successfully');
-
-  # ===========================================
-  # 5. 프로덕션 릴리즈 V2 (수동 디스패치 전용 - Docker + cd-prod-v2)
-  # ===========================================
-  release-prod-v2:
-    if: |
-      github.event_name == 'workflow_dispatch' &&
-      (github.event.inputs.job_to_run == 'release-prod-v2' || github.event.inputs.job_to_run == 'all')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -387,6 +290,14 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
+      
+      - name: Cache uv virtualenv
+        uses: actions/cache@v4
+        with:
+          path: .venv
+          key: uv-venv-${{ runner.os }}-${{ hashFiles('pyproject.toml', 'uv.lock') }}
+          restore-keys: |
+            uv-venv-${{ runner.os }}-
       
       - name: Install uv
         uses: astral-sh/setup-uv@v4
@@ -425,16 +336,16 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
       
-      - name: Docker image tag (V2)
+      - name: Docker image tag
         id: docker-meta
         run: |
           SHA_SHORT="${GITHUB_SHA::7}"
           IMAGE_TAG="main-${SHA_SHORT}"
           echo "image_tag=${IMAGE_TAG}" >> $GITHUB_OUTPUT
           echo "sha_short=${SHA_SHORT}" >> $GITHUB_OUTPUT
-          echo "🐳 Docker image tag (V2): ${IMAGE_TAG}"
+          echo "🐳 Docker image tag: ${IMAGE_TAG}"
       
-      - name: Build and Push Docker Image (V2)
+      - name: Build and Push Docker Image
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -446,7 +357,7 @@ jobs:
           cache-to: type=gha,mode=max
           platforms: linux/arm64
       
-      - name: Trigger CD-Prod-V2 Workflow
+      - name: Trigger CD-Prod Workflow
         if: success()
         uses: actions/github-script@v7
         with:
@@ -455,10 +366,11 @@ jobs:
             await github.rest.actions.createWorkflowDispatch({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              workflow_id: 'cd-prod-v2.yml',
+              workflow_id: 'cd-prod.yml',
               ref: 'main',
               inputs: {
-                use_existing_image: 'true'
+                use_existing_image: 'true',
+                image_tag: '${{ steps.docker-meta.outputs.image_tag }}'
               }
             });
-            console.log('✅ CD-Prod-V2 workflow triggered (use_existing_image=true)');
+            console.log('✅ CD-Prod workflow triggered (use_existing_image=true)');

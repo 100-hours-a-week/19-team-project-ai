@@ -6,11 +6,10 @@ from collections.abc import AsyncGenerator
 from datetime import datetime, timezone
 from typing import Any
 
+from adapters.backend_client import BackendAPIClient, get_backend_client
 from adapters.llm_client import LLMClient, get_llm_client
 from prompts import load_prompt
 from schemas.agent import MentorCard, MentorConditions
-from sqlalchemy import text
-from sqlalchemy.engine import Connection
 
 from services.agent.slot_filling import SlotFiller
 from services.reco.embedder import ProfileEmbedder, get_embedder
@@ -50,84 +49,38 @@ def build_query_text(conditions: MentorConditions) -> str:
 
 # ============== 벡터 검색 ==============
 
-_VECTOR_SEARCH_QUERY = """
-    SELECT
-        u.id as user_id,
-        u.nickname,
-        u.introduction,
-        ep.company_name,
-        ep.verified,
-        ep.rating_avg,
-        ep.rating_count,
-        ep.responded_request_count,
-        ep.accepted_request_count,
-        ep.rejected_request_count,
-        ep.last_active_at,
-        1 - (ep.embedding <=> CAST(:query_embedding AS vector)) as embedding_similarity,
-        ARRAY_AGG(DISTINCT s.name) FILTER (WHERE s.name IS NOT NULL) as skills,
-        ARRAY_AGG(DISTINCT j.name) FILTER (WHERE j.name IS NOT NULL) as jobs
-    FROM expert_profiles ep
-    JOIN users u ON ep.user_id = u.id
-    LEFT JOIN user_skills us ON u.id = us.user_id
-    LEFT JOIN skills s ON us.skill_id = s.id
-    LEFT JOIN user_jobs uj ON u.id = uj.user_id
-    LEFT JOIN jobs j ON uj.job_id = j.id
-    WHERE ep.embedding IS NOT NULL
-    GROUP BY u.id, u.nickname, u.introduction,
-             ep.company_name, ep.verified, ep.rating_avg, ep.rating_count,
-             ep.responded_request_count, ep.accepted_request_count,
-             ep.rejected_request_count, ep.last_active_at, ep.embedding
-    ORDER BY ep.embedding <=> CAST(:query_embedding AS vector)
-    LIMIT :top_n
-"""
 
-
-def vector_search(
+async def vector_search(
     query_embedding: list[float],
-    conn: Connection,
     top_n: int = 50,
+    backend_client: BackendAPIClient | None = None,
 ) -> list[dict[str, Any]]:
     """
-    pgvector에서 멘토 후보 Top N 검색
+    백엔드 API를 통해 멘토 후보 Top N 검색
 
     Args:
         query_embedding: 검색 쿼리 임베딩 벡터
-        conn: SQLAlchemy DB 연결
         top_n: 검색 후보 수
+        backend_client: 백엔드 API 클라이언트
 
     Returns:
         멘토 후보 리스트
     """
-    result = conn.execute(
-        text(_VECTOR_SEARCH_QUERY),
-        {
-            "query_embedding": str(query_embedding),
-            "top_n": top_n,
-        },
+    client = backend_client or get_backend_client()
+
+    candidates = await client.search_experts(
+        query_embedding=query_embedding,
+        top_n=top_n,
     )
 
-    candidates = []
-    for row in result:
-        response_rate = 0.0
-        if row.responded_request_count and row.responded_request_count > 0:
-            response_rate = row.accepted_request_count / row.responded_request_count * 100
-
-        candidates.append(
-            {
-                "user_id": row.user_id,
-                "nickname": row.nickname,
-                "introduction": row.introduction or "",
-                "company_name": row.company_name,
-                "verified": row.verified,
-                "rating_avg": round(row.rating_avg, 1) if row.rating_avg else 0.0,
-                "rating_count": row.rating_count or 0,
-                "response_rate": round(response_rate, 1),
-                "skills": row.skills or [],
-                "jobs": row.jobs or [],
-                "similarity_score": round(float(row.embedding_similarity), 4),
-                "last_active_at": row.last_active_at,
-            }
-        )
+    # response_rate 계산 추가
+    for c in candidates:
+        responded = c.get("responded_request_count", 0)
+        accepted = c.get("accepted_request_count", 0)
+        if responded and responded > 0:
+            c["response_rate"] = round(accepted / responded * 100, 1)
+        else:
+            c["response_rate"] = 0.0
 
     logger.info(f"벡터 검색 완료: {len(candidates)}명 후보")
     return candidates
@@ -185,7 +138,7 @@ def rule_rerank(
         # 참고: 현재 DB에 경력 연수 필드가 없으므로 이 로직은 추후 확장 가능
 
         # 4. 응답률 보정 (직무/스택 모두 불일치인 경우)
-        if filter_type is None and cand["response_rate"] > 0:
+        if filter_type is None and cand.get("response_rate", 0) > 0:
             score += cand["response_rate"] / 1000  # 최대 +0.1
             filter_type = "response_rate"
 
@@ -193,6 +146,8 @@ def rule_rerank(
         if cand.get("last_active_at"):
             try:
                 last_active = cand["last_active_at"]
+                if isinstance(last_active, str):
+                    last_active = datetime.fromisoformat(last_active)
                 if hasattr(last_active, "tzinfo") and last_active.tzinfo is None:
                     last_active = last_active.replace(tzinfo=timezone.utc)
                 days_ago = (datetime.now(timezone.utc) - last_active).days
@@ -370,11 +325,11 @@ def _fallback_reply(
 
 async def run_d1_pipeline(
     message: str,
-    conn: Connection,
     top_k: int = 3,
     top_n: int = 50,
     llm: LLMClient | None = None,
     embedder: ProfileEmbedder | None = None,
+    backend_client: BackendAPIClient | None = None,
 ) -> AsyncGenerator[dict, None]:
     """
     D1 조건 기반 멘토 탐색 파이프라인 (SSE 이벤트 생성기)
@@ -401,8 +356,12 @@ async def run_d1_pipeline(
     query_embedding = embedder.embed_text(query_text)
     embedding_list = query_embedding.tolist()
 
-    # 3. 벡터 검색 Top N
-    candidates = vector_search(embedding_list, conn, top_n=top_n)
+    # 3. 벡터 검색 Top N (백엔드 API 경유)
+    candidates = await vector_search(
+        embedding_list,
+        top_n=top_n,
+        backend_client=backend_client,
+    )
 
     if not candidates:
         yield {
