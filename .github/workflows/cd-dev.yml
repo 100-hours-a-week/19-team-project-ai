@@ -124,8 +124,9 @@ jobs:
             echo "🔄 Restarting ai service..."
             docker compose up -d ai
 
-            # 이전 이미지 정리
+            # 사용하지 않는 이미지 정리 (dangling + 미사용 태그 이미지로 디스크/메모리 확보)
             docker image prune -f 2>/dev/null || true
+            docker image prune -a -f 2>/dev/null || true
 
             echo "============================================"
             echo "✅ Re-Fit AI 개발 서버 배포 완료: $(date)"
