@@ -3,6 +3,7 @@
 import time
 
 import httpx
+from opentelemetry import trace
 from controllers.resumes_controller import ResumesController, get_resumes_controller
 from fastapi import APIRouter, Depends, HTTPException
 from middleware.cloudwatch_metrics import metrics_service
@@ -10,6 +11,7 @@ from schemas.common import ApiResponse, ResponseCode
 from schemas.resumes import ResumeData, ResumeParseRequest
 
 router = APIRouter(prefix="/resumes", tags=["Resumes"])
+tracer = trace.get_tracer(__name__)
 
 
 @router.post(
@@ -30,7 +32,9 @@ async def parse_resume(
 ) -> ApiResponse[ResumeData]:
     """이력서 추출 실행 - S3 URL에서 PDF 다운로드 후 파싱"""
 
-    # 메트릭 시작
+    with tracer.start_as_current_span("api_parse_resume") as span:
+        span.set_attribute("resume.task_id", task_id)
+        # 메트릭 시작
     start_time = time.time()
     success = False
 

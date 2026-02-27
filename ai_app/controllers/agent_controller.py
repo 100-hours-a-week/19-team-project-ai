@@ -77,32 +77,36 @@ class AgentController:
         # 세션 ID 전송
         yield _sse_format("session", {"session_id": session.session_id})
 
-        # LangGraph 실행 (DB 연결 불필요)
+        # Langfuse Callback Handler 설정 (환경 변수 기반 자동 구성)
+        from langfuse.langchain import CallbackHandler
+        langfuse_handler = CallbackHandler()
+
+        # 2. LangGraph 실행 (astream 사용)
         graph = get_agent_graph()
+        config = {"callbacks": [langfuse_handler]}
+        inputs = {
+            "message": request.message,
+            "history": session.get_history(),
+            "top_k": request.top_k,
+            "events": [],
+        }
 
-        with self.get_connection() as conn:
-            result = await graph.ainvoke(
-                {
-                    "message": request.message,
-                    "history": session.get_history(),
-                    "top_k": request.top_k,
-                    "conn": conn,
-                    "events": [],
-                }
-            )
-
-        # 의도 저장
-        if result.get("intent_result"):
-            session.last_intent = result["intent_result"].intent
-
-        # SSE 이벤트 스트리밍
         reply_text = ""
-        for event in result.get("events", []):
-            yield _sse_format(event["event"], event["data"])
+        # 2. LangGraph 실행 (astream 사용)
+        async for chunk in graph.astream(inputs, config=config, stream_mode="updates"):
+            # 각 노드의 출력을 events 필드에서 추출
+            for node_name, node_output in chunk.items():
+                if "events" in node_output:
+                    for event in node_output["events"]:
+                        yield _sse_format(event["event"], event["data"])
 
-            # reply_text 누적 (세션 이력용)
-            if event["event"] == "text":
-                reply_text += event["data"].get("chunk", "")
+                        # reply_text 누적 (세션 이력용)
+                        if event["event"] == "text":
+                            reply_text += event["data"].get("chunk", "")
+
+                # 의도 저장 (classify_intent 노드인 경우)
+                if node_name == "classify_intent" and "intent_result" in node_output:
+                    session.last_intent = node_output["intent_result"].intent
 
         # 세션에 어시스턴트 응답 추가
         if reply_text:

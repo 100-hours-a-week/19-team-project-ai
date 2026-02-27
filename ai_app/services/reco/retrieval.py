@@ -7,9 +7,11 @@ from typing import Any
 from adapters.backend_client import BackendAPIClient, get_backend_client
 from adapters.db_client import VectorSearchClient, get_vector_search_client
 
+from opentelemetry import trace
 from services.reco.embedder import ProfileEmbedder, get_embedder
 
 logger = logging.getLogger(__name__)
+tracer = trace.get_tracer(__name__)
 
 # 필터링 fallback 임계값
 MIN_CANDIDATES_FOR_JOB_FILTER = 5
@@ -282,7 +284,8 @@ class MentorRetriever:
         """
         # 1) 사용자 프로필 조회
         try:
-            user_profile = await self.get_user_profile(user_id)
+            with tracer.start_as_current_span("get_user_profile"):
+                user_profile = await self.get_user_profile(user_id)
         except Exception as e:
             logger.warning(f"유저 프로필 조회 실패 (user_id={user_id}): {e} → fallback 전환")
             return []
@@ -305,17 +308,19 @@ class MentorRetriever:
             return []
 
         # 3) 임베딩 생성
-        user_embedding = self.embedder.embed_text(profile_text, is_query=True)
-        embedding_list = user_embedding.tolist()
+        with tracer.start_as_current_span("embed_user_profile"):
+            user_embedding = self.embedder.embed_text(profile_text, is_query=True)
+            embedding_list = user_embedding.tolist()
 
         # 4) 벡터 유사도 검색 (직접 DB)
         candidate_limit = max(top_k * 5, 30)
 
-        search_results = await self.vector_search_client.search_similar_experts(
-            query_embedding=embedding_list,
-            top_n=candidate_limit,
-            exclude_user_id=user_id,
-        )
+        with tracer.start_as_current_span("vector_search_db"):
+            search_results = await self.vector_search_client.search_similar_experts(
+                query_embedding=embedding_list,
+                top_n=candidate_limit,
+                exclude_user_id=user_id,
+            )
 
         # 5) 검색 결과에 멘토 상세 정보 결합 (병렬로 상위 후보들의 정보만 가져옴)
         import asyncio
@@ -330,11 +335,12 @@ class MentorRetriever:
 
         fetch_tasks = [_fetch_expert(sr["user_id"]) for sr in search_results]
 
-        try:
-            fetch_results = await asyncio.gather(*fetch_tasks)
-            experts_map = {uid: details for uid, details in fetch_results if details}
-        except Exception as e:
-            logger.warning(f"멘토 상세 정보 취합 실패: {e}")
+        with tracer.start_as_current_span("fetch_expert_details_batch"):
+            try:
+                fetch_results = await asyncio.gather(*fetch_tasks)
+                experts_map = {uid: details for uid, details in fetch_results if details}
+            except Exception as e:
+                logger.warning(f"멘토 상세 정보 취합 실패: {e}")
 
         raw_candidates = []
         for sr in search_results:

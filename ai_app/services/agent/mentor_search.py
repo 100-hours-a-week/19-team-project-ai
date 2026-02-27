@@ -121,13 +121,29 @@ def rule_rerank(
         filter_type = None
 
         # 1. 직무 일치 가중치
-        mentor_jobs = set(j.lower() for j in cand.get("jobs", []))
+        raw_jobs = cand.get("jobs", [])
+        mentor_jobs = set()
+        for j in raw_jobs:
+            if isinstance(j, dict):
+                name = j.get("name") or j.get("job_name")
+                if name: mentor_jobs.add(name.lower())
+            elif isinstance(j, str):
+                mentor_jobs.add(j.lower())
+
         if user_job and user_job in mentor_jobs:
             score += 0.15
             filter_type = "job"
 
         # 2. 기술스택 일치 가중치
-        mentor_skills = set(s.lower() for s in cand.get("skills", []))
+        raw_skills = cand.get("skills", [])
+        mentor_skills = set()
+        for s in raw_skills:
+            if isinstance(s, dict):
+                name = s.get("name") or s.get("skill_name")
+                if name: mentor_skills.add(name.lower())
+            elif isinstance(s, str):
+                mentor_skills.add(s.lower())
+
         skill_overlap = len(user_skills & mentor_skills)
         if skill_overlap > 0:
             score += 0.05 * skill_overlap
@@ -179,8 +195,8 @@ def rule_rerank(
                 rating_avg=item.get("rating_avg", 0.0),
                 rating_count=item.get("rating_count", 0),
                 response_rate=item.get("response_rate", 0.0),
-                skills=item.get("skills", []),
-                jobs=item.get("jobs", []),
+                skills=[(s.get("name") if isinstance(s, dict) else s) for s in item.get("skills", [])],
+                jobs=[(j.get("name") if isinstance(j, dict) else j) for j in item.get("jobs", [])],
                 introduction=item.get("introduction", ""),
                 similarity_score=item["similarity_score"],
                 rerank_score=item["rerank_score"],

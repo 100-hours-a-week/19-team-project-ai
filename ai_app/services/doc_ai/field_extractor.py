@@ -3,9 +3,13 @@
 from typing import Any
 
 from adapters.llm_client import LLMClient, get_llm_client
+from opentelemetry import trace
 from prompts import get_resume_extraction_prompts
 
 from services.doc_ai.pdf_parser import ParsedDocument
+
+
+tracer = trace.get_tracer(__name__)
 
 
 class FieldExtractor:
@@ -55,11 +59,12 @@ class FieldExtractor:
         logger = logging.getLogger(__name__)
 
         try:
-            raw_response = await self.llm_client.generate_json(
-                prompt=user_prompt,
-                system_instruction=system_prompt,
-                temperature=0.1,
-            )
+            with tracer.start_as_current_span("llm_generate_json") as span:
+                raw_response = await self.llm_client.generate_json(
+                    prompt=user_prompt,
+                    system_instruction=system_prompt,
+                    temperature=0.1,
+                )
             logger.debug(f"LLM 응답 타입: {type(raw_response)}")
             logger.debug(f"LLM 응답 키: {raw_response.keys() if isinstance(raw_response, dict) else 'N/A'}")
         except Exception as e:
