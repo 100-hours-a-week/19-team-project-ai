@@ -2,12 +2,17 @@
 
 import logging
 import os
+import traceback
 from functools import lru_cache
 from typing import Any, List, Optional
 
 import httpx
+from opentelemetry import trace
+
+from adapters.db_client import get_vector_search_client
 
 logger = logging.getLogger(__name__)
+tracer = trace.get_tracer(__name__)
 
 # 기본 타임아웃 (초) - 서버 행 방지를 위해 기존 30초에서 10초로 단축
 DEFAULT_TIMEOUT = 10.0
@@ -28,12 +33,19 @@ class BackendAPIClient:
         self.api_key = os.getenv("INTERNAL_API_KEY", "")
         self.api_key_header = os.getenv("INTERNAL_API_KEY_HEADER", "X-Internal-Api-Key")
 
+        # Persistent client
+        self.client = httpx.AsyncClient(timeout=DEFAULT_TIMEOUT)
+
         logger.info(f"✅ BackendAPIClient 초기화: root_url={self.root_url}")
         logger.info(f"🔑 INTERNAL_API_KEY 로드됨: len={len(self.api_key)}, header={self.api_key_header}")
         if self.api_key:
             logger.info(f"🔑 INTERNAL_API_KEY 확인 (앞뒤 3글자): {self.api_key[:3]}...{self.api_key[-3:]}")
         else:
             logger.warning("⚠️ INTERNAL_API_KEY가 로드되지 않았습니다!")
+
+    async def aclose(self):
+        """클라이언트 종료"""
+        await self.client.aclose()
 
     def _get_internal_headers(self) -> dict[str, str]:
         """내부 API 호출을 위한 인증 헤더"""
@@ -51,8 +63,8 @@ class BackendAPIClient:
         url = f"{self.internal_url}/users/{user_id}"
         headers = self._get_internal_headers()
         try:
-            async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
-                resp = await client.get(url, headers=headers)
+            with tracer.start_as_current_span("backend_get_user_profile"):
+                resp = await self.client.get(url, headers=headers)
                 resp.raise_for_status()
 
             data = resp.json().get("data", {})
@@ -82,9 +94,8 @@ class BackendAPIClient:
         headers = self._get_internal_headers()
 
         try:
-            async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
-                resp = await client.post(url, json=payload, headers=headers)
-                resp.raise_for_status()
+            resp = await self.client.post(url, json=payload, headers=headers)
+            resp.raise_for_status()
 
             logger.debug(f"임베딩 저장 완료: user_id={user_id}")
             return True
@@ -96,8 +107,8 @@ class BackendAPIClient:
         """특정 전문가의 상세 정보 조회 (nickname, company_name 등)"""
         url = f"{self.v1_url}/experts/{user_id}"
         try:
-            async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
-                resp = await client.get(url)
+            with tracer.start_as_current_span("backend_get_expert_details"):
+                resp = await self.client.get(url)
                 resp.raise_for_status()
 
             return resp.json().get("data")
@@ -108,6 +119,7 @@ class BackendAPIClient:
             return None
         except Exception as e:
             logger.error(f"전문가 상세 조회 오류 ({user_id}): {e}")
+            logger.error(traceback.format_exc())
             return None
 
     # ---------- 멘토 목록 ----------
@@ -122,9 +134,8 @@ class BackendAPIClient:
             params["cursor"] = cursor
 
         try:
-            async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
-                resp = await client.get(url, params=params)
-                resp.raise_for_status()
+            resp = await self.client.get(url, params=params)
+            resp.raise_for_status()
 
             data = resp.json().get("data", {})
             experts = data.get("experts", [])
@@ -157,6 +168,42 @@ class BackendAPIClient:
         """전체 멘토 user_id 목록 조회"""
         experts = await self.get_experts()
         return [e["user_id"] for e in experts]
+
+    async def search_experts(
+        self,
+        query_embedding: list[float],
+        top_n: int = 50,
+    ) -> list[dict[str, Any]]:
+        """
+        벡터 검색을 수행하고 멘토 상세 정보를 결합하여 반환한다.
+        """
+        # 1. 벡터 검색 (ID와 점수 가져오기)
+        v_client = get_vector_search_client()
+        search_results = await v_client.search_similar_experts(
+            query_embedding=query_embedding,
+            top_n=top_n,
+        )
+
+        if not search_results:
+            return []
+
+        # 2. 상세 정보 결합 (병렬 처리 - 서버 부하 방지를 위해 3개로 제한)
+        import asyncio
+
+        semaphore = asyncio.Semaphore(3)
+
+        async def _fetch_details(uid, score):
+            async with semaphore:
+                details = await self.get_expert_details(uid)
+                if details:
+                    return {**details, "similarity_score": score}
+                return None
+
+        tasks = [_fetch_details(sr["user_id"], sr["similarity_score"]) for sr in search_results]
+        results = await asyncio.gather(*tasks)
+
+        # None (조회 실패) 제거
+        return [r for r in results if r]
 
     # ---------- 유저 존재 확인 ----------
 

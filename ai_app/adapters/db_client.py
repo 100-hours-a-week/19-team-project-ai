@@ -5,6 +5,7 @@ import os
 from typing import Any
 
 import asyncpg
+from opentelemetry import trace
 
 logger = logging.getLogger(__name__)
 
@@ -68,32 +69,34 @@ class VectorSearchClient:
         try:
             async with pool.acquire() as conn:
                 if exclude_user_id is not None:
-                    rows = await conn.fetch(
-                        """
-                        SELECT user_id,
-                               1 - (embedding <=> $1::vector) AS similarity_score
-                        FROM expert_profiles
-                        WHERE user_id != $2 AND embedding IS NOT NULL
-                        ORDER BY embedding <=> $1::vector ASC
-                        LIMIT $3
-                        """,
-                        embedding_str,
-                        exclude_user_id,
-                        top_n,
-                    )
+                    with tracer.start_as_current_span("db_fetch_experts_filtered"):
+                        rows = await conn.fetch(
+                            """
+                            SELECT user_id,
+                                   1 - (embedding <=> $1::vector) AS similarity_score
+                            FROM expert_profiles
+                            WHERE user_id != $2 AND embedding IS NOT NULL
+                            ORDER BY embedding <=> $1::vector ASC
+                            LIMIT $3
+                            """,
+                            embedding_str,
+                            exclude_user_id,
+                            top_n,
+                        )
                 else:
-                    rows = await conn.fetch(
-                        """
-                        SELECT user_id,
-                               1 - (embedding <=> $1::vector) AS similarity_score
-                        FROM expert_profiles
-                        WHERE embedding IS NOT NULL
-                        ORDER BY embedding <=> $1::vector ASC
-                        LIMIT $2
-                        """,
-                        embedding_str,
-                        top_n,
-                    )
+                    with tracer.start_as_current_span("db_fetch_experts_unfiltered"):
+                        rows = await conn.fetch(
+                            """
+                            SELECT user_id,
+                                   1 - (embedding <=> $1::vector) AS similarity_score
+                            FROM expert_profiles
+                            WHERE embedding IS NOT NULL
+                            ORDER BY embedding <=> $1::vector ASC
+                            LIMIT $2
+                            """,
+                            embedding_str,
+                            top_n,
+                        )
 
             results = [
                 {
@@ -129,6 +132,7 @@ class VectorSearchClient:
 
 # 싱글톤
 _client: VectorSearchClient | None = None
+tracer = trace.get_tracer(__name__)
 
 
 def get_vector_search_client() -> VectorSearchClient:
