@@ -16,7 +16,10 @@ from schemas.reco import (
     MentorRecommendResponse,
 )
 from services.reco.retrieval import MentorRetriever
+from fastapi import HTTPException
 from sqlalchemy import create_engine
+
+from schemas.common import ResponseCode
 
 
 class RecoController:
