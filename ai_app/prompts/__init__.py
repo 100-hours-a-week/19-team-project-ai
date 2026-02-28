@@ -15,7 +15,7 @@ PROMPTS_DIR = Path(__file__).parent
 langfuse = Langfuse(
     public_key=os.getenv("LANGFUSE_PUBLIC_KEY"),
     secret_key=os.getenv("LANGFUSE_SECRET_KEY"),
-    host=os.getenv("LANGFUSE_BASE_URL", "https://us.cloud.langfuse.com"),
+    host=os.getenv("LANGFUSE_HOST", "https://us.cloud.langfuse.com"),
 )
 
 

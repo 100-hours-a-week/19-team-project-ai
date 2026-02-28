@@ -76,7 +76,17 @@ class BackendAPIClient:
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 404:
                 return None
-            if e.response.status_code == 401:
+            if e.response.status_code == 403:
+                # 403 Forbidden은 보통 '탈퇴한 사용자(USER_DELETED)'인 경우 발생함
+                try:
+                    error_data = e.response.json()
+                    if error_data.get("code") == "USER_DELETED":
+                        logger.warning(f"⚠️ 탈퇴한 사용자 프로필 조회 ({user_id}): {error_data.get('message')}")
+                        return None
+                except Exception:
+                    pass
+                logger.error(f"❌ 권한 오류 (403): 접근 권한이 없거나 금지된 요청입니다. URL: {url}")
+            elif e.response.status_code == 401:
                 logger.error(f"❌ 인증 오류 (401): API 키가 올바르지 않거나 만료되었습니다. URL: {url}")
             else:
                 logger.error(f"유저 프로필 조회 실패 ({user_id}): {e}")
