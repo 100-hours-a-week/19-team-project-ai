@@ -7,14 +7,17 @@ from functools import lru_cache
 from typing import Any, List, Optional
 
 import httpx
-from adapters.db_client import get_vector_search_client
 from opentelemetry import trace
+
+from adapters.db_client import get_vector_search_client
 
 logger = logging.getLogger(__name__)
 tracer = trace.get_tracer(__name__)
 
 # 기본 타임아웃 (초) - 서버 행 방지를 위해 기존 30초에서 10초로 단축
 DEFAULT_TIMEOUT = 10.0
+
+
 class BackendAPIClient:
     """백엔드 REST API 호출 어댑터"""
 
@@ -186,6 +189,7 @@ class BackendAPIClient:
 
         # 2. 상세 정보 결합 (병렬 처리 - 서버 부하 방지를 위해 3개로 제한)
         import asyncio
+
         semaphore = asyncio.Semaphore(3)
 
         async def _fetch_details(uid, score):

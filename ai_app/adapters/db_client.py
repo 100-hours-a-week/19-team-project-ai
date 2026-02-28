@@ -3,9 +3,9 @@
 import logging
 import os
 from typing import Any
-from opentelemetry import trace
 
 import asyncpg
+from opentelemetry import trace
 
 logger = logging.getLogger(__name__)
 

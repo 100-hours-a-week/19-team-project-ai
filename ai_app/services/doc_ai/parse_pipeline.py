@@ -6,10 +6,10 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from opentelemetry import trace
 from pydantic import BaseModel, Field
 from schemas.resumes import Project, WorkExperience
 
-from opentelemetry import trace
 from services.doc_ai.field_extractor import FieldExtractor
 from services.doc_ai.pdf_parser import PDFParser
 from services.doc_ai.pii_masker import PIIMasker, get_pii_masker
@@ -170,7 +170,7 @@ class ParsePipeline:
                 # 1단계: 바이트에서 PDF 파싱 (텍스트 추출)
                 with tracer.start_as_current_span("pdf_parse_bytes"):
                     parsed_doc = await asyncio.to_thread(self.pdf_parser.parse_bytes, pdf_bytes)
-                
+
                 logger.debug("1단계 PDF 파싱 완료 (텍스트 추출)")
                 span.set_attribute("pdf.is_text_pdf", parsed_doc.is_text_pdf)
                 span.set_attribute("pdf.total_pages", parsed_doc.total_pages)
@@ -180,7 +180,9 @@ class ParsePipeline:
                     logger.info("이미지 기반 PDF 감지 → VLM OCR 파이프라인 실행")
                     with tracer.start_as_current_span("vlm_ocr_pipeline"):
                         image_processor = self._get_image_processor()
-                        parsed_doc, ocr_masking_result = await image_processor.process(pdf_bytes, extract_pii=extract_pii)
+                        parsed_doc, ocr_masking_result = await image_processor.process(
+                            pdf_bytes, extract_pii=extract_pii
+                        )
                     masked_text = parsed_doc.full_text
                 else:
                     # 2단계: Presidio PII 마스킹
@@ -195,6 +197,7 @@ class ParsePipeline:
                 # 3단계: LLM을 통한 필드 추출
                 with tracer.start_as_current_span("llm_field_extraction"):
                     from services.doc_ai.pdf_parser import ParsedDocument
+
                     masked_doc = ParsedDocument(
                         pages=parsed_doc.pages,
                         total_pages=parsed_doc.total_pages,

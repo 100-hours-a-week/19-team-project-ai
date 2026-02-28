@@ -6,8 +6,8 @@ from typing import Any
 
 from adapters.backend_client import BackendAPIClient, get_backend_client
 from adapters.db_client import VectorSearchClient, get_vector_search_client
-
 from opentelemetry import trace
+
 from services.reco.embedder import ProfileEmbedder, get_embedder
 
 logger = logging.getLogger(__name__)

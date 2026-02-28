@@ -8,7 +8,6 @@ from prompts import get_resume_extraction_prompts
 
 from services.doc_ai.pdf_parser import ParsedDocument
 
-
 tracer = trace.get_tracer(__name__)
 
 

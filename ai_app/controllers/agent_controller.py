@@ -79,6 +79,7 @@ class AgentController:
 
         # Langfuse Callback Handler 설정 (환경 변수 기반 자동 구성)
         from langfuse.langchain import CallbackHandler
+
         langfuse_handler = CallbackHandler()
 
         # 2. LangGraph 실행 (astream 사용)

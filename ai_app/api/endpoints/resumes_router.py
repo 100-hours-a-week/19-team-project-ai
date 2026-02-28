@@ -3,10 +3,10 @@
 import time
 
 import httpx
-from opentelemetry import trace
 from controllers.resumes_controller import ResumesController, get_resumes_controller
 from fastapi import APIRouter, Depends, HTTPException
 from middleware.cloudwatch_metrics import metrics_service
+from opentelemetry import trace
 from schemas.common import ApiResponse, ResponseCode
 from schemas.resumes import ResumeData, ResumeParseRequest
 
