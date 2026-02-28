@@ -59,7 +59,7 @@ class FieldExtractor:
         logger = logging.getLogger(__name__)
 
         try:
-            with tracer.start_as_current_span("llm_generate_json") as span:
+            with tracer.start_as_current_span("llm_generate_json"):
                 raw_response = await self.llm_client.generate_json(
                     prompt=user_prompt,
                     system_instruction=system_prompt,

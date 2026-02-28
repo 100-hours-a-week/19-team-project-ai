@@ -7,7 +7,7 @@ from functools import lru_cache
 from typing import Any, List, Optional
 
 import httpx
-
+from adapters.db_client import get_vector_search_client
 from opentelemetry import trace
 
 logger = logging.getLogger(__name__)
@@ -15,9 +15,6 @@ tracer = trace.get_tracer(__name__)
 
 # 기본 타임아웃 (초) - 서버 행 방지를 위해 기존 30초에서 10초로 단축
 DEFAULT_TIMEOUT = 10.0
-
-
-from adapters.db_client import get_vector_search_client
 class BackendAPIClient:
     """백엔드 REST API 호출 어댑터"""
 

@@ -126,7 +126,8 @@ def rule_rerank(
         for j in raw_jobs:
             if isinstance(j, dict):
                 name = j.get("name") or j.get("job_name")
-                if name: mentor_jobs.add(name.lower())
+                if name:
+                    mentor_jobs.add(name.lower())
             elif isinstance(j, str):
                 mentor_jobs.add(j.lower())
 
@@ -140,7 +141,8 @@ def rule_rerank(
         for s in raw_skills:
             if isinstance(s, dict):
                 name = s.get("name") or s.get("skill_name")
-                if name: mentor_skills.add(name.lower())
+                if name:
+                    mentor_skills.add(name.lower())
             elif isinstance(s, str):
                 mentor_skills.add(s.lower())
 
