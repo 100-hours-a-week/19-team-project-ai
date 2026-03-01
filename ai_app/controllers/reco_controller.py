@@ -5,7 +5,9 @@ import os
 from typing import ContextManager
 
 from adapters.backend_client import BackendAPIClient, get_backend_client
+from fastapi import HTTPException
 from middleware.otel_lgtm_metrics import tracked_db_connection
+from schemas.common import ResponseCode
 from schemas.reco import (
     EvaluationDetail,
     EvaluationResponse,
@@ -57,45 +59,34 @@ class RecoController:
         )
 
         if not results:
-            # [임시 주석 처리] 백엔드 인증 미처리로 user_exists 호출 시 401 발생
-            # TODO: 백엔드 인증 처리 완료 후 아래 주석 해제
-            # user_exists = await self.backend_client.user_exists(user_id)
-            #
-            # if not user_exists:
-            #     raise HTTPException(
-            #         status_code=404,
-            #         detail={
-            #             "code": ResponseCode.NOT_FOUND.value,
-            #             "data": {
-            #                 "message": f"ID가 {user_id}인 사용자를 찾을 수 없습니다.",
-            #                 "user_id": user_id,
-            #             },
-            #         },
-            #     )
-            #
-            # profile_text = await retriever.get_user_profile_text(user_id)
-            # if not profile_text:
-            #     raise HTTPException(
-            #         status_code=400,
-            #         detail={
-            #             "code": ResponseCode.BAD_REQUEST.value,
-            #             "data": {
-            #                 "message": "사용자의 프로필 정보(직무, 기술스택, 자기소개)가 부족하여 추천을 진행할 수 없습니다. 프로필을 먼저 완성해 주세요.",
-            #                 "user_id": user_id,
-            #             },
-            #         },
-            #     )
-            #
-            # raise HTTPException(
-            #     status_code=404,
-            #     detail={
-            #         "code": ResponseCode.NOT_FOUND.value,
-            #         "data": {
-            #             "message": "조건에 맞는 추천 멘토를 찾을 수 없습니다. 필터링 조건을 변경해 보세요.",
-            #             "user_id": user_id,
-            #         },
-            #     },
-            # )
+            # 유저 존재 여부 확인 (탈퇴한 유저 포함)
+            user_exists = await self.backend_client.user_exists(user_id)
+
+            if not user_exists:
+                raise HTTPException(
+                    status_code=404,
+                    detail={
+                        "code": ResponseCode.NOT_FOUND.value,
+                        "data": {
+                            "message": f"ID가 {user_id}인 사용자를 찾을 수 없거나 탈퇴한 사용자입니다.",
+                            "user_id": user_id,
+                        },
+                    },
+                )
+
+            # 프로필 텍스트 확인 (직무/기술스택 등 필수 정보 부족 여부)
+            profile_text = await retriever.get_user_profile_text(user_id)
+            if not profile_text:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "code": ResponseCode.BAD_REQUEST.value,
+                        "data": {
+                            "message": "사용자의 프로필 정보(직무, 기술스택, 자기소개)가 부족하여 추천을 진행할 수 없습니다. 프로필을 먼저 완성해 주세요.",
+                            "user_id": user_id,
+                        },
+                    },
+                )
 
             # Fallback: 응답률 높은 순으로 멘토 추천
             logger = logging.getLogger(__name__)
