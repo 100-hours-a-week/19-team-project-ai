@@ -60,12 +60,13 @@ class RecoController:
         )
 
         if not results:
-            # [자동 감지] 임베딩이 하나도 없는 경우 백그라운드 업데이트 트리거
+            # [자동 감지] 임베딩이 누락된 전문가가 있는 경우 백그라운드 업데이트 트리거
             status = await retriever.vector_search_client.get_embedding_status()
-            if status["total_count"] > 0 and status["embedded_count"] == 0:
+            if status["total_count"] > 0 and status["embedded_count"] < status["total_count"]:
                 if background_tasks:
                     logger = logging.getLogger(__name__)
-                    logger.warning("🚨 임베딩 누락 자동 감지: 전체 일괄 업데이트를 백그라운드에서 시작합니다.")
+                    missing = status["total_count"] - status["embedded_count"]
+                    logger.warning(f"🚨 임베딩 누락 자동 감지: {missing}명의 전문가 임베딩이 없습니다. 전체 일괄 업데이트를 백그라운드에서 시작합니다.")
                     background_tasks.add_task(self.update_all_embeddings)
             # 유저 존재 여부 확인 (탈퇴한 유저 포함)
             user_exists = await self.backend_client.user_exists(user_id)
