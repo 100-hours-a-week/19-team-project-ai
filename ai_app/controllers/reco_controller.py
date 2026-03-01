@@ -5,7 +5,9 @@ import os
 from typing import ContextManager
 
 from adapters.backend_client import BackendAPIClient, get_backend_client
+from fastapi import HTTPException
 from middleware.otel_lgtm_metrics import tracked_db_connection
+from schemas.common import ResponseCode
 from schemas.reco import (
     EvaluationDetail,
     EvaluationResponse,
