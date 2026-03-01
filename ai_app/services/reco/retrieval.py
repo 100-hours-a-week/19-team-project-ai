@@ -128,28 +128,39 @@ class MentorRetriever:
         user_jobs: set[str],
     ) -> MentorCandidate:
         """API 응답 dict를 MentorCandidate로 변환"""
+        # 필드 매핑 (백엔드 API 버전에 따른 차이 보정)
+        user_id = cand.get("user_id") or cand.get("id")
+        if user_id is None:
+            logger.warning(f"멘토 데이터에 user_id가 없습니다: {cand}")
+            user_id = 0
+
         mentor_skills = self._to_set(cand.get("skills", []))
         mentor_jobs = self._to_set(cand.get("jobs", []))
+
+        # 평점 및 응답률 처리 (기본값 및 안전한 반올림)
+        rating_avg = cand.get("rating_avg")
+        if rating_avg is None:
+            rating_avg = cand.get("rating_count_avg", 0.0)  # 백엔드 필드명 가능성 대응
 
         response_rate = 0.0
         responded = cand.get("responded_request_count", 0)
         accepted = cand.get("accepted_request_count", 0)
         if responded and responded > 0:
-            response_rate = accepted / responded * 100
+            response_rate = (accepted / responded) * 100
 
         last_active = cand.get("last_active_at")
         if last_active and hasattr(last_active, "isoformat"):
             last_active = last_active.isoformat()
 
         return MentorCandidate(
-            user_id=cand["user_id"],
-            nickname=cand.get("nickname", ""),
+            user_id=int(user_id),
+            nickname=cand.get("nickname") or cand.get("name") or "이름 없음",
             introduction=cand.get("introduction", ""),
-            company_name=cand.get("company_name"),
+            company_name=cand.get("company_name") or cand.get("organization"),
             verified=cand.get("verified", False),
-            rating_avg=round(cand.get("rating_avg", 0.0), 1),
+            rating_avg=round(float(rating_avg), 1),
             rating_count=cand.get("rating_count", 0),
-            response_rate=round(response_rate, 1),
+            response_rate=round(float(response_rate), 1),
             skills=list(mentor_skills),
             jobs=list(mentor_jobs),
             similarity_score=round(float(cand.get("similarity_score", 0.0)), 4),
@@ -321,6 +332,16 @@ class MentorRetriever:
                 top_n=candidate_limit,
                 exclude_user_id=user_id,
             )
+
+        # [추가] 검색 결과가 전혀 없는 경우, DB 임베딩 상태 확인
+        if not search_results:
+            status = await self.vector_search_client.get_embedding_status()
+            if status["total_count"] > 0 and status["embedded_count"] == 0:
+                logger.warning("🚨 DB에 전문가는 존재하나 임베딩이 하나도 없습니다. 자동 업데이트가 필요합니다.")
+                # 이 정보는 상위 컨트롤러에서 사용하여 Background Task를 트리거할 수 있음
+                # 하지만 retrieval 수준에서는 로깅과 결과 없음 반환에 집중
+            elif status["total_count"] == 0:
+                logger.warning("🚨 DB에 전문가 데이터가 전혀 없습니다.")
 
         # 5) 검색 결과에 멘토 상세 정보 결합 (병렬로 상위 후보들의 정보만 가져옴)
         import asyncio

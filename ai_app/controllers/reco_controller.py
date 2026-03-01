@@ -5,9 +5,7 @@ import os
 from typing import ContextManager
 
 from adapters.backend_client import BackendAPIClient, get_backend_client
-from fastapi import HTTPException
 from middleware.otel_lgtm_metrics import tracked_db_connection
-from schemas.common import ResponseCode
 from schemas.reco import (
     EvaluationDetail,
     EvaluationResponse,
@@ -16,7 +14,10 @@ from schemas.reco import (
     MentorRecommendResponse,
 )
 from services.reco.retrieval import MentorRetriever
+from fastapi import HTTPException
 from sqlalchemy import create_engine
+
+from schemas.common import ResponseCode
 
 
 class RecoController:
@@ -48,6 +49,7 @@ class RecoController:
         top_k: int = 3,
         only_verified: bool = False,
         include_eval: bool = False,
+        background_tasks: Any | None = None,
     ) -> MentorRecommendResponse:
         """사용자에게 멘토 추천"""
         retriever = self._get_retriever()
@@ -59,6 +61,13 @@ class RecoController:
         )
 
         if not results:
+            # [자동 감지] 임베딩이 하나도 없는 경우 백그라운드 업데이트 트리거
+            status = await retriever.vector_search_client.get_embedding_status()
+            if status["total_count"] > 0 and status["embedded_count"] == 0:
+                if background_tasks:
+                    logger = logging.getLogger(__name__)
+                    logger.warning("🚨 임베딩 누락 자동 감지: 전체 일괄 업데이트를 백그라운드에서 시작합니다.")
+                    background_tasks.add_task(self.update_all_embeddings)
             # 유저 존재 여부 확인 (탈퇴한 유저 포함)
             user_exists = await self.backend_client.user_exists(user_id)
 
