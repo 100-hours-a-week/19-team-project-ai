@@ -2,7 +2,7 @@
 
 import logging
 import os
-from typing import ContextManager
+from typing import Any, ContextManager
 
 from adapters.backend_client import BackendAPIClient, get_backend_client
 from fastapi import HTTPException
@@ -48,6 +48,7 @@ class RecoController:
         top_k: int = 3,
         only_verified: bool = False,
         include_eval: bool = False,
+        background_tasks: Any | None = None,
     ) -> MentorRecommendResponse:
         """사용자에게 멘토 추천"""
         retriever = self._get_retriever()
@@ -59,6 +60,16 @@ class RecoController:
         )
 
         if not results:
+            # [자동 감지] 임베딩이 누락된 전문가가 있는 경우 백그라운드 업데이트 트리거
+            status = await retriever.vector_search_client.get_embedding_status()
+            if status["total_count"] > 0 and status["embedded_count"] < status["total_count"]:
+                if background_tasks:
+                    logger = logging.getLogger(__name__)
+                    missing = status["total_count"] - status["embedded_count"]
+                    logger.warning(
+                        f"🚨 임베딩 누락 자동 감지: {missing}명의 전문가 임베딩이 없습니다. 전체 일괄 업데이트를 백그라운드에서 시작합니다."
+                    )
+                    background_tasks.add_task(self.update_all_embeddings)
             # 유저 존재 여부 확인 (탈퇴한 유저 포함)
             user_exists = await self.backend_client.user_exists(user_id)
 
