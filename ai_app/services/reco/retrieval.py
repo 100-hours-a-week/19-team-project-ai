@@ -225,8 +225,8 @@ class MentorRetriever:
         Returns:
             {"is_hit": bool, "rank": int | None}
         """
-        # 멘토 프로필 텍스트 생성
-        profile = await self.get_user_profile(mentor_user_id)
+        # 멘토 상세 정보 조회 (현직자 API 사용)
+        profile = await self.backend_client.get_expert_details(mentor_user_id)
         if not profile:
             return {"is_hit": False, "rank": None}
 
@@ -294,8 +294,8 @@ class MentorRetriever:
             logger.warning(f"User {user_id} not found")
             return []
 
-        user_skills = set(user_profile["skills"])
-        user_jobs = set(user_profile["jobs"])
+        user_skills = self._to_set(user_profile.get("skills", []))
+        user_jobs = self._to_set(user_profile.get("jobs", []))
         introduction = user_profile.get("introduction", "")
 
         # 2) 프로필 텍스트 생성 (임베딩용)
@@ -447,7 +447,13 @@ class MentorRetriever:
 
     async def update_expert_embedding(self, user_id: int) -> bool:
         """특정 멘토의 임베딩 업데이트 (백엔드 API를 통해 저장)"""
-        profile_text = await self.get_user_profile_text(user_id)
+        # 멘토 상세 정보 조회 (현직자 API 사용)
+        expert_details = await self.backend_client.get_expert_details(user_id)
+        if not expert_details:
+            logger.warning(f"Mentor {user_id} not found to embed")
+            return False
+
+        profile_text = self._build_profile_text(expert_details)
         if not profile_text:
             logger.warning(f"Mentor {user_id} has no profile data to embed")
             return False
@@ -612,8 +618,8 @@ class MentorRetriever:
         details = []
 
         for gt_user_id in expert_ids:
-            # 멘토 프로필 텍스트 생성
-            profile = await self.get_user_profile(gt_user_id)
+            # 멘토 상세 정보 조회 (현직자 API 사용)
+            profile = await self.backend_client.get_expert_details(gt_user_id)
             if not profile:
                 continue
 
