@@ -2,7 +2,7 @@
 
 import logging
 import os
-from typing import ContextManager
+from typing import Any, ContextManager
 
 from adapters.backend_client import BackendAPIClient, get_backend_client
 from fastapi import HTTPException

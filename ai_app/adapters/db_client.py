@@ -119,7 +119,7 @@ class VectorSearchClient:
             async with pool.acquire() as conn:
                 row = await conn.fetchrow(
                     """
-                    SELECT 
+                    SELECT
                         count(*) as total_count,
                         count(embedding) as embedded_count
                     FROM expert_profiles
