@@ -66,7 +66,9 @@ class RecoController:
                 if background_tasks:
                     logger = logging.getLogger(__name__)
                     missing = status["total_count"] - status["embedded_count"]
-                    logger.warning(f"🚨 임베딩 누락 자동 감지: {missing}명의 전문가 임베딩이 없습니다. 전체 일괄 업데이트를 백그라운드에서 시작합니다.")
+                    logger.warning(
+                        f"🚨 임베딩 누락 자동 감지: {missing}명의 전문가 임베딩이 없습니다. 전체 일괄 업데이트를 백그라운드에서 시작합니다."
+                    )
                     background_tasks.add_task(self.update_all_embeddings)
             # 유저 존재 여부 확인 (탈퇴한 유저 포함)
             user_exists = await self.backend_client.user_exists(user_id)

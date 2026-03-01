@@ -338,7 +338,9 @@ class MentorRetriever:
             status = await self.vector_search_client.get_embedding_status()
             if status["total_count"] > 0 and status["embedded_count"] < status["total_count"]:
                 missing = status["total_count"] - status["embedded_count"]
-                logger.warning(f"🚨 DB에 전문가 {status['total_count']}명 중 {missing}명의 임베딩이 누락되었습니다. 자동 업데이트가 필요합니다.")
+                logger.warning(
+                    f"🚨 DB에 전문가 {status['total_count']}명 중 {missing}명의 임베딩이 누락되었습니다. 자동 업데이트가 필요합니다."
+                )
                 # 이 정보는 상위 컨트롤러에서 사용하여 Background Task를 트리거할 수 있음
                 # 하지만 retrieval 수준에서는 로깅과 결과 없음 반환에 집중
             elif status["total_count"] == 0:
