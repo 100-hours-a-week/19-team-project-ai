@@ -125,10 +125,7 @@ class VectorSearchClient:
                     FROM expert_profiles
                     """
                 )
-            return {
-                "total_count": row["total_count"],
-                "embedded_count": row["embedded_count"]
-            }
+            return {"total_count": row["total_count"], "embedded_count": row["embedded_count"]}
         except Exception as e:
             logger.error(f"임베딩 상태 조회 실패: {e}")
             return {"total_count": 0, "embedded_count": 0}
