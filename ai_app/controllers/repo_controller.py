@@ -37,9 +37,7 @@ class RepoController:
 
                 # 최소 필수 필드 검증: title 또는 핵심 콘텐츠가 있어야 성공 처리
                 has_title = bool(job_data.get("title"))
-                has_content = bool(job_data.get("responsibilities")) or bool(
-                    job_data.get("qualifications")
-                )
+                has_content = bool(job_data.get("responsibilities")) or bool(job_data.get("qualifications"))
 
                 if has_title or has_content:
                     job_post_id = len(self._job_store) + 1
@@ -51,9 +49,7 @@ class RepoController:
                         "data": job_data,
                     }
                 else:
-                    logger.warning(
-                        f"CrawlerService 파싱 결과 빈 데이터, LLM fallback 시도: {request.job_url}"
-                    )
+                    logger.warning(f"CrawlerService 파싱 결과 빈 데이터, LLM fallback 시도: {request.job_url}")
 
             else:
                 logger.info("CrawlerService가 이 URL을 지원하지 않음, LLM fallback 시도")
