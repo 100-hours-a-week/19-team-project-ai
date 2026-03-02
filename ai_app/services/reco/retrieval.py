@@ -127,39 +127,47 @@ class MentorRetriever:
         user_skills: set[str],
         user_jobs: set[str],
     ) -> MentorCandidate:
-        """API 응답 dict를 MentorCandidate로 변환"""
-        # 필드 매핑 (백엔드 API 버전에 따른 차이 보정)
-        user_id = cand.get("user_id") or cand.get("id")
+        """API 응답 dict를 MentorCandidate로 변환 (Robust Mapping)"""
+        # 1. ID 매핑 (user_id, userId, id 순)
+        user_id = cand.get("user_id") or cand.get("userId") or cand.get("id")
         if user_id is None:
-            logger.warning(f"멘토 데이터에 user_id가 없습니다: {cand}")
+            logger.warning(f"⚠️ 전문가 데이터에 ID가 없습니다: {cand}")
             user_id = 0
 
+        # 2. 텍스트 필드 정제
+        nickname = cand.get("nickname") or cand.get("name") or cand.get("userName") or "이름 없음"
+        company_name = cand.get("company_name") or cand.get("companyName") or cand.get("organization")
+        introduction = cand.get("introduction", "")
+
+        # 3. 스택 및 직무 (데이터 정제 포함)
         mentor_skills = self._to_set(cand.get("skills", []))
         mentor_jobs = self._to_set(cand.get("jobs", []))
 
-        # 평점 및 응답률 처리 (기본값 및 안전한 반올림)
-        rating_avg = cand.get("rating_avg")
-        if rating_avg is None:
-            rating_avg = cand.get("rating_count_avg", 0.0)  # 백엔드 필드명 가능성 대응
+        # 4. 평점 및 응답률 처리 (기본값 및 다양한 필드명 대응)
+        rating_avg = cand.get("rating_avg") or cand.get("ratingAvg") or cand.get("rating_count_avg") or 0.0
+        rating_count = cand.get("rating_count") or cand.get("ratingCount") or 0
 
-        response_rate = 0.0
-        responded = cand.get("responded_request_count", 0)
-        accepted = cand.get("accepted_request_count", 0)
-        if responded and responded > 0:
-            response_rate = (accepted / responded) * 100
+        response_rate = cand.get("response_rate") or cand.get("responseRate") or 0.0
+        # 만약 직접 계산이 필요한 경우 (필드가 없을 때 대비)
+        if response_rate == 0.0:
+            responded = cand.get("responded_request_count") or cand.get("respondedRequestCount") or 0
+            accepted = cand.get("accepted_request_count") or cand.get("acceptedRequestCount") or 0
+            if responded and responded > 0:
+                response_rate = (accepted / responded) * 100
 
-        last_active = cand.get("last_active_at")
+        # 5. 시간 필드
+        last_active = cand.get("last_active_at") or cand.get("lastActiveAt")
         if last_active and hasattr(last_active, "isoformat"):
             last_active = last_active.isoformat()
 
         return MentorCandidate(
             user_id=int(user_id),
-            nickname=cand.get("nickname") or cand.get("name") or "이름 없음",
-            introduction=cand.get("introduction", ""),
-            company_name=cand.get("company_name") or cand.get("organization"),
-            verified=cand.get("verified", False),
+            nickname=str(nickname),
+            introduction=str(introduction),
+            company_name=str(company_name) if company_name else None,
+            verified=bool(cand.get("verified", False)),
             rating_avg=round(float(rating_avg), 1),
-            rating_count=cand.get("rating_count", 0),
+            rating_count=int(rating_count),
             response_rate=round(float(response_rate), 1),
             skills=list(mentor_skills),
             jobs=list(mentor_jobs),
