@@ -86,6 +86,19 @@ async def parse_job_post(request: JobParseRequest):
 
     data = result.get("data", {})
 
+    # 최종 파싱 결과 검증: 필수 필드가 모두 비어있으면 파싱 실패 처리
+    _title = data.get("title") or ""
+    _responsibilities = data.get("responsibilities", [])
+    _qualifications = data.get("qualifications", [])
+    if not _title and not _responsibilities and not _qualifications:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": ResponseCode.BAD_REQUEST.value,
+                "data": "채용공고 파싱에 실패했습니다. 페이지 구조를 인식할 수 없습니다.",
+            },
+        )
+
     # company 필드 처리: CrawlerService는 dict(name, industry, location), LLM은 str
     company_raw = data.get("company")
     if isinstance(company_raw, dict):

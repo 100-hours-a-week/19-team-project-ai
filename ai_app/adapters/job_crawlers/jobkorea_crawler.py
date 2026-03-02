@@ -1,9 +1,13 @@
 """잡코리아 채용공고 크롤러"""
 
+import logging
+
 from bs4 import BeautifulSoup
 from schemas.jobs import CompanyInfo, JobPosting, JobSource, JobType, SalaryInfo
 
 from adapters.job_crawlers.base_crawler import BaseJobCrawler, CrawlerConfig
+
+logger = logging.getLogger(__name__)
 
 
 class JobKoreaCrawler(BaseJobCrawler):
@@ -27,9 +31,9 @@ class JobKoreaCrawler(BaseJobCrawler):
         if not html:
             return None
 
-        return self._parse_detail_page(html, source_id, url)
+        return await self._parse_detail_page(html, source_id, url)
 
-    def _parse_detail_page(self, html: str, source_id: str, url: str) -> JobPosting | None:
+    async def _parse_detail_page(self, html: str, source_id: str, url: str) -> JobPosting | None:
         """상세 페이지 HTML 파싱"""
         soup = BeautifulSoup(html, "lxml")
 
@@ -125,6 +129,31 @@ class JobKoreaCrawler(BaseJobCrawler):
                 benefits = ben if isinstance(ben, list) else []
                 proc = parsed.get("process")
                 hiring_process = proc if isinstance(proc, list) else []
+
+        # ===== LLM fallback: CSS 셀렉터 + 키워드 매칭 모두 실패한 경우 =====
+        if not responsibilities and not qualifications:
+            full_text = soup.get_text("\n", strip=True)
+            if full_text:
+                logger.info(f"CSS 셀렉터/키워드 매칭 실패, LLM fallback 시작 (source_id={source_id})")
+                try:
+                    from services.repo.job_parser import parse_job_content_with_llm
+
+                    llm_result = await parse_job_content_with_llm(full_text)
+                    responsibilities = llm_result.get("responsibilities", [])
+                    qualifications = llm_result.get("qualifications", [])
+                    preferred_qualifications = llm_result.get("preferred_qualifications", [])
+                    tech_stack = llm_result.get("tech_stack", [])
+                    benefits = llm_result.get("benefits", [])
+                    hiring_process = llm_result.get("hiring_process", [])
+                    logger.info(f"LLM fallback 완료 (source_id={source_id})")
+                except Exception as e:
+                    logger.error(f"LLM fallback 실패 (source_id={source_id}): {e}")
+
+        # title fallback: CSS 셀렉터 실패 시 <title> 태그에서 추출
+        if not title:
+            title_tag = soup.select_one("title")
+            if title_tag:
+                title = title_tag.get_text(strip=True)
 
         # 복리후생 별도 영역
         if not benefits:
