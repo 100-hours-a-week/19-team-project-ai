@@ -119,7 +119,7 @@ class BackendAPIClient:
         try:
             with tracer.start_as_current_span("backend_get_expert_details"):
                 resp = await self.client.get(url)
-                resp.raise_for_status() # Ensure non-2xx responses raise an error
+                resp.raise_for_status()  # Ensure non-2xx responses raise an error
                 if resp.status_code == 200:
                     data = resp.json().get("data", {})
                     # user_id 필드가 없고 id만 있는 경우 보정

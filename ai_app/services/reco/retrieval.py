@@ -146,7 +146,7 @@ class MentorRetriever:
         # 4. 평점 및 응답률 처리 (기본값 및 다양한 필드명 대응)
         rating_avg = cand.get("rating_avg") or cand.get("ratingAvg") or cand.get("rating_count_avg") or 0.0
         rating_count = cand.get("rating_count") or cand.get("ratingCount") or 0
-        
+
         response_rate = cand.get("response_rate") or cand.get("responseRate") or 0.0
         # 만약 직접 계산이 필요한 경우 (필드가 없을 때 대비)
         if response_rate == 0.0:
