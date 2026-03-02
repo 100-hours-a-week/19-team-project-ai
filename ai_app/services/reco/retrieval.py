@@ -6,10 +6,12 @@ from typing import Any
 
 from adapters.backend_client import BackendAPIClient, get_backend_client
 from adapters.db_client import VectorSearchClient, get_vector_search_client
+from opentelemetry import trace
 
 from services.reco.embedder import ProfileEmbedder, get_embedder
 
 logger = logging.getLogger(__name__)
+tracer = trace.get_tracer(__name__)
 
 # 필터링 fallback 임계값
 MIN_CANDIDATES_FOR_JOB_FILTER = 5
@@ -125,29 +127,48 @@ class MentorRetriever:
         user_skills: set[str],
         user_jobs: set[str],
     ) -> MentorCandidate:
-        """API 응답 dict를 MentorCandidate로 변환"""
+        """API 응답 dict를 MentorCandidate로 변환 (Robust Mapping)"""
+        # 1. ID 매핑 (user_id, userId, id 순)
+        user_id = cand.get("user_id") or cand.get("userId") or cand.get("id")
+        if user_id is None:
+            logger.warning(f"⚠️ 전문가 데이터에 ID가 없습니다: {cand}")
+            user_id = 0
+
+        # 2. 텍스트 필드 정제
+        nickname = cand.get("nickname") or cand.get("name") or cand.get("userName") or "이름 없음"
+        company_name = cand.get("company_name") or cand.get("companyName") or cand.get("organization")
+        introduction = cand.get("introduction", "")
+
+        # 3. 스택 및 직무 (데이터 정제 포함)
         mentor_skills = self._to_set(cand.get("skills", []))
         mentor_jobs = self._to_set(cand.get("jobs", []))
 
-        response_rate = 0.0
-        responded = cand.get("responded_request_count", 0)
-        accepted = cand.get("accepted_request_count", 0)
-        if responded and responded > 0:
-            response_rate = accepted / responded * 100
+        # 4. 평점 및 응답률 처리 (기본값 및 다양한 필드명 대응)
+        rating_avg = cand.get("rating_avg") or cand.get("ratingAvg") or cand.get("rating_count_avg") or 0.0
+        rating_count = cand.get("rating_count") or cand.get("ratingCount") or 0
 
-        last_active = cand.get("last_active_at")
+        response_rate = cand.get("response_rate") or cand.get("responseRate") or 0.0
+        # 만약 직접 계산이 필요한 경우 (필드가 없을 때 대비)
+        if response_rate == 0.0:
+            responded = cand.get("responded_request_count") or cand.get("respondedRequestCount") or 0
+            accepted = cand.get("accepted_request_count") or cand.get("acceptedRequestCount") or 0
+            if responded and responded > 0:
+                response_rate = (accepted / responded) * 100
+
+        # 5. 시간 필드
+        last_active = cand.get("last_active_at") or cand.get("lastActiveAt")
         if last_active and hasattr(last_active, "isoformat"):
             last_active = last_active.isoformat()
 
         return MentorCandidate(
-            user_id=cand["user_id"],
-            nickname=cand.get("nickname", ""),
-            introduction=cand.get("introduction", ""),
-            company_name=cand.get("company_name"),
-            verified=cand.get("verified", False),
-            rating_avg=round(cand.get("rating_avg", 0.0), 1),
-            rating_count=cand.get("rating_count", 0),
-            response_rate=round(response_rate, 1),
+            user_id=int(user_id),
+            nickname=str(nickname),
+            introduction=str(introduction),
+            company_name=str(company_name) if company_name else None,
+            verified=bool(cand.get("verified", False)),
+            rating_avg=round(float(rating_avg), 1),
+            rating_count=int(rating_count),
+            response_rate=round(float(response_rate), 1),
             skills=list(mentor_skills),
             jobs=list(mentor_jobs),
             similarity_score=round(float(cand.get("similarity_score", 0.0)), 4),
@@ -223,8 +244,8 @@ class MentorRetriever:
         Returns:
             {"is_hit": bool, "rank": int | None}
         """
-        # 멘토 프로필 텍스트 생성
-        profile = await self.get_user_profile(mentor_user_id)
+        # 멘토 상세 정보 조회 (현직자 API 사용)
+        profile = await self.backend_client.get_expert_details(mentor_user_id)
         if not profile:
             return {"is_hit": False, "rank": None}
 
@@ -282,7 +303,8 @@ class MentorRetriever:
         """
         # 1) 사용자 프로필 조회
         try:
-            user_profile = await self.get_user_profile(user_id)
+            with tracer.start_as_current_span("get_user_profile"):
+                user_profile = await self.get_user_profile(user_id)
         except Exception as e:
             logger.warning(f"유저 프로필 조회 실패 (user_id={user_id}): {e} → fallback 전환")
             return []
@@ -291,8 +313,8 @@ class MentorRetriever:
             logger.warning(f"User {user_id} not found")
             return []
 
-        user_skills = set(user_profile["skills"])
-        user_jobs = set(user_profile["jobs"])
+        user_skills = self._to_set(user_profile.get("skills", []))
+        user_jobs = self._to_set(user_profile.get("jobs", []))
         introduction = user_profile.get("introduction", "")
 
         # 2) 프로필 텍스트 생성 (임베딩용)
@@ -305,17 +327,32 @@ class MentorRetriever:
             return []
 
         # 3) 임베딩 생성
-        user_embedding = self.embedder.embed_text(profile_text, is_query=True)
-        embedding_list = user_embedding.tolist()
+        with tracer.start_as_current_span("embed_user_profile"):
+            user_embedding = self.embedder.embed_text(profile_text, is_query=True)
+            embedding_list = user_embedding.tolist()
 
         # 4) 벡터 유사도 검색 (직접 DB)
         candidate_limit = max(top_k * 5, 30)
 
-        search_results = await self.vector_search_client.search_similar_experts(
-            query_embedding=embedding_list,
-            top_n=candidate_limit,
-            exclude_user_id=user_id,
-        )
+        with tracer.start_as_current_span("vector_search_db"):
+            search_results = await self.vector_search_client.search_similar_experts(
+                query_embedding=embedding_list,
+                top_n=candidate_limit,
+                exclude_user_id=user_id,
+            )
+
+        # [추가] 검색 결과가 전혀 없는 경우, DB 임베딩 상태 확인
+        if not search_results:
+            status = await self.vector_search_client.get_embedding_status()
+            if status["total_count"] > 0 and status["embedded_count"] < status["total_count"]:
+                missing = status["total_count"] - status["embedded_count"]
+                logger.warning(
+                    f"🚨 DB에 전문가 {status['total_count']}명 중 {missing}명의 임베딩이 누락되었습니다. 자동 업데이트가 필요합니다."
+                )
+                # 이 정보는 상위 컨트롤러에서 사용하여 Background Task를 트리거할 수 있음
+                # 하지만 retrieval 수준에서는 로깅과 결과 없음 반환에 집중
+            elif status["total_count"] == 0:
+                logger.warning("🚨 DB에 전문가 데이터가 전혀 없습니다.")
 
         # 5) 검색 결과에 멘토 상세 정보 결합 (병렬로 상위 후보들의 정보만 가져옴)
         import asyncio
@@ -330,11 +367,12 @@ class MentorRetriever:
 
         fetch_tasks = [_fetch_expert(sr["user_id"]) for sr in search_results]
 
-        try:
-            fetch_results = await asyncio.gather(*fetch_tasks)
-            experts_map = {uid: details for uid, details in fetch_results if details}
-        except Exception as e:
-            logger.warning(f"멘토 상세 정보 취합 실패: {e}")
+        with tracer.start_as_current_span("fetch_expert_details_batch"):
+            try:
+                fetch_results = await asyncio.gather(*fetch_tasks)
+                experts_map = {uid: details for uid, details in fetch_results if details}
+            except Exception as e:
+                logger.warning(f"멘토 상세 정보 취합 실패: {e}")
 
         raw_candidates = []
         for sr in search_results:
@@ -441,7 +479,13 @@ class MentorRetriever:
 
     async def update_expert_embedding(self, user_id: int) -> bool:
         """특정 멘토의 임베딩 업데이트 (백엔드 API를 통해 저장)"""
-        profile_text = await self.get_user_profile_text(user_id)
+        # 멘토 상세 정보 조회 (현직자 API 사용)
+        expert_details = await self.backend_client.get_expert_details(user_id)
+        if not expert_details:
+            logger.warning(f"Mentor {user_id} not found to embed")
+            return False
+
+        profile_text = self._build_profile_text(expert_details)
         if not profile_text:
             logger.warning(f"Mentor {user_id} has no profile data to embed")
             return False
@@ -606,8 +650,8 @@ class MentorRetriever:
         details = []
 
         for gt_user_id in expert_ids:
-            # 멘토 프로필 텍스트 생성
-            profile = await self.get_user_profile(gt_user_id)
+            # 멘토 상세 정보 조회 (현직자 API 사용)
+            profile = await self.backend_client.get_expert_details(gt_user_id)
             if not profile:
                 continue
 

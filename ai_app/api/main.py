@@ -55,6 +55,16 @@ async def preload_embedding_model():
     get_embedder().model  # lazy loading 트리거
 
 
+@app.on_event("shutdown")
+async def cleanup_resources():
+    """서버 종료 시 DB 커넥션 풀 및 HTTP 클라이언트 정리"""
+    from adapters.backend_client import get_backend_client
+    from adapters.db_client import close_pool
+
+    await close_pool()
+    await get_backend_client().aclose()
+
+
 app.include_router(health_router.router, prefix="/api/ai", tags=["Health"])
 app.include_router(resumes_router.router, prefix="/api/ai")
 app.include_router(reco_router.router, prefix="/api/ai")

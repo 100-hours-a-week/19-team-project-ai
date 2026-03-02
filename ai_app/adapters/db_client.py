@@ -5,6 +5,7 @@ import os
 from typing import Any
 
 import asyncpg
+from opentelemetry import trace
 
 logger = logging.getLogger(__name__)
 
@@ -68,32 +69,34 @@ class VectorSearchClient:
         try:
             async with pool.acquire() as conn:
                 if exclude_user_id is not None:
-                    rows = await conn.fetch(
-                        """
-                        SELECT user_id,
-                               1 - (embedding <=> $1::vector) AS similarity_score
-                        FROM expert_profiles
-                        WHERE user_id != $2 AND embedding IS NOT NULL
-                        ORDER BY embedding <=> $1::vector ASC
-                        LIMIT $3
-                        """,
-                        embedding_str,
-                        exclude_user_id,
-                        top_n,
-                    )
+                    with tracer.start_as_current_span("db_fetch_experts_filtered"):
+                        rows = await conn.fetch(
+                            """
+                            SELECT user_id,
+                                   1 - (embedding <=> $1::vector) AS similarity_score
+                            FROM expert_profiles
+                            WHERE user_id != $2 AND embedding IS NOT NULL
+                            ORDER BY embedding <=> $1::vector ASC
+                            LIMIT $3
+                            """,
+                            embedding_str,
+                            exclude_user_id,
+                            top_n,
+                        )
                 else:
-                    rows = await conn.fetch(
-                        """
-                        SELECT user_id,
-                               1 - (embedding <=> $1::vector) AS similarity_score
-                        FROM expert_profiles
-                        WHERE embedding IS NOT NULL
-                        ORDER BY embedding <=> $1::vector ASC
-                        LIMIT $2
-                        """,
-                        embedding_str,
-                        top_n,
-                    )
+                    with tracer.start_as_current_span("db_fetch_experts_unfiltered"):
+                        rows = await conn.fetch(
+                            """
+                            SELECT user_id,
+                                   1 - (embedding <=> $1::vector) AS similarity_score
+                            FROM expert_profiles
+                            WHERE embedding IS NOT NULL
+                            ORDER BY embedding <=> $1::vector ASC
+                            LIMIT $2
+                            """,
+                            embedding_str,
+                            top_n,
+                        )
 
             results = [
                 {
@@ -109,26 +112,28 @@ class VectorSearchClient:
             logger.error(f"벡터 검색 실패: {e}")
             raise
 
-    async def get_expert_embeddings_exist(self, user_ids: list[int]) -> list[int]:
-        """임베딩이 존재하는 멘토 ID 목록 조회"""
+    async def get_embedding_status(self) -> dict[str, int]:
+        """전체 전문가 수 및 임베딩 완료된 전문가 수 조회"""
         pool = await get_pool()
         try:
             async with pool.acquire() as conn:
-                rows = await conn.fetch(
+                row = await conn.fetchrow(
                     """
-                    SELECT user_id FROM expert_profiles
-                    WHERE user_id = ANY($1::int[]) AND embedding IS NOT NULL
-                    """,
-                    user_ids,
+                    SELECT
+                        count(*) as total_count,
+                        count(embedding) as embedded_count
+                    FROM expert_profiles
+                    """
                 )
-            return [row["user_id"] for row in rows]
+            return {"total_count": row["total_count"], "embedded_count": row["embedded_count"]}
         except Exception as e:
-            logger.error(f"임베딩 존재 확인 실패: {e}")
-            raise
+            logger.error(f"임베딩 상태 조회 실패: {e}")
+            return {"total_count": 0, "embedded_count": 0}
 
 
 # 싱글톤
 _client: VectorSearchClient | None = None
+tracer = trace.get_tracer(__name__)
 
 
 def get_vector_search_client() -> VectorSearchClient:

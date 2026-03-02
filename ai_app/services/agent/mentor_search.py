@@ -121,13 +121,31 @@ def rule_rerank(
         filter_type = None
 
         # 1. 직무 일치 가중치
-        mentor_jobs = set(j.lower() for j in cand.get("jobs", []))
+        raw_jobs = cand.get("jobs", [])
+        mentor_jobs = set()
+        for j in raw_jobs:
+            if isinstance(j, dict):
+                name = j.get("name") or j.get("job_name")
+                if name:
+                    mentor_jobs.add(name.lower())
+            elif isinstance(j, str):
+                mentor_jobs.add(j.lower())
+
         if user_job and user_job in mentor_jobs:
             score += 0.15
             filter_type = "job"
 
         # 2. 기술스택 일치 가중치
-        mentor_skills = set(s.lower() for s in cand.get("skills", []))
+        raw_skills = cand.get("skills", [])
+        mentor_skills = set()
+        for s in raw_skills:
+            if isinstance(s, dict):
+                name = s.get("name") or s.get("skill_name")
+                if name:
+                    mentor_skills.add(name.lower())
+            elif isinstance(s, str):
+                mentor_skills.add(s.lower())
+
         skill_overlap = len(user_skills & mentor_skills)
         if skill_overlap > 0:
             score += 0.05 * skill_overlap
@@ -170,17 +188,22 @@ def rule_rerank(
     # Top K 선택 & MentorCard 변환
     cards = []
     for item in scored[:top_k]:
+        # 필드 매핑 보정
+        user_id = item.get("user_id") or item.get("id")
+        if user_id is None:
+            continue
+
         cards.append(
             MentorCard(
-                user_id=item["user_id"],
-                nickname=item["nickname"],
-                company_name=item.get("company_name"),
+                user_id=int(user_id),
+                nickname=item.get("nickname") or item.get("name") or "이름 없음",
+                company_name=item.get("company_name") or item.get("organization"),
                 verified=item.get("verified", False),
-                rating_avg=item.get("rating_avg", 0.0),
+                rating_avg=float(item.get("rating_avg") or item.get("rating_count_avg") or 0.0),
                 rating_count=item.get("rating_count", 0),
                 response_rate=item.get("response_rate", 0.0),
-                skills=item.get("skills", []),
-                jobs=item.get("jobs", []),
+                skills=[(s.get("name") if isinstance(s, dict) else s) for s in item.get("skills", [])],
+                jobs=[(j.get("name") if isinstance(j, dict) else j) for j in item.get("jobs", [])],
                 introduction=item.get("introduction", ""),
                 similarity_score=item["similarity_score"],
                 rerank_score=item["rerank_score"],

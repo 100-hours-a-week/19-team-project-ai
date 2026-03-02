@@ -19,6 +19,7 @@ router = APIRouter(prefix="/mentors", tags=["Mentors"])
 )
 async def recommend_mentors(
     user_id: int,
+    background_tasks: BackgroundTasks,
     top_k: int = Query(default=3, ge=1, le=20, description="추천 개수"),
     only_verified: bool = Query(default=False, description="인증 멘토만 추천"),
     include_eval: bool = Query(default=False, description="평가 결과 포함"),
@@ -36,6 +37,7 @@ async def recommend_mentors(
             top_k=top_k,
             only_verified=only_verified,
             include_eval=include_eval,
+            background_tasks=background_tasks,
         )
 
         # 성공 조건 체크
