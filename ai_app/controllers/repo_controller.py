@@ -34,21 +34,38 @@ class RepoController:
 
             if job_posting:
                 job_data = job_posting.model_dump()
-                job_post_id = len(self._job_store) + 1
-                self._job_store[job_post_id] = job_data
-                logger.info(f"CrawlerService 파싱 성공 - {job_data.get('title')}")
-                return {
-                    "success": True,
-                    "job_post_id": job_post_id,
-                    "data": job_data,
-                }
 
-            logger.info("CrawlerService가 이 URL을 지원하지 않음, LLM fallback 시도")
+                # 최소 필수 필드 검증: title 또는 핵심 콘텐츠가 있어야 성공 처리
+                has_title = bool(job_data.get("title"))
+                has_content = bool(job_data.get("responsibilities")) or bool(job_data.get("qualifications"))
+
+                if has_title or has_content:
+                    job_post_id = len(self._job_store) + 1
+                    self._job_store[job_post_id] = job_data
+                    logger.info(f"CrawlerService 파싱 성공 - {job_data.get('title')}")
+                    return {
+                        "success": True,
+                        "job_post_id": job_post_id,
+                        "data": job_data,
+                    }
+                else:
+                    logger.warning(f"CrawlerService 파싱 결과 빈 데이터, LLM fallback 시도: {request.job_url}")
+
+            else:
+                logger.info("CrawlerService가 이 URL을 지원하지 않음, LLM fallback 시도")
         except Exception as e:
             logger.warning(f"CrawlerService 파싱 실패, LLM fallback: {e}")
 
         # 2. LLM fallback
-        result = await parse_job_from_url(request.job_url)
+        try:
+            result = await parse_job_from_url(request.job_url)
+        except Exception as e:
+            logger.error(f"LLM fallback 내부 오류: {e}")
+            return {
+                "success": False,
+                "error": f"내부 서버 오류: {e}",
+                "error_type": "internal_error",
+            }
 
         if result.get("success"):
             job_data = result.get("data", {})
@@ -61,6 +78,8 @@ class RepoController:
                 "data": job_data,
             }
 
+        # URL은 접근 가능하지만 크롤링/파싱 불가 → parse_failed
+        result["error_type"] = "parse_failed"
         return result
 
     async def generate_report(
