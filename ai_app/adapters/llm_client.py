@@ -160,8 +160,10 @@ class LLMClient:
                         text = response.text.strip()
                         if text.startswith("```"):
                             lines = text.split("\n")
-                            if lines[0].startswith("```"): lines = lines[1:]
-                            if lines and lines[-1].strip() == "```": lines = lines[:-1]
+                            if lines[0].startswith("```"):
+                                lines = lines[1:]
+                            if lines and lines[-1].strip() == "```":
+                                lines = lines[:-1]
                             text = "\n".join(lines)
                         return json.loads(text)
                     except Exception as e:
@@ -169,14 +171,17 @@ class LLMClient:
                         error_str = str(e).upper()
                         if any(code in error_str for code in ["429", "RESOURCE_EXHAUSTED", "503", "OVERLOADED"]):
                             logger.warning(f"⚠️ 할당량 초과 ({label}, {model}, 시도 {attempt + 1}/{self.max_retries})")
-                            if attempt == self.max_retries - 1: break
+                            if attempt == self.max_retries - 1:
+                                break
                             await asyncio.sleep(self.base_delay * (2**attempt))
                             continue
                         logger.warning(f"⚠️ {model} 호출 실패 ({label}): {e}")
                         break
-                else: continue
+                else:
+                    continue
                 break
-            else: continue
+            else:
+                continue
             # If we got here via 'break' inside retry/model loop without returning, it means we need next client
         
         raise last_error or RuntimeError("모든 API 키 및 모델 호출에 실패했습니다.")
@@ -222,8 +227,10 @@ class LLMClient:
                         text = response.text.strip()
                         if text.startswith("```"):
                             lines = text.split("\n")
-                            if lines[0].startswith("```"): lines = lines[1:]
-                            if lines and lines[-1].strip() == "```": lines = lines[:-1]
+                            if lines[0].startswith("```"):
+                                lines = lines[1:]
+                            if lines and lines[-1].strip() == "```":
+                                lines = lines[:-1]
                             text = "\n".join(lines)
                         return json.loads(text)
                     except Exception as e:
@@ -231,14 +238,17 @@ class LLMClient:
                         error_str = str(e).upper()
                         if any(code in error_str for code in ["429", "RESOURCE_EXHAUSTED", "503", "OVERLOADED"]):
                             logger.warning(f"⚠️ 할당량 초과 ({label}, {model}, 시도 {attempt + 1}/{self.max_retries})")
-                            if attempt == self.max_retries - 1: break
+                            if attempt == self.max_retries - 1:
+                                break
                             await asyncio.sleep(self.base_delay * (2**attempt))
                             continue
                         logger.warning(f"⚠️ {model} 호출 실패 ({label}): {e}")
                         break
-                else: continue
+                else:
+                    continue
                 break
-            else: continue
+            else:
+                continue
         
         raise last_error or RuntimeError("모든 API 키 및 모델 호출에 실패했습니다.")
 
