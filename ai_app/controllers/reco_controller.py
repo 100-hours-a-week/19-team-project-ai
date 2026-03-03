@@ -51,6 +51,22 @@ class RecoController:
         background_tasks: Any | None = None,
     ) -> MentorRecommendResponse:
         """사용자에게 멘토 추천"""
+        logger = logging.getLogger(__name__)
+
+        # 0) 유저 존재 여부를 먼저 확인 — 없는 유저면 즉시 404
+        user_exists = await self.backend_client.user_exists(user_id)
+        if not user_exists:
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "code": ResponseCode.NOT_FOUND.value,
+                    "data": {
+                        "message": f"ID가 {user_id}인 사용자를 찾을 수 없거나 탈퇴한 사용자입니다.",
+                        "user_id": user_id,
+                    },
+                },
+            )
+
         retriever = self._get_retriever()
         results = await retriever.recommend_mentors(
             user_id=user_id,
@@ -64,26 +80,11 @@ class RecoController:
             status = await retriever.vector_search_client.get_embedding_status()
             if status["total_count"] > 0 and status["embedded_count"] < status["total_count"]:
                 if background_tasks:
-                    logger = logging.getLogger(__name__)
                     missing = status["total_count"] - status["embedded_count"]
                     logger.warning(
                         f"🚨 임베딩 누락 자동 감지: {missing}명의 전문가 임베딩이 없습니다. 전체 일괄 업데이트를 백그라운드에서 시작합니다."
                     )
                     background_tasks.add_task(self.update_all_embeddings)
-            # 유저 존재 여부 확인 (탈퇴한 유저 포함)
-            user_exists = await self.backend_client.user_exists(user_id)
-
-            if not user_exists:
-                raise HTTPException(
-                    status_code=404,
-                    detail={
-                        "code": ResponseCode.NOT_FOUND.value,
-                        "data": {
-                            "message": f"ID가 {user_id}인 사용자를 찾을 수 없거나 탈퇴한 사용자입니다.",
-                            "user_id": user_id,
-                        },
-                    },
-                )
 
             # 프로필 텍스트 확인 (직무/기술스택 등 필수 정보 부족 여부)
             profile_text = await retriever.get_user_profile_text(user_id)
@@ -100,7 +101,6 @@ class RecoController:
                 )
 
             # Fallback: 응답률 높은 순으로 멘토 추천
-            logger = logging.getLogger(__name__)
             logger.info(f"유사도 기반 추천 결과 없음 (user_id={user_id}), 응답률 기반 fallback 실행")
 
             results = await retriever.fallback_by_response_rate(top_k=top_k)
