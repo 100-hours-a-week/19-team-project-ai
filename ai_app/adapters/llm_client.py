@@ -29,76 +29,58 @@ class LLMClient:
         self.base_delay = 1
 
     def _init_clients(self) -> None:
-        """클라이언트 초기화 (lazy) - 여러 API 키 지원"""
+        """클라이언트 초기화 (lazy) - 리스트 분리하여 저장"""
         if self._initialized:
             return
 
-        # 1. Vertex AI 클라이언트 (최우선)
+        self._vertex_clients: list[genai.Client] = []
+        self._vertex_labels: list[str] = []
+        self._api_key_clients: list[genai.Client] = []
+        self._api_key_labels: list[str] = []
+
+        # 1. API 키 클라이언트 로드
+        api_keys = self._load_api_keys()
+        for i, key in enumerate(api_keys):
+            self._api_key_clients.append(genai.Client(api_key=key))
+            self._api_key_labels.append(f"APIKey_{i + 1}({key[:8]}...)")
+
+        # 2. Vertex AI 클라이언트 로드
         project_id = os.getenv("GCP_PROJECT_ID")
         location = os.getenv("GCP_LOCATION", "asia-northeast3")
         credentials_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
 
         if project_id and credentials_path:
-            logger.info(f"Using Vertex AI (Project: {project_id}, Location: {location})")
-            self._clients.append(genai.Client(vertexai=True, project=project_id, location=location))
-            self._client_labels.append(f"VertexAI({location})")
+            self._vertex_clients.append(genai.Client(vertexai=True, project=project_id, location=location))
+            self._vertex_labels.append(f"VertexAI({location})")
 
-        # 2. 여러 API 키 클라이언트 (GOOGLE_API_KEY, GOOGLE_API_KEY_2, ...)
-        api_keys = self._load_api_keys()
-        for i, key in enumerate(api_keys):
-            self._clients.append(genai.Client(api_key=key))
-            label = f"APIKey_{i + 1}({key[:8]}...)"
-            self._client_labels.append(label)
+        if not self._api_key_clients and not self._vertex_clients:
+            raise ValueError("No LLM clients configured.")
 
-        if not self._clients:
-            raise ValueError(
-                "No LLM client configured. Set GCP_PROJECT_ID/GOOGLE_APPLICATION_CREDENTIALS "
-                "or GOOGLE_API_KEY / GOOGLE_API_KEYS."
-            )
+        # 기본 순서: Vertex 우선
+        self._clients = self._vertex_clients + self._api_key_clients
+        self._client_labels = self._vertex_labels + self._api_key_labels
 
-        logger.info(f"LLM 클라이언트 {len(self._clients)}개 초기화: {self._client_labels}")
+        logger.info(
+            f"LLM 클라이언트 초기화 완료 (Vertex {len(self._vertex_clients)}개, APIKey {len(self._api_key_clients)}개)"
+        )
         self._initialized = True
 
     def _load_api_keys(self) -> list[str]:
         """환경변수에서 API 키 목록 로드"""
         keys = []
-
-        # 방법 1: 콤마 구분 (GOOGLE_API_KEYS)
         multi_keys = os.getenv("GOOGLE_API_KEYS", "")
         if multi_keys:
             keys.extend([k.strip() for k in multi_keys.split(",") if k.strip()])
 
-        # 방법 2: 개별 환경변수 (GOOGLE_API_KEY, GOOGLE_API_KEY_2, ...)
         if not keys:
             primary = os.getenv("GOOGLE_API_KEY", "")
             if primary:
                 keys.append(primary)
-            # _2, _3, ... 순서로 탐색
             for i in range(2, 11):
                 extra = os.getenv(f"GOOGLE_API_KEY_{i}", "")
                 if extra:
                     keys.append(extra)
-
         return keys
-
-    def _get_client(self) -> genai.Client:
-        """현재 active 클라이언트 반환"""
-        self._init_clients()
-        return self._clients[self._current_client_idx]
-
-    def _rotate_client(self) -> bool:
-        """다음 클라이언트로 전환. 다음이 있으면 True, 없으면 False."""
-        self._init_clients()
-        next_idx = self._current_client_idx + 1
-        if next_idx < len(self._clients):
-            old_label = self._client_labels[self._current_client_idx]
-            self._current_client_idx = next_idx
-            new_label = self._client_labels[self._current_client_idx]
-            logger.info(f"🔄 API 키 전환: {old_label} → {new_label}")
-            return True
-        # 모두 소진 → 처음으로 리셋
-        self._current_client_idx = 0
-        return False
 
     async def generate(
         self,
@@ -106,9 +88,18 @@ class LLMClient:
         system_instruction: str | None = None,
         temperature: float = 0.1,
         max_tokens: int = 4096,
+        prefer_api_key: bool = False,
     ) -> str:
         """Generate text completion."""
-        client = self._get_client()
+        self._init_clients()
+
+        # 호출 전용으로 클라이언트 리스트 재구성 (정적 변수 오염 방지)
+        if prefer_api_key:
+            target_clients = self._api_key_clients + self._vertex_clients
+            target_labels = self._api_key_labels + self._vertex_labels
+        else:
+            target_clients = self._vertex_clients + self._api_key_clients
+            target_labels = self._vertex_labels + self._api_key_labels
 
         config = types.GenerateContentConfig(
             temperature=temperature,
@@ -116,13 +107,19 @@ class LLMClient:
             system_instruction=system_instruction,
         )
 
-        response = await client.aio.models.generate_content(
-            model=self.model_name,
-            contents=prompt,
-            config=config,
-        )
+        for client, label in zip(target_clients, target_labels):
+            try:
+                response = await client.aio.models.generate_content(
+                    model=self.model_name,
+                    contents=prompt,
+                    config=config,
+                )
+                return response.text
+            except Exception as e:
+                logger.warning(f"⚠️ {label} 호출 실패: {e}")
+                continue
 
-        return response.text
+        raise RuntimeError("모든 클라이언트 호출에 실패했습니다.")
 
     async def generate_json(
         self,
@@ -130,31 +127,30 @@ class LLMClient:
         system_instruction: str | None = None,
         response_schema: type[BaseModel] | None = None,
         temperature: float = 0.1,
+        prefer_api_key: bool = False,
     ) -> dict[str, Any]:
-        """Generate structured JSON output with retry, key rotation, and model fallback."""
+        """Generate structured JSON output with conditional priority."""
         self._init_clients()
+
+        if prefer_api_key:
+            target_clients = self._api_key_clients + self._vertex_clients
+            target_labels = self._api_key_labels + self._vertex_labels
+        else:
+            target_clients = self._vertex_clients + self._api_key_clients
+            target_labels = self._vertex_labels + self._api_key_labels
 
         config = types.GenerateContentConfig(
             temperature=temperature,
             response_mime_type="application/json",
             system_instruction=system_instruction,
         )
-
         if response_schema:
             config.response_schema = response_schema
 
-        # 현재 모델 + fallback 모델 리스트
         models_to_try = [self.model_name] + [m for m in FALLBACK_MODELS if m != self.model_name]
         last_error = None
 
-        # 모든 클라이언트(API 키)를 시도
-        clients_tried = 0
-        total_clients = len(self._clients)
-
-        while clients_tried < total_clients:
-            client = self._clients[self._current_client_idx]
-            client_label = self._client_labels[self._current_client_idx]
-
+        for client, label in zip(target_clients, target_labels):
             for model in models_to_try:
                 for attempt in range(self.max_retries):
                     try:
@@ -163,12 +159,7 @@ class LLMClient:
                             contents=prompt,
                             config=config,
                         )
-
-                        if model != self.model_name:
-                            logger.info(f"✅ Fallback 모델 사용 성공: {model} ({client_label})")
-
                         text = response.text.strip()
-                        # 마크다운 코드 블록 제거 로직
                         if text.startswith("```"):
                             lines = text.split("\n")
                             if lines[0].startswith("```"):
@@ -176,49 +167,24 @@ class LLMClient:
                             if lines and lines[-1].strip() == "```":
                                 lines = lines[:-1]
                             text = "\n".join(lines)
-
                         return json.loads(text)
-
                     except Exception as e:
                         last_error = e
                         error_str = str(e).upper()
-
-                        # 429(할당량 초과) 또는 503(서버 과부하) → 다음 API 키로 전환
                         if any(code in error_str for code in ["429", "RESOURCE_EXHAUSTED", "503", "OVERLOADED"]):
-                            logger.warning(
-                                f"⚠️ 할당량 초과 ({client_label}, {model}, 시도 {attempt + 1}/{self.max_retries})"
-                            )
-
-                            # 마지막 retry면 다음 API 키로 전환
+                            logger.warning(f"⚠️ 할당량 초과 ({label}, {model}, 시도 {attempt + 1}/{self.max_retries})")
                             if attempt == self.max_retries - 1:
-                                break  # model loop 밖으로 → client rotation
-
-                            wait_time = self.base_delay * (2**attempt)
-                            logger.info(f"⏳ {wait_time}초 후 재시도...")
-                            await asyncio.sleep(wait_time)
+                                break
+                            await asyncio.sleep(self.base_delay * (2**attempt))
                             continue
-
-                        # 그 외 에러는 다음 모델로
-                        logger.warning(f"⚠️ {model} 호출 실패 ({client_label}): {e}")
+                        logger.warning(f"⚠️ {model} 호출 실패 ({label}): {e}")
                         break
-
                 else:
-                    # 모든 retry 성공 없이 끝남 → 다음 모델 시도
                     continue
-                # 429로 인해 break 된 경우 → 다음 클라이언트로
                 break
             else:
-                # 모든 모델 시도 실패 → 다음 클라이언트
-                pass
-
-            # 다음 API 키로 전환
-            has_next = self._rotate_client()
-            clients_tried += 1
-
-            if has_next and clients_tried < total_clients:
-                logger.info(f"🔄 다음 API 키로 전환 ({self._client_labels[self._current_client_idx]})")
-            else:
-                break
+                continue
+            # If we got here via 'break' inside retry/model loop without returning, it means we need next client
 
         raise last_error or RuntimeError("모든 API 키 및 모델 호출에 실패했습니다.")
 
@@ -228,29 +194,30 @@ class LLMClient:
         system_instruction: str | None = None,
         response_schema: type[BaseModel] | None = None,
         temperature: float = 0.1,
+        prefer_api_key: bool = False,
     ) -> dict[str, Any]:
-        """Generate structured JSON output from image+text parts with retry, key rotation, and model fallback."""
+        """Generate structured JSON output from images with conditional priority."""
         self._init_clients()
+
+        if prefer_api_key:
+            target_clients = self._api_key_clients + self._vertex_clients
+            target_labels = self._api_key_labels + self._vertex_labels
+        else:
+            target_clients = self._vertex_clients + self._api_key_clients
+            target_labels = self._vertex_labels + self._api_key_labels
 
         config = types.GenerateContentConfig(
             temperature=temperature,
             response_mime_type="application/json",
             system_instruction=system_instruction,
         )
-
         if response_schema:
             config.response_schema = response_schema
 
         models_to_try = [self.model_name] + [m for m in FALLBACK_MODELS if m != self.model_name]
         last_error = None
 
-        clients_tried = 0
-        total_clients = len(self._clients)
-
-        while clients_tried < total_clients:
-            client = self._clients[self._current_client_idx]
-            client_label = self._client_labels[self._current_client_idx]
-
+        for client, label in zip(target_clients, target_labels):
             for model in models_to_try:
                 for attempt in range(self.max_retries):
                     try:
@@ -259,10 +226,6 @@ class LLMClient:
                             contents=contents,
                             config=config,
                         )
-
-                        if model != self.model_name:
-                            logger.info(f"✅ Fallback 모델 사용 성공: {model} ({client_label})")
-
                         text = response.text.strip()
                         if text.startswith("```"):
                             lines = text.split("\n")
@@ -271,42 +234,23 @@ class LLMClient:
                             if lines and lines[-1].strip() == "```":
                                 lines = lines[:-1]
                             text = "\n".join(lines)
-
                         return json.loads(text)
-
                     except Exception as e:
                         last_error = e
                         error_str = str(e).upper()
-
                         if any(code in error_str for code in ["429", "RESOURCE_EXHAUSTED", "503", "OVERLOADED"]):
-                            logger.warning(
-                                f"⚠️ 할당량 초과 ({client_label}, {model}, 시도 {attempt + 1}/{self.max_retries})"
-                            )
-
+                            logger.warning(f"⚠️ 할당량 초과 ({label}, {model}, 시도 {attempt + 1}/{self.max_retries})")
                             if attempt == self.max_retries - 1:
                                 break
-
-                            wait_time = self.base_delay * (2**attempt)
-                            logger.info(f"⏳ {wait_time}초 후 재시도...")
-                            await asyncio.sleep(wait_time)
+                            await asyncio.sleep(self.base_delay * (2**attempt))
                             continue
-
-                        logger.warning(f"⚠️ {model} 호출 실패 ({client_label}): {e}")
+                        logger.warning(f"⚠️ {model} 호출 실패 ({label}): {e}")
                         break
-
                 else:
                     continue
                 break
             else:
-                pass
-
-            has_next = self._rotate_client()
-            clients_tried += 1
-
-            if has_next and clients_tried < total_clients:
-                logger.info(f"🔄 다음 API 키로 전환 ({self._client_labels[self._current_client_idx]})")
-            else:
-                break
+                continue
 
         raise last_error or RuntimeError("모든 API 키 및 모델 호출에 실패했습니다.")
 

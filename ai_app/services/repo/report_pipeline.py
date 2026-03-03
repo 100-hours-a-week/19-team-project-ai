@@ -21,7 +21,7 @@ from schemas.repo import (
     TechCoverage,
 )
 
-from services.repo.scoring import analyze_requirements, filter_tech_requirements
+from services.repo.scoring import analyze_requirements
 
 logger = logging.getLogger(__name__)
 
@@ -184,6 +184,11 @@ class ReportPipeline:
         # 2. 기술 스택 커버리지
         tech_matches = ai_data.get("tech_matches", [])
 
+        # 정량적 기술 목록 추출
+        required_techs = [tm.get("tech") for tm in tech_matches]
+        owned_techs = [tm.get("tech") for tm in tech_matches if tm.get("status") in ["충족", "부분충족"]]
+        missing_required = [tm.get("tech") for tm in tech_matches if tm.get("status") == "미충족"]
+
         total_techs = len(tech_matches)
         if total_techs > 0:
             score = 0
@@ -196,16 +201,10 @@ class ReportPipeline:
         else:
             coverage_rate = 0.0
 
-        missing_required = [tm.get("tech") for tm in tech_matches if tm.get("status") == "미충족"]
-
-        # 자격요건 + 우대사항을 합쳐서 기술 요구사항으로 분석
-        # (크롤러가 자격요건을 제대로 파싱하지 못하는 경우 대비)
-        all_requirements = job_data.get("qualifications", []) + job_data.get("preferred_qualifications", [])
-
         tech_coverage = TechCoverage(
-            required_techs=filter_tech_requirements(all_requirements),
-            preferred_techs=[],  # 이미 all_requirements에 포함됨
-            owned_techs=resume_data.get("skills", []) or resume_data.get("owned_techs", []),
+            required_techs=required_techs,
+            preferred_techs=[],  # tech_matches에 통합됨
+            owned_techs=owned_techs,
             coverage_rate=round(coverage_rate, 1),
             missing_required=missing_required,
             missing_preferred=[],
@@ -288,11 +287,38 @@ class ReportPipeline:
             ai_analysis_used=True,
         )
 
-        # 10. 확인 불가 항목 및 신뢰도
+        # 10. 확인 불가 항목 및 신뢰도 (정량적 계산)
+        unverifiable_items = ai_data.get("unverifiable_items", [])
+
+        # 정량적 신뢰도 계산 로직
+        # 1) 기본 점수 100
+        # 2) 확인 불가 항목당 -5점
+        # 3) 채팅 메시지 부재 시 -10점
+        # 4) 이력서/공고 데이터 미흡 시 각 -10점
+        base_score = 100
+        penalty = len(unverifiable_items) * 5
+
+        if not chat_messages:
+            penalty += 10
+
+        # 데이터 미흡 판단 (예: 주요 섹션 부재)
+        if not resume_data.get("projects") and not resume_data.get("work_experience"):
+            penalty += 10
+        if not job_data.get("responsibilities") and not job_data.get("qualifications"):
+            penalty += 10
+
+        calc_confidence_score = max(0, min(100, base_score - penalty))
+
+        # 신뢰도 근거 업데이트
+        calc_confidence_reason = (
+            f"분석 데이터의 풍부함과 확인 불가 항목({len(unverifiable_items)}개)을 기반으로 "
+            f"정량적으로 산출된 신뢰도입니다. (기본 100점 - 감점 {penalty}점)"
+        )
+
         reliability = Reliability(
-            unverifiable_items=ai_data.get("unverifiable_items", []),
-            confidence_score=ai_data.get("confidence_score", 0.0),
-            confidence_reason=ai_data.get("confidence_reason", ""),
+            unverifiable_items=unverifiable_items,
+            confidence_score=float(calc_confidence_score),
+            confidence_reason=calc_confidence_reason,
         )
 
         return {

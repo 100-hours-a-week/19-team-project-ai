@@ -12,6 +12,7 @@ class JobSource(str, Enum):
     SARAMIN = "saramin"
     JOBKOREA = "jobkorea"
     WANTED = "wanted"
+    GENERAL = "general"
 
 
 class JobType(str, Enum):
