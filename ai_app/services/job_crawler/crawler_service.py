@@ -7,6 +7,7 @@ from adapters.job_crawlers.base_crawler import BaseJobCrawler
 from adapters.job_crawlers.jobkorea_crawler import JobKoreaCrawler
 from adapters.job_crawlers.saramin_crawler import SaraminCrawler
 from adapters.job_crawlers.wanted_crawler import WantedCrawler
+from adapters.job_crawlers.general_crawler import GeneralCrawler
 from schemas.jobs import JobPosting, JobSource
 
 
@@ -26,6 +27,7 @@ class CrawlerService:
             JobSource.SARAMIN: SaraminCrawler(),
             JobSource.JOBKOREA: JobKoreaCrawler(),
             JobSource.WANTED: WantedCrawler(),
+            JobSource.GENERAL: GeneralCrawler(),
         }
         self._initialized = True
 
@@ -72,7 +74,8 @@ class CrawlerService:
                 return JobSource.WANTED, match.group(1)
             return JobSource.WANTED, None
 
-        return None, None
+        # 기본값: 범용 크롤러 (알려지지 않은 도메인)
+        return JobSource.GENERAL, None
 
     async def parse_url(self, url: str) -> JobPosting | None:
         """URL에서 채용공고 상세 정보 파싱"""
@@ -88,7 +91,10 @@ class CrawlerService:
             return None
 
         # source_id가 있으면 상세 조회, 없으면 URL 직접 파싱
-        if source_id:
+        # (GeneralCrawler는 항상 parse_from_url 사용)
+        if source == JobSource.GENERAL:
+            return await crawler.parse_from_url(url)
+        elif source_id:
             return await crawler.get_detail(source_id)
         else:
             return await crawler.parse_from_url(url)
