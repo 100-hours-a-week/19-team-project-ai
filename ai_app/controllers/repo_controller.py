@@ -57,7 +57,15 @@ class RepoController:
             logger.warning(f"CrawlerService 파싱 실패, LLM fallback: {e}")
 
         # 2. LLM fallback
-        result = await parse_job_from_url(request.job_url)
+        try:
+            result = await parse_job_from_url(request.job_url)
+        except Exception as e:
+            logger.error(f"LLM fallback 내부 오류: {e}")
+            return {
+                "success": False,
+                "error": f"내부 서버 오류: {e}",
+                "error_type": "internal_error",
+            }
 
         if result.get("success"):
             job_data = result.get("data", {})
@@ -70,6 +78,8 @@ class RepoController:
                 "data": job_data,
             }
 
+        # URL은 접근 가능하지만 크롤링/파싱 불가 → parse_failed
+        result["error_type"] = "parse_failed"
         return result
 
     async def generate_report(

@@ -79,6 +79,17 @@ async def parse_job_post(request: JobParseRequest):
     result = await controller.parse_job(request)
 
     if not result.get("success"):
+        error_type = result.get("error_type", "internal_error")
+        if error_type == "parse_failed":
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": ResponseCode.BAD_REQUEST.value,
+                    "data": result.get(
+                        "error", "해당 URL의 콘텐츠를 크롤링할 수 없습니다. 지원되지 않는 페이지 구조입니다."
+                    ),
+                },
+            )
         raise HTTPException(
             status_code=500,
             detail={"code": ResponseCode.INTERNAL_SERVER_ERROR.value, "data": result.get("error")},
