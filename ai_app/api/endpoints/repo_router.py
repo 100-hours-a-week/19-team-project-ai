@@ -85,7 +85,9 @@ async def parse_job_post(request: JobParseRequest):
                 status_code=422,
                 detail={
                     "code": ResponseCode.BAD_REQUEST.value,
-                    "data": result.get("error", "해당 URL의 콘텐츠를 크롤링할 수 없습니다. 지원되지 않는 페이지 구조입니다."),
+                    "data": result.get(
+                        "error", "해당 URL의 콘텐츠를 크롤링할 수 없습니다. 지원되지 않는 페이지 구조입니다."
+                    ),
                 },
             )
         raise HTTPException(
