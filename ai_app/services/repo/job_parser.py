@@ -80,6 +80,7 @@ JSON 형식으로 응답하세요."""
             system_instruction=JOB_PARSING_SYSTEM_PROMPT,
             response_schema=ExtractedJobPosting,
             temperature=0.1,
+            prefer_api_key=True,
         )
 
         logger.info(
