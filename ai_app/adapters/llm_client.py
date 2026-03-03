@@ -59,8 +59,10 @@ class LLMClient:
         # 기본 순서: Vertex 우선
         self._clients = self._vertex_clients + self._api_key_clients
         self._client_labels = self._vertex_labels + self._api_key_labels
-        
-        logger.info(f"LLM 클라이언트 초기화 완료 (Vertex {len(self._vertex_clients)}개, APIKey {len(self._api_key_clients)}개)")
+
+        logger.info(
+            f"LLM 클라이언트 초기화 완료 (Vertex {len(self._vertex_clients)}개, APIKey {len(self._api_key_clients)}개)"
+        )
         self._initialized = True
 
     def _load_api_keys(self) -> list[str]:
@@ -90,7 +92,7 @@ class LLMClient:
     ) -> str:
         """Generate text completion."""
         self._init_clients()
-        
+
         # 호출 전용으로 클라이언트 리스트 재구성 (정적 변수 오염 방지)
         if prefer_api_key:
             target_clients = self._api_key_clients + self._vertex_clients
@@ -116,7 +118,7 @@ class LLMClient:
             except Exception as e:
                 logger.warning(f"⚠️ {label} 호출 실패: {e}")
                 continue
-                
+
         raise RuntimeError("모든 클라이언트 호출에 실패했습니다.")
 
     async def generate_json(
@@ -183,7 +185,7 @@ class LLMClient:
             else:
                 continue
             # If we got here via 'break' inside retry/model loop without returning, it means we need next client
-        
+
         raise last_error or RuntimeError("모든 API 키 및 모델 호출에 실패했습니다.")
 
     async def generate_json_with_images(
@@ -249,7 +251,7 @@ class LLMClient:
                 break
             else:
                 continue
-        
+
         raise last_error or RuntimeError("모든 API 키 및 모델 호출에 실패했습니다.")
 
 

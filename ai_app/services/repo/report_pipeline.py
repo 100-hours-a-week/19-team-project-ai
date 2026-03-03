@@ -21,7 +21,7 @@ from schemas.repo import (
     TechCoverage,
 )
 
-from services.repo.scoring import analyze_requirements, filter_tech_requirements
+from services.repo.scoring import analyze_requirements
 
 logger = logging.getLogger(__name__)
 

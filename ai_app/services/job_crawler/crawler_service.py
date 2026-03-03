@@ -4,10 +4,10 @@ import re
 from urllib.parse import urlparse
 
 from adapters.job_crawlers.base_crawler import BaseJobCrawler
+from adapters.job_crawlers.general_crawler import GeneralCrawler
 from adapters.job_crawlers.jobkorea_crawler import JobKoreaCrawler
 from adapters.job_crawlers.saramin_crawler import SaraminCrawler
 from adapters.job_crawlers.wanted_crawler import WantedCrawler
-from adapters.job_crawlers.general_crawler import GeneralCrawler
 from schemas.jobs import JobPosting, JobSource
 
 

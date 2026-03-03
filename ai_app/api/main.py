@@ -1,9 +1,7 @@
 import os
-import json
-import logging
-import asyncio
-from dotenv import load_dotenv
+
 from api.endpoints import agent_router, health_router, reco_router, repo_router, resumes_router
+from dotenv import load_dotenv
 from fastapi import FastAPI
 from middleware.otel_lgtm_metrics import install_lgtm_metrics
 from opentelemetry import trace
