@@ -54,7 +54,12 @@ class RecoController:
         logger = logging.getLogger(__name__)
 
         # 0) 유저 존재 여부를 먼저 확인 — 없는 유저면 즉시 404
-        user_exists = await self.backend_client.user_exists(user_id)
+        try:
+            user_exists = await self.backend_client.user_exists(user_id)
+        except Exception as e:
+            logger.warning(f"유저 존재 여부 확인 중 오류 (user_id={user_id}): {e}")
+            user_exists = True  # 에러 시 존재한다고 가정하고 추천 진행
+
         if not user_exists:
             raise HTTPException(
                 status_code=404,
