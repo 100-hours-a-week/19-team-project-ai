@@ -223,8 +223,12 @@ class BackendAPIClient:
 
     async def user_exists(self, user_id: int) -> bool:
         """유저 존재 여부 확인"""
-        profile = await self.get_user_profile(user_id)
-        return profile is not None
+        try:
+            profile = await self.get_user_profile(user_id)
+            return profile is not None
+        except Exception as e:
+            logger.warning(f"유저 존재 여부 확인 실패 ({user_id}): {e}")
+            return True  # 에러 시 존재한다고 가정 (추천 로직 진행)
 
 
 @lru_cache(maxsize=1)

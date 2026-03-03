@@ -79,12 +79,36 @@ async def parse_job_post(request: JobParseRequest):
     result = await controller.parse_job(request)
 
     if not result.get("success"):
+        error_type = result.get("error_type", "internal_error")
+        if error_type == "parse_failed":
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": ResponseCode.BAD_REQUEST.value,
+                    "data": result.get(
+                        "error", "해당 URL의 콘텐츠를 크롤링할 수 없습니다. 지원되지 않는 페이지 구조입니다."
+                    ),
+                },
+            )
         raise HTTPException(
             status_code=500,
             detail={"code": ResponseCode.INTERNAL_SERVER_ERROR.value, "data": result.get("error")},
         )
 
     data = result.get("data", {})
+
+    # 최종 파싱 결과 검증: 필수 필드가 모두 비어있으면 파싱 실패 처리
+    _title = data.get("title") or ""
+    _responsibilities = data.get("responsibilities", [])
+    _qualifications = data.get("qualifications", [])
+    if not _title and not _responsibilities and not _qualifications:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": ResponseCode.BAD_REQUEST.value,
+                "data": "채용공고 파싱에 실패했습니다. 페이지 구조를 인식할 수 없습니다.",
+            },
+        )
 
     # company 필드 처리: CrawlerService는 dict(name, industry, location), LLM은 str
     company_raw = data.get("company")
