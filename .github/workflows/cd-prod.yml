@@ -110,8 +110,13 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p ~/.ssh
-          printf '%s\n' "$EC2_SSH_KEY" > ~/.ssh/id_rsa
+          KEY_CONTENT="$EC2_SSH_KEY"
+          if echo "$KEY_CONTENT" | grep -q '\\n'; then
+            KEY_CONTENT=$(printf '%b' "$KEY_CONTENT")
+          fi
+          printf '%s\n' "$KEY_CONTENT" | tr -d '\r' > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
+          ssh-keygen -y -f ~/.ssh/id_rsa >/dev/null 2>&1 || { echo "Invalid SSH private key format"; exit 1; }
           ssh-keyscan -p "$EC2_SSH_PORT" -H "$EC2_HOST" >> ~/.ssh/known_hosts
 
       - name: Render compose file on runner
