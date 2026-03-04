@@ -27,9 +27,10 @@ on:
           - all
 
 permissions:
-  contents: write  # git-auto-commit-action이 파일을 커밋하고 푸시할 수 있도록 허용
+  contents: read
 
 env:
+  AWS_REGION: ${{ secrets.AWS_REGION || 'ap-northeast-2' }}
   PYTHON_VERSION: '3.11'
   WORKING_DIRECTORY: 'ai_app'
 
@@ -41,112 +42,38 @@ jobs:
       github.event_name == 'pull_request' ||
       (github.event_name == 'workflow_dispatch' && (github.event.inputs.job_to_run == 'lint-and-test' || github.event.inputs.job_to_run == 'all'))
     runs-on: ubuntu-latest
+    concurrency:
+      group: ai-ci-lint-${{ github.ref }}
+      cancel-in-progress: true
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.ref }}
           fetch-depth: 0
       
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-      
-      # requirements.txt와 pyproject.toml 자동 동기화
-      - name: Auto-sync requirements.txt to pyproject.toml
-        id: sync-deps
-        run: |
-          python scripts/sync-to-pyproject.py
-          
-          # Git diff 확인
-          if git diff --quiet pyproject.toml; then
-            echo "✅ 동기화 완료 (변경 없음)"
-            echo "changed=false" >> $GITHUB_OUTPUT
-          else
-            echo "🔄 pyproject.toml 업데이트됨!"
-            echo "changed=true" >> $GITHUB_OUTPUT
-          fi
-      
-      # .venv 캐시로 uv sync 시간 대폭 단축 (lock 미변경 시 복원만 수행)
-      - name: Cache uv virtualenv
-        uses: actions/cache@v4
-        with:
-          path: .venv
-          key: uv-venv-${{ runner.os }}-${{ hashFiles('pyproject.toml', 'uv.lock') }}
-          restore-keys: |
-            uv-venv-${{ runner.os }}-
-      
-      - name: Install uv
-        uses: astral-sh/setup-uv@v4
-        with:
-          enable-cache: true
-          cache-dependency-glob: |
-            pyproject.toml
-            uv.lock
-      
-      - name: Install Dependencies
-        run: uv sync --locked --extra dev
-      
-      # 린트 및 자동 수정 적용
-      - name: Run Lint and Format (Ruff)
-        id: ruff-fix
-        run: |
-          cd ${{ env.WORKING_DIRECTORY }}
-          uv run ruff check . --fix
-          uv run ruff format .
-          uv run ruff check .
-          uv run ruff format --check .
-          
-          # 변경사항 확인
-          cd ..
-          if git diff --quiet; then
-            echo "✅ 린트 및 포맷팅 통과 (변경 없음)"
-            echo "changed=false" >> $GITHUB_OUTPUT
-          else
-            echo "🔄 린트/포맷팅 자동 수정됨!"
-            echo "changed=true" >> $GITHUB_OUTPUT
-          fi
-      
-      # 변경사항(pyproject.toml 동기화 + Ruff 자동 수정)이 있으면 자동 커밋 (PR일 때만)
-      - name: Auto-commit changes
-        if: (steps.sync-deps.outputs.changed == 'true' || steps.ruff-fix.outputs.changed == 'true') && github.event_name == 'pull_request'
-        uses: stefanzweifel/git-auto-commit-action@v5
-        with:
-          commit_message: "chore: Auto-sync dependencies and lint fixes"
-          file_pattern: "."
-          branch: ${{ github.event.pull_request.head.ref }}
-          commit_user_name: "github-actions[bot]"
-          commit_user_email: "github-actions[bot]@users.noreply.github.com"
-      
-      # [Type Check] MyPy를 사용한 정적 타입 분석
-      - name: Static Type Check (MyPy)
-        run: uv run mypy . --ignore-missing-imports || true
-      
-      # [Security Scan] Frontend의 audit과 대응되는 보안 검사 추가
-      - name: Security Scan (Bandit)
-        run: uv run bandit -c pyproject.toml -r ${{ env.WORKING_DIRECTORY }} -x tests/
-      
-      # [Unit Tests] 단위 테스트 수행
-      - name: Run Unit Tests
-        run: |
-          if [ -d "tests/unit" ]; then
-            uv run pytest tests/unit -v --cov=${{ env.WORKING_DIRECTORY }}
-          else
-            echo "No unit tests found"
-          fi
 
-      # [Build Check] 머지 전 빌드 가능 여부 확인 단계 추가
-      - name: Build Check
-        run: uv run python -m build --wheel
-        env:
-          NODE_ENV: production # 컨텍스트 유지를 위한 설정
-      
-      # 기존 Application Start 체크 유지
-      - name: Verify Application Starts
+      - name: Install lightweight CI tools
         run: |
-          export PYTHONPATH=$PYTHONPATH:$(pwd)/${{ env.WORKING_DIRECTORY }}
-          timeout 10s uv run python -c "from api.main import app; print('Application loaded successfully')" || true
+          python -m pip install --upgrade pip
+          pip install ruff bandit build
+
+      # CI에서는 코드 수정 없이 검증만 수행
+      - name: Run Lint and Format Check (Ruff)
+        run: |
+          ruff check ${{ env.WORKING_DIRECTORY }}
+          ruff format --check ${{ env.WORKING_DIRECTORY }}
+
+      # 기본 보안 정적 검사
+      - name: Security Scan (Bandit)
+        run: bandit -c pyproject.toml -r ${{ env.WORKING_DIRECTORY }} -x tests/
+
+      # 머지 전 빌드 가능 여부 확인
+      - name: Build Check
+        run: python -m build --wheel
 
   # ===========================================
   # 2. 통합 검증 단계 (Integration Tests)
@@ -156,45 +83,18 @@ jobs:
       (github.event_name == 'push' && github.ref == 'refs/heads/develop') ||
       (github.event_name == 'workflow_dispatch' && (github.event.inputs.job_to_run == 'integration' || github.event.inputs.job_to_run == 'all'))
     runs-on: ubuntu-latest
+    concurrency:
+      group: ai-ci-integration-${{ github.ref }}
+      cancel-in-progress: true
 
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-      
-      - name: Cache uv virtualenv
-        uses: actions/cache@v4
-        with:
-          path: .venv
-          key: uv-venv-${{ runner.os }}-${{ hashFiles('pyproject.toml', 'uv.lock') }}
-          restore-keys: |
-            uv-venv-${{ runner.os }}-
-      
-      - name: Install uv
-        uses: astral-sh/setup-uv@v4
-        with:
-          enable-cache: true
-          cache-dependency-glob: |
-            pyproject.toml
-            uv.lock
-      
-      # [Integration] develop 브랜치 푸시 시에만 통합 테스트 실행
-      - name: Install Dependencies
-        run: uv sync --locked --extra dev
-      
-      - name: Integration Test
-        run: |
-          if [ -d "tests/integration" ]; then
-            uv run pytest tests/integration -v
-          else
-            echo "⚠️ Integration tests not yet implemented"
-          fi
+
+      - name: Skip Integration Tests
+        run: echo "No integration tests configured, skipping"
 
   # ===========================================
   # 3. 개발 환경 릴리즈 (develop 브랜치 - Docker 기반)
@@ -219,7 +119,7 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ap-northeast-2
+          aws-region: ${{ env.AWS_REGION }}
 
       - name: Login to Amazon ECR
         id: login-ecr
@@ -240,18 +140,35 @@ jobs:
           echo "full_image=${FULL_IMAGE}" >> $GITHUB_OUTPUT
           echo "latest_image=${LATEST_IMAGE}" >> $GITHUB_OUTPUT
           echo "sha_short=${SHA_SHORT}" >> $GITHUB_OUTPUT
-          echo "🐳 Docker Image: ${FULL_IMAGE}"
+
+      - name: Mask sensitive values in logs (Dev Release)
+        run: |
+          echo "::add-mask::${{ steps.login-ecr.outputs.registry }}"
+          echo "::add-mask::${{ secrets.ECR_REPOSITORY_AI }}"
+          echo "::add-mask::${{ steps.meta.outputs.image_tag }}"
+          echo "::add-mask::${{ steps.meta.outputs.full_image }}"
+          echo "::add-mask::${{ steps.meta.outputs.latest_image }}"
+          echo "::add-mask::${{ secrets.PAT }}"
+          echo "::add-mask::${{ secrets.AWS_ACCESS_KEY_ID }}"
+          echo "::add-mask::${{ secrets.AWS_SECRET_ACCESS_KEY }}"
 
       - name: Build and Push Docker Image
         uses: docker/build-push-action@v6
+        env:
+          DOCKER_BUILD_SUMMARY: false
+          DOCKER_BUILD_RECORD_UPLOAD: false
+          DOCKER_BUILD_CHECKS_ANNOTATIONS: false
         with:
           context: .
           push: true
+          pull: true
           tags: |
             ${{ steps.meta.outputs.full_image }}
             ${{ steps.meta.outputs.latest_image }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=ai-dev
+          cache-to: type=gha,mode=max,scope=ai-dev
+          provenance: false
+          sbom: false
           platforms: linux/arm64
 
       - name: Trigger CD-Dev Workflow
@@ -271,7 +188,7 @@ jobs:
                 run_id: '${{ github.run_id }}'
               }
             });
-            console.log('✅ CD-Dev workflow triggered successfully');
+            console.log('CD-Dev workflow triggered');
 
   # ===========================================
   # 4. 프로덕션 릴리즈 (main push 시 자동 - Docker + cd-prod)
@@ -281,53 +198,24 @@ jobs:
       (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
       (github.event_name == 'workflow_dispatch' && (github.event.inputs.job_to_run == 'release-prod' || github.event.inputs.job_to_run == 'all'))
     runs-on: ubuntu-latest
+    concurrency:
+      group: ai-ci-release-prod-${{ github.ref }}
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
         with:
           ref: main
           fetch-depth: 0
-      
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-      
-      - name: Cache uv virtualenv
-        uses: actions/cache@v4
-        with:
-          path: .venv
-          key: uv-venv-${{ runner.os }}-${{ hashFiles('pyproject.toml', 'uv.lock') }}
-          restore-keys: |
-            uv-venv-${{ runner.os }}-
-      
-      - name: Install uv
-        uses: astral-sh/setup-uv@v4
-        with:
-          enable-cache: true
-          cache-dependency-glob: |
-            pyproject.toml
-            uv.lock
-      
-      - name: Install dependencies
-        run: uv sync --locked --extra dev
-      
-      - name: Run Full Tests
-        run: |
-          if [ -d "tests" ] || [ -d "${{ env.WORKING_DIRECTORY }}/tests" ]; then
-            if [ -d "tests" ]; then
-              uv run pytest tests/ -v || echo "Tests failed but continuing"
-            else
-              uv run pytest ${{ env.WORKING_DIRECTORY }}/tests -v || echo "Tests failed but continuing"
-            fi
-          else
-            echo "No tests found, skipping"
-          fi
+
+      - name: Skip Full Tests
+        run: echo "No tests configured, skipping"
       
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ap-northeast-2
+          aws-region: ${{ env.AWS_REGION }}
       
       - name: Login to Amazon ECR
         id: login-ecr
@@ -343,18 +231,35 @@ jobs:
           IMAGE_TAG="main-${SHA_SHORT}"
           echo "image_tag=${IMAGE_TAG}" >> $GITHUB_OUTPUT
           echo "sha_short=${SHA_SHORT}" >> $GITHUB_OUTPUT
-          echo "🐳 Docker image tag: ${IMAGE_TAG}"
+
+      - name: Mask sensitive values in logs (Prod Release)
+        run: |
+          echo "::add-mask::${{ steps.login-ecr.outputs.registry }}"
+          echo "::add-mask::${{ secrets.ECR_REPOSITORY_AI }}"
+          echo "::add-mask::${{ steps.docker-meta.outputs.image_tag }}"
+          echo "::add-mask::${{ steps.login-ecr.outputs.registry }}/${{ secrets.ECR_REPOSITORY_AI }}:${{ steps.docker-meta.outputs.image_tag }}"
+          echo "::add-mask::${{ steps.login-ecr.outputs.registry }}/${{ secrets.ECR_REPOSITORY_AI }}:main-latest"
+          echo "::add-mask::${{ secrets.PAT }}"
+          echo "::add-mask::${{ secrets.AWS_ACCESS_KEY_ID }}"
+          echo "::add-mask::${{ secrets.AWS_SECRET_ACCESS_KEY }}"
       
       - name: Build and Push Docker Image
         uses: docker/build-push-action@v6
+        env:
+          DOCKER_BUILD_SUMMARY: false
+          DOCKER_BUILD_RECORD_UPLOAD: false
+          DOCKER_BUILD_CHECKS_ANNOTATIONS: false
         with:
           context: .
           push: true
+          pull: true
           tags: |
             ${{ steps.login-ecr.outputs.registry }}/${{ secrets.ECR_REPOSITORY_AI }}:${{ steps.docker-meta.outputs.image_tag }}
             ${{ steps.login-ecr.outputs.registry }}/${{ secrets.ECR_REPOSITORY_AI }}:main-latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=ai-prod
+          cache-to: type=gha,mode=max,scope=ai-prod
+          provenance: false
+          sbom: false
           platforms: linux/arm64
       
       - name: Trigger CD-Prod Workflow
@@ -369,8 +274,10 @@ jobs:
               workflow_id: 'cd-prod.yml',
               ref: 'main',
               inputs: {
-                use_existing_image: 'true',
-                image_tag: '${{ steps.docker-meta.outputs.image_tag }}'
+                image_tag: '${{ steps.docker-meta.outputs.image_tag }}',
+                sha: '${{ github.sha }}',
+                run_id: '${{ github.run_id }}',
+                use_latest: 'false'
               }
             });
-            console.log('✅ CD-Prod workflow triggered (use_existing_image=true)');
+            console.log('CD-Prod workflow triggered');

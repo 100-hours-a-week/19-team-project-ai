@@ -1,337 +1,249 @@
-name: Re-Fit AI CD (V2 - Docker)
+name: Re-Fit AI CD (Prod)
 
 on:
   workflow_dispatch:
     inputs:
-      sha:
-        description: 'Commit SHA (빈칸이면 main 브랜치 HEAD 사용)'
-        required: false
-        type: string
       image_tag:
-        description: 'Docker image tag (e.g., main-abc1234, main-latest). use_existing_image=true이고 빈칸이면 main-latest 사용'
+        description: 'Docker image tag (e.g., main-abc1234)'
         required: false
         type: string
-      use_existing_image:
-        description: 'true: CI에서 이미 푸시된 이미지 사용, false: 이 워크플로우에서 빌드'
+      sha:
+        description: 'Commit SHA'
+        required: false
+        type: string
+      run_id:
+        description: 'CI workflow run ID'
+        required: false
+        type: string
+      use_latest:
+        description: 'image_tag를 입력하지 않으면 main-latest 태그 사용'
         required: true
         type: boolean
-        default: false
+        default: true
 
 permissions:
   contents: read
   actions: read
 
 env:
-  PYTHON_VERSION: '3.11'
+  AWS_REGION: ${{ secrets.AWS_REGION || 'ap-northeast-2' }}
+  PROD_COMPOSE_FILE: docker-compose.yml
 
 jobs:
-  deploy:
-    name: Deploy AI to Prod (V2 - Docker)
+  deploy-prod:
+    name: Deploy AI to Prod
     runs-on: ubuntu-latest
     timeout-minutes: 30
     concurrency:
-      group: deploy-ai-prod-v2
+      group: deploy-ai-prod
       cancel-in-progress: false
     environment: production
 
     steps:
-      - name: Checkout
-        if: inputs.use_existing_image == false
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.sha || 'main' }}
+      - name: Preflight - validate required secrets
+        env:
+          ECR_REPOSITORY_AI: ${{ secrets.ECR_REPOSITORY_AI }}
+          EC2_HOST_PROD: ${{ secrets.EC2_HOST_PROD }}
+          EC2_USERNAME_PROD: ${{ secrets.EC2_USERNAME_PROD }}
+          EC2_SSH_KEY_PROD: ${{ secrets.EC2_SSH_KEY_PROD }}
+          COMPOSE_DIR_PROD: ${{ secrets.COMPOSE_DIR_PROD }}
+          ENV_FILE_PROD: ${{ secrets.ENV_FILE_PROD }}
+        run: |
+          set -euo pipefail
+          for v in ECR_REPOSITORY_AI EC2_HOST_PROD EC2_USERNAME_PROD EC2_SSH_KEY_PROD COMPOSE_DIR_PROD ENV_FILE_PROD; do
+            if [ -z "${!v:-}" ]; then
+              echo "Missing required secret: $v"
+              exit 1
+            fi
+          done
+          [ -f "${{ env.PROD_COMPOSE_FILE }}" ] || { echo "Missing compose file: ${{ env.PROD_COMPOSE_FILE }}"; exit 1; }
+
+      - name: Set deployment variables
+        id: deploy-vars
+        run: |
+          set -euo pipefail
+          USE_LATEST="${{ inputs.use_latest }}"
+
+          if [ -n "${{ inputs.image_tag }}" ]; then
+            IMAGE_TAG="${{ inputs.image_tag }}"
+          elif [ "$USE_LATEST" = "true" ]; then
+            IMAGE_TAG="main-latest"
+          else
+            echo "image_tag is empty and use_latest is false."
+            exit 1
+          fi
+
+          SHA="${{ inputs.sha }}"
+          SHA_SHORT="${SHA:0:7}"
+
+          echo "image_tag=${IMAGE_TAG}" >> "$GITHUB_OUTPUT"
+          echo "sha=${SHA}" >> "$GITHUB_OUTPUT"
+          echo "sha_short=${SHA_SHORT}" >> "$GITHUB_OUTPUT"
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ap-northeast-2
+          aws-region: ${{ env.AWS_REGION }}
 
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Set Deployment Variables
-        id: deploy-vars
+      - name: Verify image exists in ECR
         run: |
-          if [ "${{ inputs.use_existing_image }}" == "true" ]; then
-            if [ -n "${{ inputs.image_tag }}" ]; then
-              IMAGE_TAG="${{ inputs.image_tag }}"
-              echo "📦 Using specified image tag: ${IMAGE_TAG}"
-            else
-              IMAGE_TAG="main-latest"
-              echo "📦 Using main-latest (no image_tag provided)"
-            fi
-            SHA_SHORT=$(echo "${IMAGE_TAG}" | sed -n 's/^main-\([a-f0-9]\{7\}\)$/\1/p')
-            [ -z "${SHA_SHORT}" ] && SHA_SHORT="latest"
-            echo "image_tag=${IMAGE_TAG}" >> $GITHUB_OUTPUT
-            echo "sha=${IMAGE_TAG}" >> $GITHUB_OUTPUT
-            echo "sha_short=${SHA_SHORT}" >> $GITHUB_OUTPUT
-          else
-            SHA="${{ inputs.sha || github.sha }}"
-            SHA_SHORT="${SHA:0:7}"
-            if [ -n "${{ inputs.image_tag }}" ]; then
-              IMAGE_TAG="${{ inputs.image_tag }}"
-            else
-              IMAGE_TAG="main-${SHA_SHORT}"
-            fi
-            echo "image_tag=${IMAGE_TAG}" >> $GITHUB_OUTPUT
-            echo "sha=${SHA}" >> $GITHUB_OUTPUT
-            echo "sha_short=${SHA_SHORT}" >> $GITHUB_OUTPUT
-            echo "📦 Using image: ${IMAGE_TAG}"
-          fi
-
-      - name: Set up Docker Buildx
-        if: inputs.use_existing_image == false
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build and Push Docker Image
-        if: inputs.use_existing_image == false
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          push: true
-          tags: |
-            ${{ steps.login-ecr.outputs.registry }}/${{ secrets.ECR_REPOSITORY_AI }}:${{ steps.deploy-vars.outputs.image_tag }}
-            ${{ steps.login-ecr.outputs.registry }}/${{ secrets.ECR_REPOSITORY_AI }}:main-latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          platforms: linux/arm64
-
-      - name: Verify Image Exists in ECR
-        if: inputs.use_existing_image == true
-        run: |
+          set -euo pipefail
           IMAGE_TAG="${{ steps.deploy-vars.outputs.image_tag }}"
           REPO="${{ secrets.ECR_REPOSITORY_AI }}"
 
           aws ecr describe-images \
-            --repository-name "${REPO}" \
-            --image-ids imageTag="${IMAGE_TAG}" \
-            --region ap-northeast-2 > /dev/null 2>&1
+            --repository-name "$REPO" \
+            --image-ids imageTag="$IMAGE_TAG" \
+            --region "${{ env.AWS_REGION }}" > /dev/null
 
-          if [ $? -eq 0 ]; then
-            echo "✅ Image found: ${REPO}:${IMAGE_TAG}"
-          else
-            echo "❌ Image not found: ${REPO}:${IMAGE_TAG}"
-            exit 1
-          fi
+      - name: Mask sensitive values in logs
+        run: |
+          echo "::add-mask::${{ steps.login-ecr.outputs.registry }}"
+          echo "::add-mask::${{ secrets.ECR_REPOSITORY_AI }}"
+          echo "::add-mask::${{ steps.deploy-vars.outputs.image_tag }}"
+          echo "::add-mask::${{ secrets.EC2_HOST_PROD }}"
+          echo "::add-mask::${{ secrets.EC2_USERNAME_PROD }}"
+          echo "::add-mask::${{ secrets.EC2_SSH_PORT_PROD }}"
+          echo "::add-mask::${{ secrets.COMPOSE_DIR_PROD }}"
+          echo "::add-mask::${{ secrets.AWS_ACCESS_KEY_ID }}"
+          echo "::add-mask::${{ secrets.AWS_SECRET_ACCESS_KEY }}"
 
-      - name: Deploy to Prod EC2 via SSM (V2 - Docker)
-        id: deploy
-        env:
-          SERVER_BASE_PATH: ${{ secrets.SERVER_BASE_PATH_V2 }}
-          EC2_INSTANCE_ID: ${{ secrets.EC2_INSTANCE_ID_V2 }}
-          HEALTH_CHECK_URL: ${{ secrets.HEALTH_CHECK_URL_V2 }}
-          PROD_COMPOSE_DIR: ${{ secrets.PROD_COMPOSE_DIR_V2 }}
-          AI_ENV_FILE_PROD: ${{ secrets.AI_ENV_FILE_PROD_V2 }}
+      - name: Prepare compose content
+        id: compose-content
         run: |
           set -euo pipefail
+          COMPOSE_B64="$(base64 -w 0 "${{ env.PROD_COMPOSE_FILE }}")"
+          echo "compose_b64=${COMPOSE_B64}" >> "$GITHUB_OUTPUT"
 
-          if [ -z "$HEALTH_CHECK_URL" ]; then
-            AI_HEALTH_URL=""
-          else
-            AI_HEALTH_URL="${HEALTH_CHECK_URL%/health}/api/ai/health"
-          fi
-          COMPOSE_DIR="${PROD_COMPOSE_DIR:-${SERVER_BASE_PATH}/docker}"
-          ECR_REGISTRY="${{ steps.login-ecr.outputs.registry }}"
-          ECR_REPO="${{ secrets.ECR_REPOSITORY_AI }}"
-          IMAGE_TAG="${{ steps.deploy-vars.outputs.image_tag }}"
-          FULL_IMAGE="${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG}"
+      - name: Deploy to Prod Server via SSH
+        uses: appleboy/ssh-action@v1
+        env:
+          ENV_FILE_PROD: ${{ secrets.ENV_FILE_PROD }}
+          COMPOSE_B64: ${{ steps.compose-content.outputs.compose_b64 }}
+          COMPOSE_DIR: ${{ secrets.COMPOSE_DIR_PROD }}
+          IMAGE_TAG: ${{ steps.deploy-vars.outputs.image_tag }}
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY_AI: ${{ secrets.ECR_REPOSITORY_AI }}
+          AWS_REGION: ${{ env.AWS_REGION }}
+        with:
+          host: ${{ secrets.EC2_HOST_PROD }}
+          username: ${{ secrets.EC2_USERNAME_PROD }}
+          key: ${{ secrets.EC2_SSH_KEY_PROD }}
+          port: ${{ secrets.EC2_SSH_PORT_PROD || '22' }}
+          envs: ENV_FILE_PROD,COMPOSE_B64,COMPOSE_DIR,IMAGE_TAG,ECR_REGISTRY,ECR_REPOSITORY_AI,AWS_REGION
+          script: |
+            set -euo pipefail
+            export PATH="/usr/local/bin:/usr/bin:/bin:$PATH"
 
-          DEPLOY_SCRIPT=$(cat <<'SCRIPT_END'
-          set -euo pipefail
-          export PATH="/usr/local/bin:/usr/bin:/bin:$PATH"
-          COMPOSE_DIR="$1"
-          FULL_IMAGE="$2"
-          IMAGE_TAG="$3"
-          HEALTH_CHECK_URL="$4"
-          AI_ENV_FILE="$5"
+            # 배포 전 필수 구성요소 점검
+            [ -d "$COMPOSE_DIR" ] || { echo "Compose directory not found: $COMPOSE_DIR"; exit 1; }
+            command -v docker >/dev/null 2>&1 || { echo "docker not found"; exit 1; }
+            docker compose version >/dev/null 2>&1 || { echo "docker compose not found"; exit 1; }
+            command -v aws >/dev/null 2>&1 || { echo "aws cli not found"; exit 1; }
 
-          echo "============================================"
-          echo "Re-Fit AI 프로덕션 배포 (V2-Docker): $(date)"
-          echo "============================================"
+            cd "$COMPOSE_DIR"
+            printf '%s' "$COMPOSE_B64" | base64 -d > docker-compose.yml
+            printf '%s\n' "$ENV_FILE_PROD" > .env.ai
+            chmod 644 docker-compose.yml .env.ai
 
-          if [ ! -d "$COMPOSE_DIR" ]; then
-            echo "⚠️ Compose directory not found, creating: $COMPOSE_DIR"
-            sudo mkdir -p "$COMPOSE_DIR"
-            sudo chown -R ubuntu:ubuntu "$COMPOSE_DIR"
-          fi
+            aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "$ECR_REGISTRY" >/dev/null 2>&1
 
-          if [ ! -f "$COMPOSE_DIR/docker-compose.yml" ]; then
-            echo "⚠️ docker-compose.yml not found, creating minimal config"
-            echo "services:
-          ai:
-            image: ${FULL_IMAGE}
-            env_file: .env.ai
-            ports:
-              - \"8000:8000\"
-            restart: unless-stopped" > "$COMPOSE_DIR/docker-compose.yml"
-            chown ubuntu:ubuntu "$COMPOSE_DIR/docker-compose.yml"
-          fi
-
-          if [ ! -f "$COMPOSE_DIR/.env" ]; then
-            echo "AI_TAG=${IMAGE_TAG}" > "$COMPOSE_DIR/.env"
-            chown ubuntu:ubuntu "$COMPOSE_DIR/.env"
-          fi
-
-          echo "🐳 Image: ${FULL_IMAGE}"
-          echo "📁 Compose dir: ${COMPOSE_DIR}"
-
-          aws ecr get-login-password --region ap-northeast-2 | \
-            docker login --username AWS --password-stdin "$(echo ${FULL_IMAGE} | cut -d/ -f1)"
-
-          cd "$COMPOSE_DIR"
-
-          if [ -n "$AI_ENV_FILE" ]; then
-            echo "$AI_ENV_FILE" > .env.ai
-            chmod 644 .env.ai
-            echo "🔐 .env.ai 주입 완료"
-          fi
-
-          if grep -q '^AI_TAG=' .env 2>/dev/null; then
-            sed -i "s|^AI_TAG=.*|AI_TAG=${IMAGE_TAG}|" .env
-          else
-            echo "AI_TAG=${IMAGE_TAG}" >> .env
-          fi
-
-          echo "📥 Pulling new image..."
-          docker compose pull ai || docker compose pull 2>/dev/null || true
-
-          echo "🔄 Restarting ai service..."
-          docker compose up -d ai || docker compose up -d 2>/dev/null || true
-
-          # 사용하지 않는 이미지 정리 (dangling + 미사용 태그 이미지로 디스크/메모리 확보)
-          docker image prune -f 2>/dev/null || true
-          docker image prune -a -f 2>/dev/null || true
-          echo "서비스 초기화 대기 (30초)..."
-          sleep 30
-
-          systemctl is-active --quiet caddy && sudo systemctl reload caddy 2>/dev/null || true
-          sleep 2
-
-          if [ -z "$HEALTH_CHECK_URL" ]; then
-            echo "⚠️ HEALTH_CHECK_URL이 비어 있어 헬스체크를 건너뜁니다."
-            exit 0
-          fi
-
-          for i in {1..15}; do
-            HTTP_STATUS=$(timeout 10 curl -s -o /dev/null -w "%{http_code}" "$HEALTH_CHECK_URL" 2>/dev/null || echo "000")
-            if [ "$HTTP_STATUS" = "200" ]; then
-              echo "✅ 헬스체크 성공!"
-              exit 0
+            # .env 키를 안전하게 갱신(없으면 추가)
+            if grep -q '^ECR_REGISTRY=' .env 2>/dev/null; then
+              sed -i "s|^ECR_REGISTRY=.*|ECR_REGISTRY=${ECR_REGISTRY}|" .env
+            else
+              echo "ECR_REGISTRY=${ECR_REGISTRY}" >> .env
             fi
-            echo "⚠️ 시도 $i/15: HTTP $HTTP_STATUS"
-            [ $i -lt 15 ] && sleep 5
-          done
 
-          echo "❌ 헬스체크 실패"
-          exit 1
-          SCRIPT_END
-          )
-
-          DEPLOY_SCRIPT_ENCODED=$(echo "$DEPLOY_SCRIPT" | base64 -w 0)
-          SSM_COMMAND="bash -c \"echo '$DEPLOY_SCRIPT_ENCODED' | base64 -d | bash -s -- '$COMPOSE_DIR' '$FULL_IMAGE' '$IMAGE_TAG' '$AI_HEALTH_URL' '$AI_ENV_FILE_PROD'\""
-          PARAMETERS_JSON=$(jq -n --arg cmd "$SSM_COMMAND" '{commands: [$cmd]}')
-
-          COMMAND_ID=$(aws ssm send-command \
-            --instance-ids "$EC2_INSTANCE_ID" \
-            --document-name "AWS-RunShellScript" \
-            --parameters "$PARAMETERS_JSON" \
-            --timeout-seconds 1800 \
-            --region ap-northeast-2 \
-            --query 'Command.CommandId' \
-            --output text)
-
-          [ -n "$COMMAND_ID" ] || exit 1
-
-          for i in {1..120}; do
-            STATUS=$(aws ssm get-command-invocation \
-              --command-id "$COMMAND_ID" \
-              --instance-id "$EC2_INSTANCE_ID" \
-              --region ap-northeast-2 \
-              --query 'Status' \
-              --output text 2>/dev/null || echo "InProgress")
-
-            if [ "$STATUS" = "Success" ]; then
-              aws ssm get-command-invocation \
-                --command-id "$COMMAND_ID" \
-                --instance-id "$EC2_INSTANCE_ID" \
-                --region ap-northeast-2 \
-                --query 'StandardOutputContent' \
-                --output text
-              exit 0
-            elif [ "$STATUS" = "Failed" ] || [ "$STATUS" = "Cancelled" ] || [ "$STATUS" = "TimedOut" ]; then
-              aws ssm get-command-invocation \
-                --command-id "$COMMAND_ID" \
-                --instance-id "$EC2_INSTANCE_ID" \
-                --region ap-northeast-2 \
-                --query 'StandardOutputContent' --output text
-              aws ssm get-command-invocation \
-                --command-id "$COMMAND_ID" \
-                --instance-id "$EC2_INSTANCE_ID" \
-                --region ap-northeast-2 \
-                --query 'StandardErrorContent' --output text
-              exit 1
+            if grep -q '^ECR_REPOSITORY_AI=' .env 2>/dev/null; then
+              sed -i "s|^ECR_REPOSITORY_AI=.*|ECR_REPOSITORY_AI=${ECR_REPOSITORY_AI}|" .env
+            else
+              echo "ECR_REPOSITORY_AI=${ECR_REPOSITORY_AI}" >> .env
             fi
-            [ $i -lt 120 ] && sleep 5
-          done
 
-          echo "SSM Command timeout"
-          exit 1
+            if grep -q '^AI_TAG=' .env 2>/dev/null; then
+              sed -i "s|^AI_TAG=.*|AI_TAG=${IMAGE_TAG}|" .env
+            else
+              echo "AI_TAG=${IMAGE_TAG}" >> .env
+            fi
+
+            docker compose pull ai
+            docker compose up -d ai
+            docker image prune -a -f 2>/dev/null || true
+
+            for i in {1..20}; do
+              code=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8000/health || echo 000)
+              if [ "$code" = "200" ]; then
+                echo "Internal health check passed"
+                exit 0
+              fi
+              echo "Internal health check attempt ${i}/20 - HTTP ${code}"
+              sleep 5
+            done
+
+            echo "Internal health check failed"
+            exit 1
 
       - name: Notify Discord - Success
         if: success()
         env:
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+          IMAGE_TAG: ${{ steps.deploy-vars.outputs.image_tag }}
+          SHA_SHORT: ${{ steps.deploy-vars.outputs.sha_short }}
+          RUN_ID: ${{ github.run_id }}
         run: |
-          SHA_SHORT="${{ steps.deploy-vars.outputs.sha_short }}"
-          IMAGE_TAG="${{ steps.deploy-vars.outputs.image_tag }}"
-
+          [ -z "$DISCORD_WEBHOOK" ] && exit 0
           payload=$(cat <<EOF
           {
             "embeds": [{
-              "title": "🚀 AI 프로덕션 배포 완료 (V2-Docker)",
-              "description": "Docker 기반 AI 프로덕션 배포가 성공적으로 완료되었습니다.",
+              "title": "AI 프로덕션 배포 완료",
+              "description": "AI 프로덕션 배포가 성공적으로 완료되었습니다.",
               "color": 3066993,
               "fields": [
                 {"name": "서비스", "value": "Re-Fit AI (Prod)", "inline": true},
-                {"name": "이미지 태그", "value": "\`${IMAGE_TAG}\`", "inline": true},
-                {"name": "커밋 SHA", "value": "\`${SHA_SHORT}\`", "inline": true},
-                {"name": "워크플로우", "value": "[상세 보기](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})", "inline": false}
+                {"name": "이미지 태그", "value": "\`$IMAGE_TAG\`", "inline": true},
+                {"name": "커밋 SHA", "value": "\`$SHA_SHORT\`", "inline": true},
+                {"name": "워크플로우", "value": "[상세 보기](https://github.com/${{ github.repository }}/actions/runs/$RUN_ID)", "inline": false}
               ],
-              "footer": { "text": "Re-Fit AI Prod Deployment (V2-Docker)" },
+              "footer": { "text": "Re-Fit Prod Deployment" },
               "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
             }]
           }
           EOF
           )
-          curl -H "Content-Type: application/json" -X POST -d "$payload" "$DISCORD_WEBHOOK"
+          curl -sS -H "Content-Type: application/json" -X POST -d "$payload" "$DISCORD_WEBHOOK" >/dev/null
 
       - name: Notify Discord - Failure
         if: failure()
         env:
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+          IMAGE_TAG: ${{ steps.deploy-vars.outputs.image_tag }}
+          SHA_SHORT: ${{ steps.deploy-vars.outputs.sha_short }}
+          RUN_ID: ${{ github.run_id }}
         run: |
-          SHA_SHORT="${{ steps.deploy-vars.outputs.sha_short }}"
-          IMAGE_TAG="${{ steps.deploy-vars.outputs.image_tag }}"
-
+          [ -z "$DISCORD_WEBHOOK" ] && exit 0
           payload=$(cat <<EOF
           {
             "embeds": [{
-              "title": "🚨 AI 프로덕션 배포 실패 (V2-Docker)",
-              "description": "Docker 기반 AI 프로덕션 배포가 실패했습니다.",
+              "title": "AI 프로덕션 배포 실패",
+              "description": "AI 프로덕션 배포가 실패했습니다. 로그를 확인하세요.",
               "color": 15158332,
               "fields": [
                 {"name": "서비스", "value": "Re-Fit AI (Prod)", "inline": true},
-                {"name": "이미지 태그", "value": "\`${IMAGE_TAG}\`", "inline": true},
-                {"name": "커밋 SHA", "value": "\`${SHA_SHORT}\`", "inline": true},
-                {"name": "워크플로우", "value": "[상세 보기](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})", "inline": false}
+                {"name": "이미지 태그", "value": "\`$IMAGE_TAG\`", "inline": true},
+                {"name": "커밋 SHA", "value": "\`$SHA_SHORT\`", "inline": true},
+                {"name": "워크플로우", "value": "[상세 보기](https://github.com/${{ github.repository }}/actions/runs/$RUN_ID)", "inline": false}
               ],
-              "footer": { "text": "Re-Fit AI Prod Deployment (V2-Docker)" },
+              "footer": { "text": "Re-Fit Prod Deployment" },
               "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
             }]
           }
           EOF
           )
-          curl -H "Content-Type: application/json" -X POST -d "$payload" "$DISCORD_WEBHOOK"
+          curl -sS -H "Content-Type: application/json" -X POST -d "$payload" "$DISCORD_WEBHOOK" >/dev/null
