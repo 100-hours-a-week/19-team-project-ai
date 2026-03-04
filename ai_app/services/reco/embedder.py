@@ -22,7 +22,9 @@ class ProfileEmbedder:
         self.use_runpod = os.getenv("USE_RUNPOD_EMBEDDING", "false").lower() == "true"
         self.runpod_api_key = os.getenv("RUNPOD_API_KEY")
         self.runpod_endpoint_id = os.getenv("RUNPOD_EMBEDDING_ENDPOINT_ID")
-        self.runpod_url = f"https://api.runpod.ai/v2/{self.runpod_endpoint_id}/runsync" if self.runpod_endpoint_id else None
+        self.runpod_url = (
+            f"https://api.runpod.ai/v2/{self.runpod_endpoint_id}/runsync" if self.runpod_endpoint_id else None
+        )
 
     @property
     def model(self) -> SentenceTransformer:
@@ -54,16 +56,8 @@ class ProfileEmbedder:
 
     def _embed_via_runpod(self, texts: list[str], is_query: bool = True) -> np.ndarray:
         """RunPod Serverless API를 통한 임베딩 생성 (polling 방식)"""
-        headers = {
-            "Authorization": f"Bearer {self.runpod_api_key}",
-            "Content-Type": "application/json"
-        }
-        payload = {
-            "input": {
-                "texts": texts,
-                "is_query": is_query
-            }
-        }
+        headers = {"Authorization": f"Bearer {self.runpod_api_key}", "Content-Type": "application/json"}
+        payload = {"input": {"texts": texts, "is_query": is_query}}
 
         try:
             with httpx.Client(timeout=10.0) as client:
@@ -80,7 +74,8 @@ class ProfileEmbedder:
                 # 2. 결과 대기 (polling)
                 status_url = f"https://api.runpod.ai/v2/{self.runpod_endpoint_id}/status/{job_id}"
                 import time
-                max_retries = 150 # 총 150초 대기 (1s * 150)
+
+                max_retries = 150  # 총 150초 대기 (1s * 150)
                 logger.info(f"RunPod 작업 시작됨 (ID: {job_id}). 결과를 기다리는 중...")
 
                 for i in range(max_retries):
@@ -96,9 +91,11 @@ class ProfileEmbedder:
                         raise RuntimeError(f"RunPod job {job_id} {status}")
 
                     # 아직 대기 중 (IN_QUEUE, IN_PROGRESS 등)
-                    time.sleep(1) # 대기 시간을 5초에서 1초로 단축 (지연 시간 절감)
+                    time.sleep(1)  # 대기 시간을 5초에서 1초로 단축 (지연 시간 절감)
 
-                raise TimeoutError(f"RunPod job {job_id} timed out after polling ({max_retries*5}s). Status was: {status}")
+                raise TimeoutError(
+                    f"RunPod job {job_id} timed out after polling ({max_retries * 5}s). Status was: {status}"
+                )
 
         except Exception as e:
             logger.error(f"RunPod API request failed: {e}. Falling back to local model if available.")
