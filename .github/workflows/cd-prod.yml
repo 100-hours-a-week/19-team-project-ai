@@ -102,115 +102,81 @@ jobs:
             --image-ids imageTag="$IMAGE_TAG" \
             --region "${{ env.AWS_REGION }}" > /dev/null
 
-      - name: Prepare SSH
-        env:
-          EC2_HOST: ${{ secrets.EC2_HOST_PROD }}
-          EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY_PROD }}
-          EC2_SSH_PORT: ${{ secrets.EC2_SSH_PORT_PROD || '22' }}
+      - name: Prepare compose content
+        id: compose-content
         run: |
           set -euo pipefail
-          mkdir -p ~/.ssh
-          printf '%s' "$EC2_SSH_KEY" > ~/.ssh/id_rsa
-          chmod 600 ~/.ssh/id_rsa
-          ssh-keyscan -p "$EC2_SSH_PORT" -H "$EC2_HOST" >> ~/.ssh/known_hosts
+          COMPOSE_B64="$(base64 -w 0 "${{ env.PROD_COMPOSE_FILE }}")"
+          echo "compose_b64=${COMPOSE_B64}" >> "$GITHUB_OUTPUT"
 
-      - name: Render compose file on runner
+      - name: Deploy to Prod Server via SSH
+        uses: appleboy/ssh-action@v1
         env:
-          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          ECR_REPOSITORY_AI: ${{ secrets.ECR_REPOSITORY_AI }}
-          IMAGE_TAG: ${{ steps.deploy-vars.outputs.image_tag }}
-        run: |
-          set -euo pipefail
-          cp "${{ env.PROD_COMPOSE_FILE }}" /tmp/docker-compose.yml
-          # runner 시점에 이미지 경로/태그를 고정 주입
-          sed -i "s|\${ECR_REGISTRY}/\${ECR_REPOSITORY_AI}:\${AI_TAG:-main-latest}|${ECR_REGISTRY}/${ECR_REPOSITORY_AI}:${IMAGE_TAG}|g" /tmp/docker-compose.yml
-          [ -s /tmp/docker-compose.yml ] || { echo "Rendered compose is empty"; exit 1; }
-
-      - name: Upload compose/env files
-        env:
-          EC2_HOST: ${{ secrets.EC2_HOST_PROD }}
-          EC2_USER: ${{ secrets.EC2_USERNAME_PROD }}
-          EC2_SSH_PORT: ${{ secrets.EC2_SSH_PORT_PROD || '22' }}
-          COMPOSE_DIR: ${{ secrets.COMPOSE_DIR_PROD }}
           ENV_FILE_PROD: ${{ secrets.ENV_FILE_PROD }}
-        run: |
-          set -euo pipefail
-          printf '%s\n' "$ENV_FILE_PROD" > /tmp/.env.ai
-          chmod 600 /tmp/.env.ai
-
-          scp -P "$EC2_SSH_PORT" -i ~/.ssh/id_rsa /tmp/docker-compose.yml "$EC2_USER@$EC2_HOST:$COMPOSE_DIR/docker-compose.yml"
-          scp -P "$EC2_SSH_PORT" -i ~/.ssh/id_rsa /tmp/.env.ai "$EC2_USER@$EC2_HOST:$COMPOSE_DIR/.env.ai"
-
-      - name: Deploy via SSH
-        env:
-          EC2_HOST: ${{ secrets.EC2_HOST_PROD }}
-          EC2_USER: ${{ secrets.EC2_USERNAME_PROD }}
-          EC2_SSH_PORT: ${{ secrets.EC2_SSH_PORT_PROD || '22' }}
+          COMPOSE_B64: ${{ steps.compose-content.outputs.compose_b64 }}
           COMPOSE_DIR: ${{ secrets.COMPOSE_DIR_PROD }}
           IMAGE_TAG: ${{ steps.deploy-vars.outputs.image_tag }}
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           ECR_REPOSITORY_AI: ${{ secrets.ECR_REPOSITORY_AI }}
           AWS_REGION: ${{ env.AWS_REGION }}
-        run: |
-          set -euo pipefail
+        with:
+          host: ${{ secrets.EC2_HOST_PROD }}
+          username: ${{ secrets.EC2_USERNAME_PROD }}
+          key: ${{ secrets.EC2_SSH_KEY_PROD }}
+          port: ${{ secrets.EC2_SSH_PORT_PROD || '22' }}
+          envs: ENV_FILE_PROD,COMPOSE_B64,COMPOSE_DIR,IMAGE_TAG,ECR_REGISTRY,ECR_REPOSITORY_AI,AWS_REGION
+          script: |
+            set -euo pipefail
+            export PATH="/usr/local/bin:/usr/bin:/bin:$PATH"
 
-          ssh -p "$EC2_SSH_PORT" -i ~/.ssh/id_rsa "$EC2_USER@$EC2_HOST" \
-            COMPOSE_DIR="$COMPOSE_DIR" \
-            IMAGE_TAG="$IMAGE_TAG" \
-            ECR_REGISTRY="$ECR_REGISTRY" \
-            ECR_REPOSITORY_AI="$ECR_REPOSITORY_AI" \
-            AWS_REGION="$AWS_REGION" \
-            'bash -se' <<'REMOTE'
-          set -euo pipefail
-          export PATH="/usr/local/bin:/usr/bin:/bin:$PATH"
+            # 배포 전 필수 구성요소 점검
+            [ -d "$COMPOSE_DIR" ] || { echo "Compose directory not found: $COMPOSE_DIR"; exit 1; }
+            command -v docker >/dev/null 2>&1 || { echo "docker not found"; exit 1; }
+            docker compose version >/dev/null 2>&1 || { echo "docker compose not found"; exit 1; }
+            command -v aws >/dev/null 2>&1 || { echo "aws cli not found"; exit 1; }
 
-          # 배포 전 필수 구성요소 점검
-          [ -d "$COMPOSE_DIR" ] || { echo "Compose directory not found: $COMPOSE_DIR"; exit 1; }
-          command -v docker >/dev/null 2>&1 || { echo "docker not found"; exit 1; }
-          docker compose version >/dev/null 2>&1 || { echo "docker compose not found"; exit 1; }
-          command -v aws >/dev/null 2>&1 || { echo "aws cli not found"; exit 1; }
+            cd "$COMPOSE_DIR"
+            printf '%s' "$COMPOSE_B64" | base64 -d > docker-compose.yml
+            printf '%s\n' "$ENV_FILE_PROD" > .env.ai
+            chmod 644 docker-compose.yml .env.ai
 
-          cd "$COMPOSE_DIR"
-          chmod 644 docker-compose.yml .env.ai
+            aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "$ECR_REGISTRY"
 
-          aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "$ECR_REGISTRY"
-
-          # .env 키를 안전하게 갱신(없으면 추가)
-          if grep -q '^ECR_REGISTRY=' .env 2>/dev/null; then
-            sed -i "s|^ECR_REGISTRY=.*|ECR_REGISTRY=${ECR_REGISTRY}|" .env
-          else
-            echo "ECR_REGISTRY=${ECR_REGISTRY}" >> .env
-          fi
-
-          if grep -q '^ECR_REPOSITORY_AI=' .env 2>/dev/null; then
-            sed -i "s|^ECR_REPOSITORY_AI=.*|ECR_REPOSITORY_AI=${ECR_REPOSITORY_AI}|" .env
-          else
-            echo "ECR_REPOSITORY_AI=${ECR_REPOSITORY_AI}" >> .env
-          fi
-
-          if grep -q '^AI_TAG=' .env 2>/dev/null; then
-            sed -i "s|^AI_TAG=.*|AI_TAG=${IMAGE_TAG}|" .env
-          else
-            echo "AI_TAG=${IMAGE_TAG}" >> .env
-          fi
-
-          docker compose pull ai
-          docker compose up -d ai
-          docker image prune -a -f 2>/dev/null || true
-
-          for i in {1..15}; do
-            code=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8000/health || echo 000)
-            if [ "$code" = "200" ]; then
-              echo "Internal health check passed"
-              exit 0
+            # .env 키를 안전하게 갱신(없으면 추가)
+            if grep -q '^ECR_REGISTRY=' .env 2>/dev/null; then
+              sed -i "s|^ECR_REGISTRY=.*|ECR_REGISTRY=${ECR_REGISTRY}|" .env
+            else
+              echo "ECR_REGISTRY=${ECR_REGISTRY}" >> .env
             fi
-            echo "Internal health check attempt ${i}/15 - HTTP ${code}"
-            sleep 5
-          done
 
-          echo "Internal health check failed"
-          exit 1
-          REMOTE
+            if grep -q '^ECR_REPOSITORY_AI=' .env 2>/dev/null; then
+              sed -i "s|^ECR_REPOSITORY_AI=.*|ECR_REPOSITORY_AI=${ECR_REPOSITORY_AI}|" .env
+            else
+              echo "ECR_REPOSITORY_AI=${ECR_REPOSITORY_AI}" >> .env
+            fi
+
+            if grep -q '^AI_TAG=' .env 2>/dev/null; then
+              sed -i "s|^AI_TAG=.*|AI_TAG=${IMAGE_TAG}|" .env
+            else
+              echo "AI_TAG=${IMAGE_TAG}" >> .env
+            fi
+
+            docker compose pull ai
+            docker compose up -d ai
+            docker image prune -a -f 2>/dev/null || true
+
+            for i in {1..15}; do
+              code=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8000/health || echo 000)
+              if [ "$code" = "200" ]; then
+                echo "Internal health check passed"
+                exit 0
+              fi
+              echo "Internal health check attempt ${i}/15 - HTTP ${code}"
+              sleep 5
+            done
+
+            echo "Internal health check failed"
+            exit 1
 
       - name: Notify Discord - Success
         if: success()
