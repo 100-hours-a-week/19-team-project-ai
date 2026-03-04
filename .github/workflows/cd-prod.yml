@@ -40,6 +40,9 @@ jobs:
     environment: production
 
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Preflight - validate required secrets
         env:
           ECR_REPOSITORY_AI: ${{ secrets.ECR_REPOSITORY_AI }}
