@@ -140,7 +140,6 @@ jobs:
           echo "full_image=${FULL_IMAGE}" >> $GITHUB_OUTPUT
           echo "latest_image=${LATEST_IMAGE}" >> $GITHUB_OUTPUT
           echo "sha_short=${SHA_SHORT}" >> $GITHUB_OUTPUT
-          echo "Docker Image: ${FULL_IMAGE}"
 
       - name: Build and Push Docker Image
         uses: docker/build-push-action@v6
@@ -174,7 +173,7 @@ jobs:
                 run_id: '${{ github.run_id }}'
               }
             });
-            console.log('CD-Dev workflow triggered successfully');
+            console.log('CD-Dev workflow triggered');
 
   # ===========================================
   # 4. 프로덕션 릴리즈 (main push 시 자동 - Docker + cd-prod)
@@ -217,7 +216,6 @@ jobs:
           IMAGE_TAG="main-${SHA_SHORT}"
           echo "image_tag=${IMAGE_TAG}" >> $GITHUB_OUTPUT
           echo "sha_short=${SHA_SHORT}" >> $GITHUB_OUTPUT
-          echo "Docker image tag: ${IMAGE_TAG}"
       
       - name: Build and Push Docker Image
         uses: docker/build-push-action@v6
@@ -252,4 +250,4 @@ jobs:
                 use_latest: 'false'
               }
             });
-            console.log('CD-Prod workflow triggered successfully');
+            console.log('CD-Prod workflow triggered');

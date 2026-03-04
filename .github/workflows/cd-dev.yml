@@ -59,10 +59,8 @@ jobs:
 
           if [ -n "${{ inputs.image_tag }}" ]; then
             IMAGE_TAG="${{ inputs.image_tag }}"
-            echo "Using specified image tag: ${IMAGE_TAG}"
           elif [ "$USE_LATEST" = "true" ]; then
             IMAGE_TAG="develop-latest"
-            echo "Using latest develop image"
           else
             echo "image_tag is empty and use_latest is false."
             exit 1
@@ -105,13 +103,8 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p ~/.ssh
-          KEY_CONTENT="$EC2_SSH_KEY"
-          if echo "$KEY_CONTENT" | grep -q '\\n'; then
-            KEY_CONTENT=$(printf '%b' "$KEY_CONTENT")
-          fi
-          printf '%s\n' "$KEY_CONTENT" | tr -d '\r' > ~/.ssh/id_rsa
+          printf '%s' "$EC2_SSH_KEY" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
-          ssh-keygen -y -f ~/.ssh/id_rsa >/dev/null 2>&1 || { echo "Invalid SSH private key format"; exit 1; }
           ssh-keyscan -p "$EC2_SSH_PORT" -H "$EC2_HOST" >> ~/.ssh/known_hosts
 
       - name: Upload env file
