@@ -1,6 +1,7 @@
 import os
-
-from api.endpoints import agent_router, health_router, reco_router, repo_router, resumes_router
+import json
+import logging
+import asyncio
 from dotenv import load_dotenv
 from fastapi import FastAPI
 from middleware.otel_lgtm_metrics import install_lgtm_metrics
@@ -36,10 +37,10 @@ install_lgtm_metrics(app)
 #     start_time = time.perf_counter()
 #     response = await call_next(request)
 #     process_time = time.perf_counter() - start_time
-#     
+#
 #     # 터미널에서 즉시 확인할 수 있도록 print 추가
 #     # print(f"\n>>> [API LOG] Path: {request.url.path} | Duration: {process_time:.2f}s")
-#     
+#
 #     response.headers["X-Process-Time"] = str(process_time)
 #     return response
 
