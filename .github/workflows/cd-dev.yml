@@ -21,141 +21,177 @@ on:
         type: boolean
         default: true
 
+env:
+  AWS_REGION: ${{ secrets.AWS_REGION || 'ap-northeast-2' }}
+
 jobs:
   deploy-dev:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    concurrency:
+      group: deploy-ai-dev
+      cancel-in-progress: false
     environment: development
+
     steps:
-      - name: Set Deployment Variables
+      - name: Preflight - validate required secrets
+        env:
+          ECR_REPOSITORY_AI: ${{ secrets.ECR_REPOSITORY_AI }}
+          EC2_HOST_DEV: ${{ secrets.EC2_HOST_DEV }}
+          EC2_USERNAME_DEV: ${{ secrets.EC2_USERNAME_DEV }}
+          EC2_SSH_KEY_DEV: ${{ secrets.EC2_SSH_KEY_DEV }}
+          COMPOSE_DIR_DEV: ${{ secrets.COMPOSE_DIR_DEV }}
+          ENV_FILE_DEV: ${{ secrets.ENV_FILE_DEV }}
+        run: |
+          set -euo pipefail
+          for v in ECR_REPOSITORY_AI EC2_HOST_DEV EC2_USERNAME_DEV EC2_SSH_KEY_DEV COMPOSE_DIR_DEV ENV_FILE_DEV; do
+            if [ -z "${!v:-}" ]; then
+              echo "Missing required secret: $v"
+              exit 1
+            fi
+          done
+
+      - name: Set deployment variables
         id: deploy-vars
         run: |
+          set -euo pipefail
+          USE_LATEST="${{ inputs.use_latest }}"
+
           if [ -n "${{ inputs.image_tag }}" ]; then
             IMAGE_TAG="${{ inputs.image_tag }}"
-            echo "📦 Using specified image tag: ${IMAGE_TAG}"
-          else
+            echo "Using specified image tag: ${IMAGE_TAG}"
+          elif [ "$USE_LATEST" = "true" ]; then
             IMAGE_TAG="develop-latest"
-            echo "📦 Using latest develop image"
+            echo "Using latest develop image"
+          else
+            echo "image_tag is empty and use_latest is false."
+            exit 1
           fi
 
           SHA="${{ inputs.sha }}"
           SHA_SHORT="${SHA:0:7}"
 
-          echo "image_tag=${IMAGE_TAG}" >> $GITHUB_OUTPUT
-          echo "sha=${SHA}" >> $GITHUB_OUTPUT
-          echo "sha_short=${SHA_SHORT}" >> $GITHUB_OUTPUT
+          echo "image_tag=${IMAGE_TAG}" >> "$GITHUB_OUTPUT"
+          echo "sha=${SHA}" >> "$GITHUB_OUTPUT"
+          echo "sha_short=${SHA_SHORT}" >> "$GITHUB_OUTPUT"
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ap-northeast-2
+          aws-region: ${{ env.AWS_REGION }}
 
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Verify Image Exists in ECR
+      - name: Verify image exists in ECR
         run: |
+          set -euo pipefail
           IMAGE_TAG="${{ steps.deploy-vars.outputs.image_tag }}"
           REPO="${{ secrets.ECR_REPOSITORY_AI }}"
 
           aws ecr describe-images \
-            --repository-name "${REPO}" \
-            --image-ids imageTag="${IMAGE_TAG}" \
-            --region ap-northeast-2 > /dev/null 2>&1
+            --repository-name "$REPO" \
+            --image-ids imageTag="$IMAGE_TAG" \
+            --region "${{ env.AWS_REGION }}" > /dev/null
 
-          if [ $? -eq 0 ]; then
-            echo "✅ Image found: ${REPO}:${IMAGE_TAG}"
-          else
-            echo "❌ Image not found: ${REPO}:${IMAGE_TAG}"
-            exit 1
-          fi
-
-      - name: Deploy to Dev Server via SSH
-        uses: appleboy/ssh-action@v1
+      - name: Prepare SSH
         env:
-          AI_ENV_FILE_DEV: ${{ secrets.AI_ENV_FILE_DEV }}
-        with:
-          host: ${{ secrets.DEV_SSH_HOST }}
-          username: ${{ secrets.DEV_SSH_USER }}
-          key: ${{ secrets.DEV_SSH_KEY }}
-          port: ${{ secrets.DEV_SSH_PORT }}
-          envs: AI_ENV_FILE_DEV
-          script: |
-            set -euo pipefail
-
-            echo "============================================"
-            echo "Re-Fit AI 개발 서버 배포 시작: $(date)"
-            echo "============================================"
-
-            ECR_REGISTRY="${{ steps.login-ecr.outputs.registry }}"
-            ECR_REPO="${{ secrets.ECR_REPOSITORY_AI }}"
-            IMAGE_TAG="${{ steps.deploy-vars.outputs.image_tag }}"
-            FULL_IMAGE="${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG}"
-            COMPOSE_DIR="${{ secrets.DEV_COMPOSE_DIR }}"
-
-            echo "🐳 Image: ${FULL_IMAGE}"
-
-            # ECR 로그인
-            aws ecr get-login-password --region ap-northeast-2 | \
-              docker login --username AWS --password-stdin "${ECR_REGISTRY}"
-
-            # docker-compose.yml이 있는 디렉토리로 이동
-            cd "${COMPOSE_DIR}"
-
-            # 환경변수 파일 주입
-            echo "$AI_ENV_FILE_DEV" > .env.ai
-            chmod 644 .env.ai
-            echo "🔐 .env.ai 주입 완료"
-
-            # 이미지 태그를 .env 파일에 영구 저장
-            ENV_FILE="${COMPOSE_DIR}/.env"
-            if grep -q '^AI_TAG=' "${ENV_FILE}" 2>/dev/null; then
-              sed -i "s|^AI_TAG=.*|AI_TAG=${IMAGE_TAG}|" "${ENV_FILE}"
-            else
-              echo "AI_TAG=${IMAGE_TAG}" >> "${ENV_FILE}"
-            fi
-            echo "🏷️ AI_TAG=${IMAGE_TAG} → .env 저장 완료"
-
-            echo "📥 Pulling new image..."
-            docker compose pull ai
-
-            echo "🔄 Restarting ai service..."
-            docker compose up -d ai
-
-            # 사용하지 않는 이미지 정리 (dangling + 미사용 태그 이미지로 디스크/메모리 확보)
-            docker image prune -f 2>/dev/null || true
-            docker image prune -a -f 2>/dev/null || true
-
-            echo "============================================"
-            echo "✅ Re-Fit AI 개발 서버 배포 완료: $(date)"
-            echo "   Image: ${FULL_IMAGE}"
-            echo "============================================"
-
-      - name: Health Check
+          EC2_HOST: ${{ secrets.EC2_HOST_DEV }}
+          EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY_DEV }}
+          EC2_SSH_PORT: ${{ secrets.EC2_SSH_PORT_DEV || '22' }}
         run: |
-          HEALTH_URL="${{ secrets.DEV_HEALTH_CHECK_URL_AI }}"
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          printf '%s\n' "$EC2_SSH_KEY" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -p "$EC2_SSH_PORT" -H "$EC2_HOST" >> ~/.ssh/known_hosts
 
-          if [ -z "$HEALTH_URL" ]; then
-            echo "⚠️  DEV_HEALTH_CHECK_URL_AI이 설정되지 않아 헬스체크를 건너뜁니다."
-            exit 0
+      - name: Upload env file
+        env:
+          EC2_HOST: ${{ secrets.EC2_HOST_DEV }}
+          EC2_USER: ${{ secrets.EC2_USERNAME_DEV }}
+          EC2_SSH_PORT: ${{ secrets.EC2_SSH_PORT_DEV || '22' }}
+          COMPOSE_DIR: ${{ secrets.COMPOSE_DIR_DEV }}
+          ENV_FILE_DEV: ${{ secrets.ENV_FILE_DEV }}
+        run: |
+          set -euo pipefail
+          printf '%s\n' "$ENV_FILE_DEV" > /tmp/.env.ai
+          chmod 600 /tmp/.env.ai
+          scp -P "$EC2_SSH_PORT" -i ~/.ssh/id_rsa /tmp/.env.ai "$EC2_USER@$EC2_HOST:$COMPOSE_DIR/.env.ai"
+
+      - name: Deploy via SSH
+        env:
+          EC2_HOST: ${{ secrets.EC2_HOST_DEV }}
+          EC2_USER: ${{ secrets.EC2_USERNAME_DEV }}
+          EC2_SSH_PORT: ${{ secrets.EC2_SSH_PORT_DEV || '22' }}
+          COMPOSE_DIR: ${{ secrets.COMPOSE_DIR_DEV }}
+          IMAGE_TAG: ${{ steps.deploy-vars.outputs.image_tag }}
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY_AI: ${{ secrets.ECR_REPOSITORY_AI }}
+          AWS_REGION: ${{ env.AWS_REGION }}
+        run: |
+          set -euo pipefail
+
+          ssh -p "$EC2_SSH_PORT" -i ~/.ssh/id_rsa "$EC2_USER@$EC2_HOST" \
+            COMPOSE_DIR="$COMPOSE_DIR" \
+            IMAGE_TAG="$IMAGE_TAG" \
+            ECR_REGISTRY="$ECR_REGISTRY" \
+            ECR_REPOSITORY_AI="$ECR_REPOSITORY_AI" \
+            AWS_REGION="$AWS_REGION" \
+            'bash -se' <<'REMOTE'
+          set -euo pipefail
+          export PATH="/usr/local/bin:/usr/bin:/bin:$PATH"
+
+          # 배포 대상 경로와 필수 명령 확인
+          [ -d "$COMPOSE_DIR" ] || { echo "Compose directory not found: $COMPOSE_DIR"; exit 1; }
+          command -v docker >/dev/null 2>&1 || { echo "docker not found"; exit 1; }
+          docker compose version >/dev/null 2>&1 || { echo "docker compose not found"; exit 1; }
+          command -v aws >/dev/null 2>&1 || { echo "aws cli not found"; exit 1; }
+
+          cd "$COMPOSE_DIR"
+          chmod 644 .env.ai
+
+          aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "$ECR_REGISTRY"
+
+          # .env 키를 안전하게 갱신(없으면 추가)
+          if grep -q '^ECR_REGISTRY=' .env 2>/dev/null; then
+            sed -i "s|^ECR_REGISTRY=.*|ECR_REGISTRY=${ECR_REGISTRY}|" .env
+          else
+            echo "ECR_REGISTRY=${ECR_REGISTRY}" >> .env
           fi
 
-          echo "🏥 헬스체크 시작: ${HEALTH_URL}"
+          if grep -q '^ECR_REPOSITORY_AI=' .env 2>/dev/null; then
+            sed -i "s|^ECR_REPOSITORY_AI=.*|ECR_REPOSITORY_AI=${ECR_REPOSITORY_AI}|" .env
+          else
+            echo "ECR_REPOSITORY_AI=${ECR_REPOSITORY_AI}" >> .env
+          fi
+
+          if grep -q '^AI_TAG=' .env 2>/dev/null; then
+            sed -i "s|^AI_TAG=.*|AI_TAG=${IMAGE_TAG}|" .env
+          else
+            echo "AI_TAG=${IMAGE_TAG}" >> .env
+          fi
+
+          docker compose pull ai
+          docker compose up -d ai
+          docker image prune -a -f 2>/dev/null || true
 
           for i in {1..15}; do
-            HTTP_STATUS=$(timeout 10 curl -s -o /dev/null -w "%{http_code}" "${HEALTH_URL}" 2>/dev/null || echo "000")
-            if [ "${HTTP_STATUS}" = "200" ]; then
-              echo "✅ 헬스체크 성공! (HTTP ${HTTP_STATUS})"
+            HTTP_STATUS=$(timeout 10 curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8000/health 2>/dev/null || echo "000")
+            if [ "$HTTP_STATUS" = "200" ]; then
+              echo "Internal health check passed (HTTP ${HTTP_STATUS})"
               exit 0
             fi
-            echo "  ⏳ 시도 ${i}/15 - HTTP ${HTTP_STATUS}"
-            [ $i -lt 15 ] && sleep 5
+            echo "Internal health check attempt ${i}/15 - HTTP ${HTTP_STATUS}"
+            sleep 5
           done
 
-          echo "❌ 헬스체크 실패"
+          echo "Internal health check failed"
           exit 1
+          REMOTE
 
       - name: Notify Discord - Dev Deployment Complete
         if: success()
@@ -171,7 +207,7 @@ jobs:
           payload=$(cat <<EOF
           {
             "embeds": [{
-              "title": "🚀 AI 개발 서버 배포 완료",
+              "title": "AI 개발 서버 배포 완료",
               "description": "AI 개발 서버 배포가 성공적으로 완료되었습니다.",
               "color": 3447003,
               "fields": [
@@ -202,7 +238,7 @@ jobs:
           payload=$(cat <<EOF
           {
             "embeds": [{
-              "title": "🚨 AI 개발 서버 배포 실패",
+              "title": "AI 개발 서버 배포 실패",
               "description": "AI 개발 서버 배포가 실패했습니다. 워크플로우 로그를 확인하세요.",
               "color": 15158332,
               "fields": [
