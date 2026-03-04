@@ -1,6 +1,13 @@
+import logging
 import os
 
-from api.endpoints import agent_router, health_router, reco_router, repo_router, resumes_router
+from api.endpoints import (
+    agent_router,
+    health_router,
+    reco_router,
+    repo_router,
+    resumes_router,
+)
 from dotenv import load_dotenv
 from fastapi import FastAPI
 from middleware.otel_lgtm_metrics import install_lgtm_metrics
@@ -30,6 +37,19 @@ app = FastAPI(
 # LGTM 대시보드 호환 커스텀 메트릭 추가
 install_lgtm_metrics(app)
 
+# @app.middleware("http")
+# async def add_process_time_header(request: Request, call_next):
+#     import time
+#     start_time = time.perf_counter()
+#     response = await call_next(request)
+#     process_time = time.perf_counter() - start_time
+#
+#     # 터미널에서 즉시 확인할 수 있도록 print 추가
+#     # print(f"\n>>> [API LOG] Path: {request.url.path} | Duration: {process_time:.2f}s")
+#
+#     response.headers["X-Process-Time"] = str(process_time)
+#     return response
+
 # Prometheus 메트릭 계측 (/metrics 엔드포인트 자동 생성)
 Instrumentator(
     should_group_status_codes=False,  # 200, 201 등 개별 status code 유지
@@ -50,6 +70,10 @@ async def root_health():
 @app.on_event("startup")
 async def preload_embedding_model():
     """임베딩 모델을 서버 시작 시 미리 로드하여 첫 요청 지연(Cold Start) 제거"""
+    if os.getenv("USE_RUNPOD_EMBEDDING", "false").lower() == "true":
+        logging.info("RunPod 임베딩 모드가 활성화되어 로컬 모델 로드를 건너뜁니다.")
+        return
+
     from services.reco.embedder import get_embedder
 
     get_embedder().model  # lazy loading 트리거
