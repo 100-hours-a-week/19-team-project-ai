@@ -141,6 +141,17 @@ jobs:
           echo "latest_image=${LATEST_IMAGE}" >> $GITHUB_OUTPUT
           echo "sha_short=${SHA_SHORT}" >> $GITHUB_OUTPUT
 
+      - name: Mask sensitive values in logs (Dev Release)
+        run: |
+          echo "::add-mask::${{ steps.login-ecr.outputs.registry }}"
+          echo "::add-mask::${{ secrets.ECR_REPOSITORY_AI }}"
+          echo "::add-mask::${{ steps.meta.outputs.image_tag }}"
+          echo "::add-mask::${{ steps.meta.outputs.full_image }}"
+          echo "::add-mask::${{ steps.meta.outputs.latest_image }}"
+          echo "::add-mask::${{ secrets.PAT }}"
+          echo "::add-mask::${{ secrets.AWS_ACCESS_KEY_ID }}"
+          echo "::add-mask::${{ secrets.AWS_SECRET_ACCESS_KEY }}"
+
       - name: Build and Push Docker Image
         uses: docker/build-push-action@v6
         with:
@@ -216,6 +227,17 @@ jobs:
           IMAGE_TAG="main-${SHA_SHORT}"
           echo "image_tag=${IMAGE_TAG}" >> $GITHUB_OUTPUT
           echo "sha_short=${SHA_SHORT}" >> $GITHUB_OUTPUT
+
+      - name: Mask sensitive values in logs (Prod Release)
+        run: |
+          echo "::add-mask::${{ steps.login-ecr.outputs.registry }}"
+          echo "::add-mask::${{ secrets.ECR_REPOSITORY_AI }}"
+          echo "::add-mask::${{ steps.docker-meta.outputs.image_tag }}"
+          echo "::add-mask::${{ steps.login-ecr.outputs.registry }}/${{ secrets.ECR_REPOSITORY_AI }}:${{ steps.docker-meta.outputs.image_tag }}"
+          echo "::add-mask::${{ steps.login-ecr.outputs.registry }}/${{ secrets.ECR_REPOSITORY_AI }}:main-latest"
+          echo "::add-mask::${{ secrets.PAT }}"
+          echo "::add-mask::${{ secrets.AWS_ACCESS_KEY_ID }}"
+          echo "::add-mask::${{ secrets.AWS_SECRET_ACCESS_KEY }}"
       
       - name: Build and Push Docker Image
         uses: docker/build-push-action@v6

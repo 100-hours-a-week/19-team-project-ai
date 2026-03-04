@@ -61,6 +61,18 @@ jobs:
             --image-ids imageTag="${{ inputs.image_tag }}" \
             --region "${{ env.AWS_REGION }}" > /dev/null
 
+      - name: Mask sensitive values in logs
+        run: |
+          echo "::add-mask::${{ steps.login-ecr.outputs.registry }}"
+          echo "::add-mask::${{ secrets.ECR_REPOSITORY_AI }}"
+          echo "::add-mask::${{ inputs.image_tag }}"
+          echo "::add-mask::${{ secrets.EC2_HOST_PROD }}"
+          echo "::add-mask::${{ secrets.EC2_USERNAME_PROD }}"
+          echo "::add-mask::${{ secrets.EC2_SSH_PORT_PROD }}"
+          echo "::add-mask::${{ secrets.COMPOSE_DIR_PROD }}"
+          echo "::add-mask::${{ secrets.AWS_ACCESS_KEY_ID }}"
+          echo "::add-mask::${{ secrets.AWS_SECRET_ACCESS_KEY }}"
+
       - name: Rollback via SSH
         id: rollback
         uses: appleboy/ssh-action@v1
@@ -91,7 +103,7 @@ jobs:
             printf '%s\n' "$ENV_FILE_PROD" > .env.ai
             chmod 644 .env.ai
 
-            aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "$ECR_REGISTRY"
+            aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "$ECR_REGISTRY" >/dev/null 2>&1
 
             # .env 키를 안전하게 갱신(없으면 추가)
             if grep -q '^ECR_REGISTRY=' .env 2>/dev/null; then
@@ -116,13 +128,13 @@ jobs:
             docker compose up -d ai
             docker image prune -a -f 2>/dev/null || true
 
-            for i in {1..15}; do
+            for i in {1..20}; do
               code=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8000/health || echo 000)
               if [ "$code" = "200" ]; then
                 echo "Rollback health check passed"
                 exit 0
               fi
-              echo "Rollback health check attempt ${i}/15 - HTTP ${code}"
+              echo "Rollback health check attempt ${i}/20 - HTTP ${code}"
               sleep 5
             done
 
@@ -163,4 +175,4 @@ jobs:
           }
           EOF
           )
-          curl -s -H "Content-Type: application/json" -X POST -d "$payload" "$DISCORD_WEBHOOK"
+          curl -sS -H "Content-Type: application/json" -X POST -d "$payload" "$DISCORD_WEBHOOK" >/dev/null
