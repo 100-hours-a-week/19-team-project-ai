@@ -1,15 +1,6 @@
 import logging
 import os
 
-from dotenv import load_dotenv
-from fastapi import FastAPI
-from opentelemetry import trace
-from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
-from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import BatchSpanProcessor
-from prometheus_fastapi_instrumentator import Instrumentator
-
 from api.endpoints import (
     agent_router,
     health_router,
@@ -17,7 +8,15 @@ from api.endpoints import (
     repo_router,
     resumes_router,
 )
+from dotenv import load_dotenv
+from fastapi import FastAPI
 from middleware.otel_lgtm_metrics import install_lgtm_metrics
+from opentelemetry import trace
+from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from prometheus_fastapi_instrumentator import Instrumentator
 
 # .env.ai가 있으면 먼저 로드 (배포 환경 용), 없으면 기본 .env 로드
 load_dotenv(".env.ai")
