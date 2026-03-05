@@ -38,7 +38,10 @@ class ProfileEmbedder:
     def embed_text(self, text: str, is_query: bool = True) -> np.ndarray:
         """단일 텍스트 임베딩 생성 (E5 prefix 처리)"""
         if self.use_runpod and self.runpod_url and self.runpod_api_key:
-            return self._embed_via_runpod([text], is_query)[0]
+            try:
+                return self._embed_via_runpod([text], is_query)[0]
+            except Exception as e:
+                logger.error(f"RunPod embedding failed, falling back to local: {e}")
 
         if "e5" in self.model_name.lower():
             prefix = "query" if is_query else "passage"
@@ -48,7 +51,10 @@ class ProfileEmbedder:
     def embed_texts(self, texts: list[str]) -> np.ndarray:
         """여러 텍스트 임베딩 생성"""
         if self.use_runpod and self.runpod_url and self.runpod_api_key:
-            return self._embed_via_runpod(texts, is_query=False)
+            try:
+                return self._embed_via_runpod(texts, is_query=False)
+            except Exception as e:
+                logger.error(f"RunPod batch embedding failed, falling back to local: {e}")
 
         if "e5" in self.model_name.lower():
             texts = [f"passage: {t}" for t in texts]
@@ -98,7 +104,7 @@ class ProfileEmbedder:
                 )
 
         except Exception as e:
-            logger.error(f"RunPod API request failed: {e}. Falling back to local model if available.")
+            logger.error(f"RunPod API request failed: {e}")
             raise e
 
     def get_embedding_dim(self) -> int:
