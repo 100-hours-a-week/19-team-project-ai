@@ -33,7 +33,7 @@ class ExtractedJobPosting(BaseModel):
 
 # ============== 채용공고 파싱 시스템 프롬프트 ==============
 
-JOB_PARSING_SYSTEM_PROMPT = """당신은 채용공고 분석 전문가입니다.
+JOB_PARSING_SYSTEM_PROMPT = """당신은 채용공고 분석 현직자입니다.
 주어진 채용공고 텍스트에서 구조화된 정보를 추출합니다.
 
 추출 규칙:

@@ -114,7 +114,7 @@ class BackendAPIClient:
             return False
 
     async def get_expert_details(self, user_id: int) -> Optional[dict[str, Any]]:
-        """특정 전문가의 상세 정보 조회 (nickname, company_name 등)"""
+        """특정 현직자의 상세 정보 조회 (nickname, company_name 등)"""
         url = f"{self.v1_url}/experts/{user_id}"
         try:
             with tracer.start_as_current_span("backend_get_expert_details"):
@@ -129,10 +129,10 @@ class BackendAPIClient:
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 404:
                 return None
-            logger.error(f"전문가 상세 조회 실패 ({user_id}): {e}")
+            logger.error(f"현직자 상세 조회 실패 ({user_id}): {e}")
             return None
         except Exception as e:
-            logger.error(f"전문가 상세 조회 오류 ({user_id}): {e}")
+            logger.error(f"현직자 상세 조회 오류 ({user_id}): {e}")
             logger.error(traceback.format_exc())
             return None
 
