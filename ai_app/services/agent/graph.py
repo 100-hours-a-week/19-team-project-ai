@@ -84,7 +84,7 @@ async def vector_search_node(state: AgentState) -> dict:
     # 쿼리 빌드 & 임베딩
     query_text = build_query_text(conditions)
     embedder = get_embedder()
-    query_embedding = embedder.embed_text(query_text)
+    query_embedding = await embedder.embed_text(query_text)
     embedding_list = query_embedding.tolist()
 
     # 백엔드 API 경유 벡터 검색
