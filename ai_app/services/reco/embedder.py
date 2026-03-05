@@ -86,6 +86,7 @@ class ProfileEmbedder:
             raise RuntimeError("RunPod configuration missing (URL or API Key)")
 
         import time
+
         headers = {"Authorization": f"Bearer {self.runpod_api_key}", "Content-Type": "application/json"}
         payload = {"input": {"texts": texts, "is_query": is_query}}
 

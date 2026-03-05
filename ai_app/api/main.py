@@ -43,9 +43,11 @@ app = FastAPI(
 # LGTM 대시보드 호환 커스텀 메트릭 추가
 install_lgtm_metrics(app)
 
+
 @app.middleware("http")
 async def add_process_time_header(request, call_next):
     import time
+
     start_time = time.time()
     response = await call_next(request)
     process_time = time.time() - start_time
@@ -56,6 +58,7 @@ async def add_process_time_header(request, call_next):
 
     response.headers["X-Process-Time"] = str(process_time)
     return response
+
 
 # Prometheus 메트릭 계측 (/metrics 엔드포인트 자동 생성)
 Instrumentator(
