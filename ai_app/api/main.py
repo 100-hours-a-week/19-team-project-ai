@@ -28,6 +28,12 @@ _provider = TracerProvider()
 _provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter(endpoint=_otlp_endpoint)))
 trace.set_tracer_provider(_provider)
 
+# 로깅 설정 강제 (터미널 출력 보장)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(levelname)s:%(name)s:%(message)s",
+)
+
 app = FastAPI(
     title="AI Resume & Mentoring Platform",
     description="AI-powered resume processing and mentor matching service",
@@ -37,18 +43,19 @@ app = FastAPI(
 # LGTM 대시보드 호환 커스텀 메트릭 추가
 install_lgtm_metrics(app)
 
-# @app.middleware("http")
-# async def add_process_time_header(request: Request, call_next):
-#     import time
-#     start_time = time.perf_counter()
-#     response = await call_next(request)
-#     process_time = time.perf_counter() - start_time
-#
-#     # 터미널에서 즉시 확인할 수 있도록 print 추가
-#     # print(f"\n>>> [API LOG] Path: {request.url.path} | Duration: {process_time:.2f}s")
-#
-#     response.headers["X-Process-Time"] = str(process_time)
-#     return response
+@app.middleware("http")
+async def add_process_time_header(request, call_next):
+    import time
+    start_time = time.time()
+    response = await call_next(request)
+    process_time = time.time() - start_time
+    
+    # 터미널에서 즉시 확인할 수 있도록 강조 출력
+    if not request.url.path.endswith(("/health", "/metrics")):
+        print(f"\n>>> [PERF] {request.method} {request.url.path} | Duration: {process_time:.2f}s")
+    
+    response.headers["X-Process-Time"] = str(process_time)
+    return response
 
 # Prometheus 메트릭 계측 (/metrics 엔드포인트 자동 생성)
 Instrumentator(
