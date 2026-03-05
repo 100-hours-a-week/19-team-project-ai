@@ -28,7 +28,8 @@ async def get_pool() -> asyncpg.Pool:
             dsn=database_url,
             min_size=5,
             max_size=20,
-            timeout=DEFAULT_TIMEOUT,
+            command_timeout=60.0,
+            timeout=60.0,
         )
         logger.info("✅ DB 커넥션 풀 초기화 완료")
     return _pool
@@ -113,7 +114,7 @@ class VectorSearchClient:
             raise
 
     async def get_embedding_status(self) -> dict[str, int]:
-        """전체 전문가 수 및 임베딩 완료된 전문가 수 조회"""
+        """전체 현직자 수 및 임베딩 완료된 현직자 수 조회"""
         pool = await get_pool()
         try:
             async with pool.acquire() as conn:

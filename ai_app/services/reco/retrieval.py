@@ -33,6 +33,7 @@ class MentorCandidate:
     jobs: list[str]
     similarity_score: float
     last_active_at: str | None
+    profile_image_url: str | None = None
     filter_type: str | None = None
     ground_truth: dict | None = None
     # 내부 필터링용
@@ -56,6 +57,7 @@ class MentorCandidate:
             "filter_type": self.filter_type,
             "ground_truth": self.ground_truth,
             "last_active_at": self.last_active_at,
+            "profile_image_url": self.profile_image_url,
         }
         if include_internal:
             result["_job_matched"] = self._job_matched
@@ -75,6 +77,8 @@ class MentorRetriever:
         self.backend_client = backend_client or get_backend_client()
         self.embedder = embedder or get_embedder()
         self.vector_search_client = vector_search_client or get_vector_search_client()
+        # 현직자 상세 정보 캐시 (메모리)
+        self._expert_cache = {}
 
     async def get_user_profile(self, user_id: int) -> dict | None:
         """사용자 프로필 정보 조회 (skills, jobs, introduction)"""
@@ -131,7 +135,7 @@ class MentorRetriever:
         # 1. ID 매핑 (user_id, userId, id 순)
         user_id = cand.get("user_id") or cand.get("userId") or cand.get("id")
         if user_id is None:
-            logger.warning(f"⚠️ 전문가 데이터에 ID가 없습니다: {cand}")
+            logger.warning(f"⚠️ 현직자 데이터에 ID가 없습니다: {cand}")
             user_id = 0
 
         # 2. 텍스트 필드 정제
@@ -160,6 +164,9 @@ class MentorRetriever:
         if last_active and hasattr(last_active, "isoformat"):
             last_active = last_active.isoformat()
 
+        # 6. 프로필 이미지 URL 매핑
+        profile_image_url = cand.get("profile_image_url") or cand.get("profileImageUrl") or cand.get("profile_image")
+
         return MentorCandidate(
             user_id=int(user_id),
             nickname=str(nickname),
@@ -173,6 +180,7 @@ class MentorRetriever:
             jobs=list(mentor_jobs),
             similarity_score=round(float(cand.get("similarity_score", 0.0)), 4),
             last_active_at=last_active if isinstance(last_active, str) else None,
+            profile_image_url=profile_image_url,
             _job_matched=bool(user_jobs & mentor_jobs),
             _skill_matched=bool(user_skills & mentor_skills),
         )
@@ -302,9 +310,14 @@ class MentorRetriever:
             추천 결과 리스트 (멘토 정보 + 임베딩 유사도)
         """
         # 1) 사용자 프로필 조회
+        import time
+
+        total_start = time.time()
         try:
+            start = time.time()
             with tracer.start_as_current_span("get_user_profile"):
                 user_profile = await self.get_user_profile(user_id)
+            logger.info(f"Step 1: Get User Profile took {time.time() - start:.2f}s")
         except Exception as e:
             logger.warning(f"유저 프로필 조회 실패 (user_id={user_id}): {e} → fallback 전환")
             return []
@@ -317,8 +330,8 @@ class MentorRetriever:
         user_jobs = self._to_set(user_profile.get("jobs", []))
         introduction = user_profile.get("introduction", "")
 
-        # 2) 프로필 텍스트 생성 (임베딩용)
-        profile_text = await self.get_user_profile_text(user_id)
+        # 2) 프로필 텍스트 생성 (임베딩용) - 이미 조회된 user_profile 재사용
+        profile_text = self._build_profile_text(user_profile)
         if not profile_text:
             logger.warning(
                 f"User {user_id} has insufficient profile data "
@@ -327,19 +340,23 @@ class MentorRetriever:
             return []
 
         # 3) 임베딩 생성
+        start = time.time()
         with tracer.start_as_current_span("embed_user_profile"):
-            user_embedding = self.embedder.embed_text(profile_text, is_query=True)
+            user_embedding = await self.embedder.embed_text(profile_text, is_query=True)
             embedding_list = user_embedding.tolist()
+        logger.info(f"Step 2: Embedding Generation took {time.time() - start:.2f}s")
 
         # 4) 벡터 유사도 검색 (직접 DB)
         candidate_limit = max(top_k * 5, 30)
 
+        start = time.time()
         with tracer.start_as_current_span("vector_search_db"):
             search_results = await self.vector_search_client.search_similar_experts(
                 query_embedding=embedding_list,
                 top_n=candidate_limit,
                 exclude_user_id=user_id,
             )
+        logger.info(f"Step 3: Vector Search took {time.time() - start:.2f}s")
 
         # [추가] 검색 결과가 전혀 없는 경우, DB 임베딩 상태 확인
         if not search_results:
@@ -347,44 +364,58 @@ class MentorRetriever:
             if status["total_count"] > 0 and status["embedded_count"] < status["total_count"]:
                 missing = status["total_count"] - status["embedded_count"]
                 logger.warning(
-                    f"🚨 DB에 전문가 {status['total_count']}명 중 {missing}명의 임베딩이 누락되었습니다. 자동 업데이트가 필요합니다."
+                    f"🚨 DB에 현직자 {status['total_count']}명 중 {missing}명의 임베딩이 누락되었습니다. 자동 업데이트가 필요합니다."
                 )
                 # 이 정보는 상위 컨트롤러에서 사용하여 Background Task를 트리거할 수 있음
                 # 하지만 retrieval 수준에서는 로깅과 결과 없음 반환에 집중
             elif status["total_count"] == 0:
-                logger.warning("🚨 DB에 전문가 데이터가 전혀 없습니다.")
+                logger.warning("🚨 DB에 현직자 데이터가 전혀 없습니다.")
 
-        # 5) 검색 결과에 멘토 상세 정보 결합 (병렬로 상위 후보들의 정보만 가져옴)
+        # 5) 검색 결과 병합 (최적화: 필요한 후보군에 대해서만 상세 정보 조회)
+        # top_k * 2 정도의 후보군만 상세 조회를 시도하여 네트워크 오버헤드 감소
+        search_results_to_fetch = search_results[: max(top_k * 2, 10)]
         import asyncio
 
         experts_map = {}
-        semaphore = asyncio.Semaphore(10)  # 10개 병렬
+        semaphore = asyncio.Semaphore(10)  # 동시 요청 수 제한
 
         async def _fetch_expert(uid):
+            if uid in self._expert_cache:
+                return uid, self._expert_cache[uid]
+
             async with semaphore:
-                details = await self.backend_client.get_expert_details(uid)
-                return uid, details
+                try:
+                    details = await self.backend_client.get_expert_details(uid)
+                    if details:
+                        self._expert_cache[uid] = details
+                    return uid, details
+                except Exception as e:
+                    logger.warning(f"Error fetching expert {uid}: {e}")
+                    return uid, None
 
-        fetch_tasks = [_fetch_expert(sr["user_id"]) for sr in search_results]
+        fetch_tasks = [_fetch_expert(sr["user_id"]) for sr in search_results_to_fetch]
 
+        start = time.time()
         with tracer.start_as_current_span("fetch_expert_details_batch"):
             try:
                 fetch_results = await asyncio.gather(*fetch_tasks)
                 experts_map = {uid: details for uid, details in fetch_results if details}
             except Exception as e:
                 logger.warning(f"멘토 상세 정보 취합 실패: {e}")
+        logger.info(f"Step 4: Fetch Expert Details took {time.time() - start:.2f}s")
 
         raw_candidates = []
-        for sr in search_results:
+        for sr in search_results_to_fetch:
             uid = sr["user_id"]
-            expert_data = experts_map.get(uid, {})
-            raw_candidates.append(
-                {
-                    **expert_data,
-                    "user_id": uid,
-                    "similarity_score": sr["similarity_score"],
-                }
-            )
+            if uid in experts_map:
+                expert_data = experts_map[uid]
+                raw_candidates.append(
+                    {
+                        **expert_data,
+                        "user_id": uid,
+                        "similarity_score": sr["similarity_score"],
+                    }
+                )
 
         # 6) 후보 데이터 변환
         all_candidates = [self._candidate_to_mentor(c, user_skills, user_jobs) for c in raw_candidates]
@@ -402,7 +433,9 @@ class MentorRetriever:
                 candidate.ground_truth = gt_result
 
         # 딕셔너리로 변환하여 반환
-        return [c.to_dict() for c in top_candidates]
+        result_list = [c.to_dict() for c in top_candidates]
+        logger.info(f"TOTAL Recommend Request took {time.time() - total_start:.2f}s (Results: {len(result_list)})")
+        return result_list
 
     async def fallback_by_response_rate(
         self,
@@ -459,7 +492,7 @@ class MentorRetriever:
         """
         텍스트 쿼리로 직접 멘토 검색 (로컬 DB 기반)
         """
-        query_embedding = self.embedder.embed_text(query_text, is_query=True)
+        query_embedding = await self.embedder.embed_text(query_text, is_query=True)
         embedding_list = query_embedding.tolist()
 
         # 로컬 DB에서 유사도 검색 수행
@@ -490,7 +523,7 @@ class MentorRetriever:
             logger.warning(f"Mentor {user_id} has no profile data to embed")
             return False
 
-        embedding = self.embedder.embed_text(profile_text, is_query=False)
+        embedding = await self.embedder.embed_text(profile_text, is_query=False)
         embedding_list = embedding.tolist()
 
         # 백엔드 API를 통해 저장 (백엔드에서 DB 업데이트 처리)
@@ -518,7 +551,7 @@ class MentorRetriever:
             logger.warning(f"User {user_id} has no profile text")
             return None
 
-        embedding = self.embedder.embed_text(profile_text, is_query=False)
+        embedding = await self.embedder.embed_text(profile_text, is_query=False)
         embedding_list = embedding.tolist()
 
         logger.debug(f"Computed embedding for user {user_id}, dim={len(embedding_list)}")
@@ -549,7 +582,7 @@ class MentorRetriever:
                 if page_num % 10 == 0 or page_num == 1:
                     logger.info(f"⏳ {page_num}페이지 진행 중... (현재까지 누적 업데이트: {updated_total}명)")
 
-                # 1. 백엔드에서 전문가 목록 한 페이지만 가져오기 (배치 사이즈 증대)
+                # 1. 백엔드에서 현직자 목록 한 페이지만 가져오기 (배치 사이즈 증대)
                 experts, cursor, has_more = await self.backend_client.get_experts_page(cursor=cursor, size=500)
                 if not experts:
                     break
@@ -569,7 +602,7 @@ class MentorRetriever:
 
                 if texts_to_embed:
                     # 3. 일괄 임베딩 생성 (Batch Embedding)
-                    embeddings = self.embedder.embed_texts(texts_to_embed)
+                    embeddings = await self.embedder.embed_texts(texts_to_embed)
 
                     # 4. 로컬 DB 및 백엔드 저장 (병렬 처리)
                     semaphore = asyncio.Semaphore(10)
@@ -669,7 +702,7 @@ class MentorRetriever:
             jobseeker_text = ". ".join(parts)
 
             # 임베딩 생성 및 Top-10 검색
-            query_embedding = self.embedder.embed_text(jobseeker_text)
+            query_embedding = await self.embedder.embed_text(jobseeker_text)
             embedding_list = query_embedding.tolist()
 
             candidates = await self.vector_search_client.search_similar_experts(

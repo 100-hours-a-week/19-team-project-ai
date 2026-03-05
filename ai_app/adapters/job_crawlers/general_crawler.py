@@ -48,7 +48,7 @@ class GeneralCrawler(BaseJobCrawler):
             body_text = body_text[:30000] + "..."
 
         system_prompt = (
-            "당신은 구인구직 사이트의 채용공고를 분석하는 전문가입니다.\n"
+            "당신은 구인구직 사이트의 채용공고를 분석하는 현직자입니다.\n"
             "입력된 웹페이지 텍스트에서 채용공고 정보를 추출하여 JSON 형식으로 응답하세요.\n"
             "추출할 항목: 제목(title), 회사명(company_name), 업종(industry), 위치(location), "
             "고용형태(job_type: 정규직, 계약직, 상관없음 중 하나), "

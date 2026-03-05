@@ -376,7 +376,7 @@ async def run_d1_pipeline(
 
     # 2. 쿼리 빌드 & 임베딩 생성
     query_text = build_query_text(conditions)
-    query_embedding = embedder.embed_text(query_text)
+    query_embedding = await embedder.embed_text(query_text)
     embedding_list = query_embedding.tolist()
 
     # 3. 벡터 검색 Top N (백엔드 API 경유)
