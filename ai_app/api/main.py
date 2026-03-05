@@ -49,11 +49,11 @@ async def add_process_time_header(request, call_next):
     start_time = time.time()
     response = await call_next(request)
     process_time = time.time() - start_time
-    
+
     # 터미널에서 즉시 확인할 수 있도록 강조 출력
     if not request.url.path.endswith(("/health", "/metrics")):
         print(f"\n>>> [PERF] {request.method} {request.url.path} | Duration: {process_time:.2f}s")
-    
+
     response.headers["X-Process-Time"] = str(process_time)
     return response
 

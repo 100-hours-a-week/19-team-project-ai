@@ -1,7 +1,6 @@
 import logging
 import os
 from functools import lru_cache
-from typing import Any
 
 import httpx
 import numpy as np
@@ -63,7 +62,7 @@ class ProfileEmbedder:
         if "e5" in self.model_name.lower():
             prefix = "query" if is_query else "passage"
             text = f"{prefix}: {text}"
-        
+
         # 로설 모델 연산도 CPU를 많이 쓰므로 비동기 이벤트 루프 배려 필요 (Thread 사용 권장되나 여기선 캐시로 해결)
         embedding = self.model.encode(text, normalize_embeddings=True)
         self._cache[cache_key] = embedding
