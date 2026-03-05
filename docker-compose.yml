@@ -1,0 +1,31 @@
+services:
+  ai:
+    image: ${ECR_REGISTRY}/${ECR_REPOSITORY_AI}:${AI_TAG:-main-latest}
+    env_file: .env.ai
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+    depends_on:
+      - otel-agent
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  otel-agent:
+    image: otel/opentelemetry-collector-contrib:0.115.1
+    container_name: refit-ai-otel-agent
+    hostname: otel-agent
+    restart: unless-stopped
+    user: "0"
+    command: ["--config=/etc/refit/otel-agent-config-ai.yaml"]
+    env_file:
+      - .env.ai
+    ports:
+      - "4317:4317"
+      - "4318:4318"
+    volumes:
+      - /etc/refit/otel-agent-config-ai.yaml:/etc/refit/otel-agent-config-ai.yaml:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro

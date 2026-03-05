@@ -1,44 +1,53 @@
-# AI Service Dockerfile
-# Multi-stage build for Python FastAPI application
+# AI 서비스 Dockerfile
+# 멀티 스테이지 빌드로 런타임 이미지 크기 최소화
 
-FROM --platform=linux/arm64 python:3.11-slim AS base
+FROM python:3.11-slim AS builder
 
-# Set working directory
 WORKDIR /app
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    UV_NO_DEV=1
 
-# Install system dependencies
+# 빌드 단계에서만 필요한 패키지 설치
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-        curl \
         build-essential \
         && rm -rf /var/lib/apt/lists/*
 
-# 의존성 먼저 설치 (레이어 캐시 활용 — 코드 변경 시 재설치 방지)
+# 런타임 의존성을 프로젝트 가상환경에 설치
 COPY pyproject.toml MANIFEST.in uv.lock ./
 RUN mkdir -p ai_app
-ENV UV_NO_DEV=1
-RUN pip install uv && uv sync --frozen --no-install-project
+RUN pip install --no-cache-dir uv && uv sync --frozen --no-install-project
 
-# 애플리케이션 코드는 마지막에 복사 (코드 변경 시 이 레이어만 갱신)
+# 애플리케이션 코드를 복사하고 lockfile 기준으로 동기화
 COPY ai_app ./ai_app
-RUN uv sync --locked
+RUN uv sync --locked && \
+    rm -rf /root/.cache /tmp/* && \
+    find /app/.venv -type d -name "__pycache__" -prune -exec rm -rf {} +
 
-# Create non-root user
-RUN useradd -m -u 1001 aiuser && \
-    chown -R aiuser:aiuser /app
 
-# Switch to non-root user
+FROM python:3.11-slim AS runtime
+
+WORKDIR /app
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+# 실행에 필요한 파일만 복사
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends curl && \
+    rm -rf /var/lib/apt/lists/* && \
+    useradd -m -u 1001 aiuser
+COPY --from=builder --chown=aiuser:aiuser /app/.venv /app/.venv
+COPY --from=builder --chown=aiuser:aiuser /app/ai_app /app/ai_app
 USER aiuser
 
-# Set PYTHONPATH so 'from api.endpoints' works
-ENV PYTHONPATH=/app/ai_app:$PYTHONPATH
+ENV PATH="/app/.venv/bin:$PATH"
+ENV PYTHONPATH=/app/ai_app
 
-# Expose port
 EXPOSE 8000
 
-# Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
-    CMD curl -f http://localhost:8000/health || exit 1
+    CMD curl -f http://127.0.0.1:8000/health || exit 1
 
-# Run application
-CMD ["uv", "run", "uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]
