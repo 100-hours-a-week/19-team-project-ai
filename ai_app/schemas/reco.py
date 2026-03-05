@@ -24,6 +24,7 @@ class MentorRecommendation(BaseModel):
     rating_count: int = Field(default=0, description="리뷰 수")
     response_rate: float = Field(default=0.0, description="응답률 (%)")
     skills: list[str] = Field(default_factory=list, description="기술 스택")
+    profile_image_url: str | None = Field(default=None, description="프로필 이미지 URL")
     jobs: list[str] = Field(default_factory=list, description="직무")
     introduction: str = Field(default="", description="자기소개")
     similarity_score: float = Field(..., description="임베딩 유사도 (0~1)")

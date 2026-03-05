@@ -33,6 +33,7 @@ class MentorCandidate:
     jobs: list[str]
     similarity_score: float
     last_active_at: str | None
+    profile_image_url: str | None = None
     filter_type: str | None = None
     ground_truth: dict | None = None
     # 내부 필터링용
@@ -56,6 +57,7 @@ class MentorCandidate:
             "filter_type": self.filter_type,
             "ground_truth": self.ground_truth,
             "last_active_at": self.last_active_at,
+            "profile_image_url": self.profile_image_url,
         }
         if include_internal:
             result["_job_matched"] = self._job_matched
@@ -162,6 +164,9 @@ class MentorRetriever:
         if last_active and hasattr(last_active, "isoformat"):
             last_active = last_active.isoformat()
 
+        # 6. 프로필 이미지 URL 매핑
+        profile_image_url = cand.get("profile_image_url") or cand.get("profileImageUrl") or cand.get("profile_image")
+
         return MentorCandidate(
             user_id=int(user_id),
             nickname=str(nickname),
@@ -175,6 +180,7 @@ class MentorRetriever:
             jobs=list(mentor_jobs),
             similarity_score=round(float(cand.get("similarity_score", 0.0)), 4),
             last_active_at=last_active if isinstance(last_active, str) else None,
+            profile_image_url=profile_image_url,
             _job_matched=bool(user_jobs & mentor_jobs),
             _skill_matched=bool(user_skills & mentor_skills),
         )
