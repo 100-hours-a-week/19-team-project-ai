@@ -4,8 +4,12 @@ on:
   workflow_dispatch:
     inputs:
       image_tag:
-        description: '복구할 Docker image tag (e.g., main-abc1234)'
-        required: true
+        description: '복구할 Docker image tag (e.g., main-abc1234). 입력 시 해당 태그로 재배포. 비워두면 Helm 이전 revision으로 롤백.'
+        required: false
+        type: string
+      revision:
+        description: '롤백할 Helm revision 번호 (비워두면 직전 revision으로 롤백)'
+        required: false
         type: string
 
 permissions:
@@ -16,7 +20,7 @@ env:
 
 jobs:
   rollback:
-    name: Rollback to Previous Image
+    name: Rollback AI (Prod) via Helm
     runs-on: ubuntu-latest
     timeout-minutes: 30
     concurrency:
@@ -25,17 +29,17 @@ jobs:
     environment: production
 
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Preflight - validate required secrets
         env:
-          ECR_REPOSITORY_AI: ${{ secrets.ECR_REPOSITORY_AI }}
-          EC2_HOST_PROD: ${{ secrets.EC2_HOST_PROD }}
-          EC2_USERNAME_PROD: ${{ secrets.EC2_USERNAME_PROD }}
-          EC2_SSH_KEY_PROD: ${{ secrets.EC2_SSH_KEY_PROD }}
-          COMPOSE_DIR_PROD: ${{ secrets.COMPOSE_DIR_PROD }}
-          ENV_FILE_PROD: ${{ secrets.ENV_FILE_PROD }}
+          K8S_KUBECONFIG_PROD: ${{ secrets.K8S_KUBECONFIG_PROD }}
+          K8S_NAMESPACE: ${{ secrets.K8S_NAMESPACE }}
+          K8S_HELM_RELEASE_NAME: ${{ secrets.K8S_HELM_RELEASE_NAME }}
         run: |
           set -euo pipefail
-          for v in ECR_REPOSITORY_AI EC2_HOST_PROD EC2_USERNAME_PROD EC2_SSH_KEY_PROD COMPOSE_DIR_PROD ENV_FILE_PROD; do
+          for v in K8S_KUBECONFIG_PROD K8S_NAMESPACE K8S_HELM_RELEASE_NAME; do
             if [ -z "${!v:-}" ]; then
               echo "Missing required secret: $v"
               exit 1
@@ -43,6 +47,7 @@ jobs:
           done
 
       - name: Configure AWS credentials
+        if: ${{ inputs.image_tag != '' }}
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
@@ -50,10 +55,12 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Login to Amazon ECR
+        if: ${{ inputs.image_tag != '' }}
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Verify image exists in ECR
+      - name: Verify image exists in ECR (image_tag 입력 시)
+        if: ${{ inputs.image_tag != '' }}
         run: |
           set -euo pipefail
           aws ecr describe-images \
@@ -61,85 +68,44 @@ jobs:
             --image-ids imageTag="${{ inputs.image_tag }}" \
             --region "${{ env.AWS_REGION }}" > /dev/null
 
-      - name: Mask sensitive values in logs
+      - name: Setup kubeconfig
         run: |
-          echo "::add-mask::${{ steps.login-ecr.outputs.registry }}"
-          echo "::add-mask::${{ secrets.ECR_REPOSITORY_AI }}"
-          echo "::add-mask::${{ inputs.image_tag }}"
-          echo "::add-mask::${{ secrets.EC2_HOST_PROD }}"
-          echo "::add-mask::${{ secrets.EC2_USERNAME_PROD }}"
-          echo "::add-mask::${{ secrets.EC2_SSH_PORT_PROD }}"
-          echo "::add-mask::${{ secrets.COMPOSE_DIR_PROD }}"
-          echo "::add-mask::${{ secrets.AWS_ACCESS_KEY_ID }}"
-          echo "::add-mask::${{ secrets.AWS_SECRET_ACCESS_KEY }}"
+          mkdir -p ~/.kube
+          echo "${{ secrets.K8S_KUBECONFIG_PROD }}" > ~/.kube/config
+          chmod 600 ~/.kube/config
 
-      - name: Rollback via SSH
-        id: rollback
-        uses: appleboy/ssh-action@v1
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+
+      - name: Rollback
         env:
-          ENV_FILE_PROD: ${{ secrets.ENV_FILE_PROD }}
-          COMPOSE_DIR: ${{ secrets.COMPOSE_DIR_PROD }}
-          IMAGE_TAG: ${{ inputs.image_tag }}
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          ECR_REPOSITORY_AI: ${{ secrets.ECR_REPOSITORY_AI }}
-          AWS_REGION: ${{ env.AWS_REGION }}
-        with:
-          host: ${{ secrets.EC2_HOST_PROD }}
-          username: ${{ secrets.EC2_USERNAME_PROD }}
-          key: ${{ secrets.EC2_SSH_KEY_PROD }}
-          port: ${{ secrets.EC2_SSH_PORT_PROD || '22' }}
-          envs: ENV_FILE_PROD,COMPOSE_DIR,IMAGE_TAG,ECR_REGISTRY,ECR_REPOSITORY_AI,AWS_REGION
-          script: |
-            set -euo pipefail
-            export PATH="/usr/local/bin:/usr/bin:/bin:$PATH"
+        run: |
+          set -euo pipefail
+          RELEASE="${{ secrets.K8S_HELM_RELEASE_NAME }}"
+          NAMESPACE="${{ secrets.K8S_NAMESPACE }}"
 
-            # 롤백 전 필수 구성요소 점검
-            [ -d "$COMPOSE_DIR" ] || { echo "Compose directory not found: $COMPOSE_DIR"; exit 1; }
-            command -v docker >/dev/null 2>&1 || { echo "docker not found"; exit 1; }
-            docker compose version >/dev/null 2>&1 || { echo "docker compose not found"; exit 1; }
-            command -v aws >/dev/null 2>&1 || { echo "aws cli not found"; exit 1; }
-
-            cd "$COMPOSE_DIR"
-            printf '%s\n' "$ENV_FILE_PROD" > .env.ai
-            chmod 644 .env.ai
-
-            aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "$ECR_REGISTRY" >/dev/null 2>&1
-
-            # .env 키를 안전하게 갱신(없으면 추가)
-            if grep -q '^ECR_REGISTRY=' .env 2>/dev/null; then
-              sed -i "s|^ECR_REGISTRY=.*|ECR_REGISTRY=${ECR_REGISTRY}|" .env
+          if [ -n "${{ inputs.image_tag }}" ]; then
+            echo "image_tag 지정: ${{ inputs.image_tag }} 으로 재배포"
+            helm upgrade --install "$RELEASE" charts/refit-ai \
+              --namespace "$NAMESPACE" \
+              --values charts/refit-ai/values-prod.yaml \
+              --set "image.repository=${ECR_REGISTRY}/${{ secrets.ECR_REPOSITORY_AI }}" \
+              --set "image.tag=${{ inputs.image_tag }}" \
+              --set "appSecretName=${{ secrets.K8S_APP_SECRET_NAME_PROD }}" \
+              --atomic \
+              --timeout 10m \
+              --cleanup-on-fail
+          else
+            REVISION="${{ inputs.revision }}"
+            if [ -z "$REVISION" ]; then
+              echo "직전 revision으로 롤백"
+              helm rollback "$RELEASE" --namespace "$NAMESPACE" --wait --timeout 10m
             else
-              echo "ECR_REGISTRY=${ECR_REGISTRY}" >> .env
+              echo "revision ${REVISION}으로 롤백"
+              helm rollback "$RELEASE" "$REVISION" --namespace "$NAMESPACE" --wait --timeout 10m
             fi
-
-            if grep -q '^ECR_REPOSITORY_AI=' .env 2>/dev/null; then
-              sed -i "s|^ECR_REPOSITORY_AI=.*|ECR_REPOSITORY_AI=${ECR_REPOSITORY_AI}|" .env
-            else
-              echo "ECR_REPOSITORY_AI=${ECR_REPOSITORY_AI}" >> .env
-            fi
-
-            if grep -q '^AI_TAG=' .env 2>/dev/null; then
-              sed -i "s|^AI_TAG=.*|AI_TAG=${IMAGE_TAG}|" .env
-            else
-              echo "AI_TAG=${IMAGE_TAG}" >> .env
-            fi
-
-            docker compose pull ai
-            docker compose up -d ai
-            docker image prune -a -f 2>/dev/null || true
-
-            for i in {1..20}; do
-              code=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8000/health || echo 000)
-              if [ "$code" = "200" ]; then
-                echo "Rollback health check passed"
-                exit 0
-              fi
-              echo "Rollback health check attempt ${i}/20 - HTTP ${code}"
-              sleep 5
-            done
-
-            echo "Rollback health check failed"
-            exit 1
+          fi
 
       - name: Notify Discord
         if: always()
@@ -147,6 +113,7 @@ jobs:
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
           STATUS: ${{ job.status }}
           IMAGE_TAG: ${{ inputs.image_tag }}
+          REVISION: ${{ inputs.revision }}
           RUN_ID: ${{ github.run_id }}
         run: |
           [ -z "$DISCORD_WEBHOOK" ] && exit 0
@@ -159,6 +126,8 @@ jobs:
             TITLE="AI 롤백 실패"
           fi
 
+          ROLLBACK_TARGET="${IMAGE_TAG:-revision ${REVISION:-이전}}"
+
           payload=$(cat <<EOF
           {
             "embeds": [{
@@ -166,7 +135,7 @@ jobs:
               "color": $COLOR,
               "fields": [
                 {"name": "서비스", "value": "Re-Fit AI (Prod)", "inline": true},
-                {"name": "이미지 태그", "value": "\`$IMAGE_TAG\`", "inline": true},
+                {"name": "롤백 대상", "value": "\`$ROLLBACK_TARGET\`", "inline": true},
                 {"name": "워크플로우", "value": "[상세 보기](https://github.com/${{ github.repository }}/actions/runs/$RUN_ID)", "inline": false}
               ],
               "footer": { "text": "Re-Fit AI Rollback" },
