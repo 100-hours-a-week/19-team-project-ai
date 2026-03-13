@@ -1,0 +1,86 @@
+replicaCount: 1
+
+image:
+  repository: ""
+  tag: "main-latest"
+  pullPolicy: Always
+
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+imagePullSecrets: []
+# - name: ecr-secret
+
+nodeSelector: {}
+
+tolerations: []
+
+service:
+  type: ClusterIP
+  port: 8000
+
+# 클러스터에 사전 생성된 Secret 이름 (kubectl create secret generic으로 생성)
+# 예: refit-ai-env-prod
+appSecretName: ""
+
+# 인라인으로 Secret을 생성할 경우 사용 (appSecretName과 함께 사용하지 않음)
+inlineSecretEnv: {}
+# KEY: value
+
+httproute:
+  enabled: true
+  parentRefs:
+    - name: refit-gateway
+      namespace: refit-app
+  hostnames: []
+  # - api.refit.com
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /ai
+      backendRefs:
+        - name: ""
+          port: 8000
+
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 3
+  targetCPUUtilizationPercentage: 70
+
+resources:
+  requests:
+    cpu: "250m"
+    memory: "512Mi"
+  limits:
+    cpu: "1000m"
+    memory: "2Gi"
+
+# emptyDir 볼륨 마운트 경로
+uploadVolume:
+  enabled: true
+  mountPath: /tmp/refit-ai/uploads
+
+livenessProbe:
+  httpGet:
+    path: /health
+    port: 8000
+  initialDelaySeconds: 30
+  periodSeconds: 30
+  timeoutSeconds: 10
+  failureThreshold: 3
+
+readinessProbe:
+  httpGet:
+    path: /health
+    port: 8000
+  initialDelaySeconds: 20
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 3
