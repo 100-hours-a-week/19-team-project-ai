@@ -8,25 +8,26 @@ appSecretName: "refit-ai-env-prod"
 imagePullSecrets:
   - name: ecr-secret
 
-# worker 노드에만 배포 (master는 control-plane 전용)
-nodeSelector:
-  node-role.kubernetes.io/worker-1: "worker-1"
+nodeSelector: {}
 
 httproute:
   enabled: true
   parentRefs:
     - name: refit-gateway
       namespace: refit-app
-  hostnames:
-    - api.refit.com
+  hostnames: []
   rules:
     - matches:
         - path:
             type: PathPrefix
-            value: /ai
+            value: /api/ai
       backendRefs:
         - name: refit-ai
           port: 8000
+
+healthCheckRoute:
+  enabled: true
+  path: /api/ai/health
 
 autoscaling:
   enabled: true
@@ -34,8 +35,6 @@ autoscaling:
   maxReplicas: 3
   targetCPUUtilizationPercentage: 70
 
-# worker 노드: 2CPU / 7.8GB RAM
-# 현재 사용: ~2.5GB → 여유 ~5.3GB
 resources:
   requests:
     cpu: "500m"
@@ -43,3 +42,11 @@ resources:
   limits:
     cpu: "2000m"
     memory: "3Gi"
+
+startupProbe:
+  httpGet:
+    path: /health
+    port: 8000
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 24

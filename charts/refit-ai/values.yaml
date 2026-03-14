@@ -14,23 +14,24 @@ serviceAccount:
   name: ""
 
 imagePullSecrets: []
-# - name: ecr-secret
 
 nodeSelector: {}
 
 tolerations: []
 
+deploymentStrategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxSurge: 0
+    maxUnavailable: 1
+
 service:
   type: ClusterIP
   port: 8000
 
-# 클러스터에 사전 생성된 Secret 이름 (kubectl create secret generic으로 생성)
-# 예: refit-ai-env-prod
 appSecretName: ""
 
-# 인라인으로 Secret을 생성할 경우 사용 (appSecretName과 함께 사용하지 않음)
 inlineSecretEnv: {}
-# KEY: value
 
 httproute:
   enabled: true
@@ -38,15 +39,19 @@ httproute:
     - name: refit-gateway
       namespace: refit-app
   hostnames: []
-  # - api.refit.com
+
   rules:
     - matches:
         - path:
             type: PathPrefix
-            value: /ai
+            value: /api/ai
       backendRefs:
         - name: ""
           port: 8000
+
+healthCheckRoute:
+  enabled: true
+  path: /api/ai/health
 
 autoscaling:
   enabled: false
@@ -62,7 +67,6 @@ resources:
     cpu: "1000m"
     memory: "2Gi"
 
-# emptyDir 볼륨 마운트 경로
 uploadVolume:
   enabled: true
   mountPath: /tmp/refit-ai/uploads
@@ -84,3 +88,11 @@ readinessProbe:
   periodSeconds: 10
   timeoutSeconds: 5
   failureThreshold: 3
+
+startupProbe:
+  httpGet:
+    path: /health
+    port: 8000
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 18
