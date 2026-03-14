@@ -3,7 +3,7 @@
 from controllers.agent_controller import AgentController, get_agent_controller
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
-from schemas.agent import AgentReplyRequest
+from schemas.agent import AgentReplyRequest, AgentSessionCreateRequest
 from schemas.common import ApiResponse
 
 router = APIRouter(prefix="/agent", tags=["Agent"])
@@ -13,15 +13,16 @@ router = APIRouter(prefix="/agent", tags=["Agent"])
     "/sessions",
     response_model=ApiResponse[dict],
     summary="새 Agent 세션 생성",
-    description="새로운 Agent 채팅 세션을 생성하고 session_id를 반환합니다.",
+    description="새로운 Agent 채팅 세션을 생성합니다. 공고 링크를 미리 전달할 수 있습니다.",
 )
 async def create_session(
+    request: AgentSessionCreateRequest | None = None,
     controller: AgentController = Depends(get_agent_controller),
 ) -> ApiResponse[dict]:
     """새 세션 생성"""
     from schemas.common import ResponseCode
 
-    session = await controller.create_session()
+    session = await controller.create_session(request)
     return ApiResponse(code=ResponseCode.OK, data=session)
 
 
