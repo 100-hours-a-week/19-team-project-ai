@@ -5,9 +5,10 @@ import logging
 import os
 
 from middleware.otel_lgtm_metrics import tracked_db_connection
-from schemas.agent import AgentReplyRequest
+from schemas.agent import AgentReplyRequest, AgentSessionCreateRequest
 from services.agent.graph import get_agent_graph
 from services.agent.session import get_session_store
+from services.repo.job_parser import parse_job_from_url
 
 logger = logging.getLogger(__name__)
 
@@ -35,10 +36,24 @@ class AgentController:
 
     # ============== 세션 관리 ==============
 
-    async def create_session(self) -> dict:
-        """새 세션 생성"""
+    async def create_session(self, request: AgentSessionCreateRequest | None = None) -> dict:
+        """새 세션 생성 및 초기 공고 파싱"""
         store = get_session_store()
         session = store.create()
+
+        if request:
+            session.job_link = request.job_link
+
+            # 공고 링크가 있으면 즉시 파싱
+            if request.job_link:
+                logger.info(f"세션 생성 시 공고 파싱 시작: {request.job_link}")
+                try:
+                    parsed = await parse_job_from_url(request.job_link)
+                    if parsed.get("success"):
+                        session.parsed_job_data = parsed["data"]
+                except Exception as e:
+                    logger.error(f"초기 공고 파싱 실패: {e}")
+
         return session.to_dict()
 
     async def list_sessions(self) -> list[dict]:
@@ -87,8 +102,11 @@ class AgentController:
         config = {"callbacks": [langfuse_handler]}
         inputs = {
             "message": request.message,
+            "target_job": session.target_job,
+            "job_link": session.job_link,
             "history": session.get_history(),
             "top_k": request.top_k,
+            "post_process_result": session.parsed_job_data,
             "events": [],
         }
 
@@ -108,6 +126,10 @@ class AgentController:
                 # 의도 저장 (classify_intent 노드인 경우)
                 if node_name == "classify_intent" and "intent_result" in node_output:
                     session.last_intent = node_output["intent_result"].intent
+
+                # 파싱 데이터 업데이트 (organize_input_node 또는 post_process_node 등에서 갱신 시)
+                if "post_process_result" in node_output and node_output["post_process_result"]:
+                    session.parsed_job_data = node_output["post_process_result"]
 
         # 세션에 어시스턴트 응답 추가
         if reply_text:

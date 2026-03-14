@@ -188,14 +188,8 @@ def rule_rerank(
     # Top K 선택 & MentorCard 변환
     cards = []
     for item in scored[:top_k]:
-        # 필드 매핑 보정
-        user_id = item.get("user_id") or item.get("id")
-        if user_id is None:
-            continue
-
         cards.append(
             MentorCard(
-                user_id=int(user_id),
                 nickname=item.get("nickname") or item.get("name") or "이름 없음",
                 company_name=item.get("company_name") or item.get("organization"),
                 verified=item.get("verified", False),

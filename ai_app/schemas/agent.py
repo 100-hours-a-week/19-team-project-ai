@@ -15,6 +15,12 @@ class AgentReplyRequest(BaseModel):
     top_k: int = Field(default=3, ge=1, le=20, description="추천 멘토 수")
 
 
+class AgentSessionCreateRequest(BaseModel):
+    """Agent 세션 생성 요청"""
+
+    job_link: str | None = Field(default=None, description="채용 공고 URL")
+
+
 # ============== 의도 분류 ==============
 
 
@@ -65,7 +71,6 @@ class MentorConditions(BaseModel):
 class MentorCard(BaseModel):
     """추천 멘토 카드"""
 
-    user_id: int = Field(..., description="멘토 사용자 ID")
     nickname: str = Field(..., description="닉네임")
     company_name: str | None = Field(default=None, description="회사명")
     verified: bool = Field(default=False, description="인증 여부")
@@ -100,3 +105,6 @@ class SessionInfo(BaseModel):
     created_at: str = Field(..., description="생성 시각")
     message_count: int = Field(default=0, description="총 메시지 수")
     last_intent: str | None = Field(default=None, description="마지막 의도")
+    target_job: str | None = Field(default=None, description="희망 직무")
+    job_link: str | None = Field(default=None, description="채용 공고 URL")
+    parsed_job_data: dict | None = Field(default=None, description="파싱된 공고 데이터")

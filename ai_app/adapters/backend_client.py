@@ -4,7 +4,7 @@ import logging
 import os
 import traceback
 from functools import lru_cache
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 from opentelemetry import trace
@@ -139,8 +139,8 @@ class BackendAPIClient:
     # ---------- 멘토 목록 ----------
 
     async def get_experts_page(
-        self, cursor: str | None = None, size: int = 100
-    ) -> tuple[list[dict[str, Any]], str | None, bool]:
+        self, cursor: Optional[str] = None, size: int = 100
+    ) -> Tuple[List[Dict[str, Any]], Optional[str], bool]:
         """멘토 목록 한 페이지 조회 (Pagination)"""
         url = f"{self.v1_url}/experts"
         params: dict[str, Any] = {"size": size}

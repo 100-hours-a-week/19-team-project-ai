@@ -1,5 +1,7 @@
 """멘토 검색 모듈 - 필터링 + 임베딩 유사도 기반 추천"""
 
+from __future__ import annotations
+
 import logging
 from dataclasses import dataclass
 from typing import Any
@@ -504,7 +506,7 @@ class MentorRetriever:
         return [
             {
                 "user_id": e["user_id"],
-                "nickname": f"Mentor {e['user_id']}",
+                "nickname": e.get("nickname") or f"Mentor {e['user_id']}",
                 "similarity_score": round(float(e["similarity_score"]), 4),
             }
             for e in experts

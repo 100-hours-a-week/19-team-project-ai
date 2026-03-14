@@ -1,6 +1,7 @@
 import logging
 import os
 from functools import lru_cache
+from typing import Optional
 
 import httpx
 import numpy as np
@@ -9,7 +10,7 @@ from sentence_transformers import SentenceTransformer
 logger = logging.getLogger(__name__)
 
 # 전역 HTTP 클라이언트 (커넥션 풀 공유)
-_async_client: httpx.AsyncClient | None = None
+_async_client: Optional[httpx.AsyncClient] = None
 
 
 async def get_async_client() -> httpx.AsyncClient:
@@ -24,7 +25,7 @@ class ProfileEmbedder:
 
     def __init__(self, model_name: str = "intfloat/multilingual-e5-large-instruct"):
         self.model_name = model_name
-        self._model: SentenceTransformer | None = None
+        self._model: Optional[SentenceTransformer] = None
 
         # RunPod 설정
         self.use_runpod = os.getenv("USE_RUNPOD_EMBEDDING", "false").lower() == "true"
