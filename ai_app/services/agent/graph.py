@@ -1,18 +1,14 @@
 """Agent LangGraph — StateGraph 기반 파이프라인 오케스트레이션"""
 
 import logging
-from typing import Annotated, Any, TypedDict
+from typing import Annotated, TypedDict
 
+from adapters.llm_client import get_llm_client
 from langgraph.graph import END, StateGraph
+from prompts import load_prompt
 from schemas.agent import IntentResult, MentorCard, MentorConditions
 
 from services.agent.intent_router import IntentRouter
-from services.agent.slot_filling import SlotFiller
-from services.reco.embedder import get_embedder
-from services.repo.feedback_collector import get_feedback_collector
-from services.repo.job_parser import parse_job_from_url
-from adapters.llm_client import get_llm_client
-from prompts import load_prompt
 from services.agent.mentor_search import (
     build_query_text,
     check_need_more_conditions,
@@ -20,6 +16,10 @@ from services.agent.mentor_search import (
     rule_rerank,
     vector_search,
 )
+from services.agent.slot_filling import SlotFiller
+from services.reco.embedder import get_embedder
+from services.repo.feedback_collector import get_feedback_collector
+from services.repo.job_parser import parse_job_from_url
 
 logger = logging.getLogger(__name__)
 
@@ -176,16 +176,16 @@ async def handle_d2_node(state: AgentState) -> dict:
 async def organize_input_node(state: AgentState) -> dict:
     """[D3] 입력 정리 노드: 질문, 목표 직무, 이력서, 히스토리 통합"""
     logger.info("D3 입력 정리 중...")
-    
+
     target_job = state.get("target_job") or "개발자"
     job_link = state.get("job_link")
     # 세션에서 이미 파싱된 데이터가 있을 수 있음 (AgentController에서 주입)
     parsed_job_data = state.get("post_process_result")  # 임시로 post_process_result 등에 저장하거나 AgentState 확장 필요
 
     resume_context = state.get("resume") or "대학교 4학년, 코딩 테스트 준비 중"
-    
+
     events = []
-    
+
     # 1. 이미 파싱된 데이터가 있는지 확인
     if parsed_job_data:
         logger.info("기존 세션에서 파싱된 공고 데이터를 활용합니다.")
@@ -209,7 +209,7 @@ async def organize_input_node(state: AgentState) -> dict:
             logger.error(f"공고 파싱 중 오류: {e}")
 
     events.append({"event": "text", "data": {"chunk": "사용자님의 상황과 목표를 바탕으로 분석을 시작할게요. 🔍\n"}})
-    
+
     return {
         "target_job": target_job,
         "resume": resume_context,
@@ -221,13 +221,13 @@ async def organize_input_node(state: AgentState) -> dict:
 async def generate_search_query_node(state: AgentState) -> dict:
     """[D3] 검색 질의 생성 노드: LLM을 이용해 검색 키워드 및 의도 파악"""
     llm = get_llm_client()
-    
+
     prompt = f"""사용자 질문: {state['message']}
 목표 직무: {state.get('target_job')}
 사용자 이력서 요약: {state.get('resume')}
 
 위 정보를 바탕으로 현직자 피드백 데이터셋에서 검색할 핵심 키워드 3~5개만 콤마(,)로 구분하여 출력하세요. 다른 설명은 절대 하지 마세요."""
-    
+
     try:
         query = await llm.generate(prompt=prompt, temperature=0.2)
         query = query.strip().replace("\n", " ")
@@ -244,17 +244,14 @@ async def generate_search_query_node(state: AgentState) -> dict:
 async def feedback_retrieval_node(state: AgentState) -> dict:
     """[D3] RAG 검색 노드: 피드백 데이터셋에서 유사 답변 검색"""
     collector = get_feedback_collector()
-    embedder = get_embedder()
-    
-    # 1. 질의 임베딩
-    query_embedding = await embedder.embed_text(state["search_query"])
-    embedding_list = query_embedding.tolist()
-    
+
+    # 1. 질의 임베딩 (현재 검색 노드 Mock 상태로 미사용 - 추후 복구 시 get_embedder 사용)
+
     # 2. 피드백 검색 (현재는 Mock 또는 DB 연동)
     # TODO: VectorSearchClient에 search_feedback 메서드 추가 필요
     # 지금은 Mock 데이터로 흐름 완성
     feedbacks = await collector.collect_from_mentoring_history(limit=5)
-    
+
     # 필터링 로직 (직무 태그 등)
     target_job = state.get("target_job", "").lower()
     filtered = [f.model_dump() for f in feedbacks if target_job in f.job_tag.lower()] or [f.model_dump() for f in feedbacks]
@@ -270,7 +267,7 @@ async def compress_context_node(state: AgentState) -> dict:
     context = state.get("feedback_context", [])
     if not context:
         return {"events": []}
-        
+
     # TODO: LLM을 이용한 중복 제거 및 요약 로직 추가 가능
     logger.info(f"{len(context)}개의 컨텍스트 정리 완료")
     return {"events": []}
@@ -280,12 +277,12 @@ async def generate_answer_node(state: AgentState) -> dict:
     """[D3] 답변 생성 노드: 페르소나와 정책에 따른 최종 답변 생성"""
     llm = get_llm_client()
     system_prompt = load_prompt("aimento_d3_system")
-    
+
     context_text = "\n\n".join([
-        f"질문: {c['question']}\n답변: {c['answer']}\n(멘토 ID: {c.get('mentor_id', 'N/A')})" 
+        f"질문: {c['question']}\n답변: {c['answer']}\n(멘토 ID: {c.get('mentor_id', 'N/A')})"
         for c in state.get("feedback_context", [])
     ])
-    
+
     user_prompt = f"""## 사용자 질문
 {state['message']}
 
@@ -305,12 +302,12 @@ async def generate_answer_node(state: AgentState) -> dict:
             system_instruction=system_prompt,
             temperature=0.7
         )
-        
+
         text_events = []
         for line in reply.split("\n"):
             if line.strip():
                 text_events.append({"event": "text", "data": {"chunk": line + "\n"}})
-        
+
         return {
             "reply_text": reply,
             "events": text_events
@@ -327,14 +324,14 @@ async def generate_answer_node(state: AgentState) -> dict:
 async def post_process_node(state: AgentState) -> dict:
     """[D3] 후처리 노드: 일반론 검사 및 액션 아이템 확인"""
     reply = state.get("reply_text", "")
-    
+
     # 간단한 품질 체크
     has_action_items = "액션 아이템" in reply or "실천" in reply or "-" in reply
     is_too_short = len(reply) < 50
-    
+
     if is_too_short:
         logger.warning("답변이 너무 짧습니다. 재생성이 필요할 수 있습니다.")
-        
+
     return {
         "post_process_result": {
             "has_action_items": has_action_items,

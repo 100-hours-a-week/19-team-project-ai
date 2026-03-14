@@ -1,8 +1,10 @@
 import logging
-from typing import Any, Optional
+from typing import Optional
+
 from adapters.backend_client import BackendAPIClient, get_backend_client
-from services.reco.embedder import ProfileEmbedder, get_embedder
 from schemas.feedback import ExpertFeedback
+
+from services.reco.embedder import ProfileEmbedder, get_embedder
 
 logger = logging.getLogger(__name__)
 
@@ -10,7 +12,7 @@ class FeedbackCollector:
     """현직자 피드백 데이터 수집 및 관리 서비스"""
 
     def __init__(
-        self, 
+        self,
         backend_client: Optional[BackendAPIClient] = None,
         embedder: Optional[ProfileEmbedder] = None
     ):
@@ -25,7 +27,7 @@ class FeedbackCollector:
         # TODO: 백엔드 API에 멘토링 이력 조회 엔드포인트 추가 시 연동
         # 지금은 설계를 위해 샘플 데이터를 반환하는 구조로 잡음
         logger.info(f"멘토링 이력에서 {limit}개의 피드백 수집 시작")
-        
+
         # 실제 구현 시에는 self.backend_client.get_mentoring_history() 호출
         samples = [
             ExpertFeedback(
@@ -54,7 +56,7 @@ class FeedbackCollector:
             text_to_embed = f"질문: {fb.question}\n답변: {fb.answer}"
             embedding = await self.embedder.embed_text(text_to_embed)
             fb.embedding = embedding.tolist()
-            
+
         logger.info(f"{len(feedbacks)}개의 피드백 데이터 임베딩 완료")
         return feedbacks
 

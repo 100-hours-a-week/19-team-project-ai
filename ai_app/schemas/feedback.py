@@ -1,5 +1,7 @@
 from typing import Optional
+
 from pydantic import BaseModel, Field
+
 
 class ExpertFeedback(BaseModel):
     """현직자 피드백 데이터 스키마 (RAG용)"""

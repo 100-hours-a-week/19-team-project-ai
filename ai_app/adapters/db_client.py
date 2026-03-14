@@ -2,7 +2,7 @@
 
 import logging
 import os
-from typing import Any, Optional, Union, List, Dict
+from typing import Any, Dict, List, Optional
 
 import asyncpg
 from opentelemetry import trace

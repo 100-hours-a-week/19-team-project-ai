@@ -1,10 +1,10 @@
 import logging
 import os
 from functools import lru_cache
+from typing import Optional
 
 import httpx
 import numpy as np
-from typing import Optional, Union, Any, Dict, List
 from sentence_transformers import SentenceTransformer
 
 logger = logging.getLogger(__name__)

@@ -30,15 +30,11 @@ elif os.path.exists(env_path):
 else:
     load_dotenv() # Fallback to standard search
 
-# OpenTelemetry 트레이서 프로바이더 설정 (ENABLE_OTEL=true일 때만 활성화)
-if os.getenv("ENABLE_OTEL", "false").lower() == "true":
-    _otlp_endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://10.0.7.8:4318")
-    _provider = TracerProvider()
-    _provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter(endpoint=_otlp_endpoint)))
-    trace.set_tracer_provider(_provider)
-    # FastAPI 자동 트레이싱 (otel-collector → Tempo)
-    FastAPIInstrumentor.instrument_app(app)
-else:
+# OpenTelemetry 호스트 설정 저장 (ENABLE_OTEL=true일 때 나중에 활성화)
+ENABLE_OTEL = os.getenv("ENABLE_OTEL", "false").lower() == "true"
+OTLP_ENDPOINT = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://10.0.7.8:4318")
+
+if not ENABLE_OTEL:
     logging.info("OpenTelemetry 가 비활성화되었습니다. (ENABLE_OTEL=false)")
 
 # 로깅 설정 강제 (터미널 출력 보장)
@@ -55,6 +51,14 @@ app = FastAPI(
 
 # LGTM 대시보드 호환 커스텀 메트릭 추가
 install_lgtm_metrics(app)
+
+# OpenTelemetry 트레이싱 활성화 (app 정의 이후에 실행)
+if ENABLE_OTEL:
+    _provider = TracerProvider()
+    _provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter(endpoint=OTLP_ENDPOINT)))
+    trace.set_tracer_provider(_provider)
+    FastAPIInstrumentor.instrument_app(app)
+    logging.info(f"OpenTelemetry 가 활성화되었습니다. (endpoint={OTLP_ENDPOINT})")
 
 
 @app.middleware("http")
