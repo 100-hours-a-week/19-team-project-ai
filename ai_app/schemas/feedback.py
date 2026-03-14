@@ -4,6 +4,7 @@ from pydantic import BaseModel, Field
 class ExpertFeedback(BaseModel):
     """현직자 피드백 데이터 스키마 (RAG용)"""
     id: Optional[int] = Field(None, description="피드백 식별자")
+    mentor_id: Optional[int] = Field(None, description="피드백을 제공한 멘토 ID")
     question: str = Field(..., description="사용자 질문 또는 멘토링 요청 내용")
     answer: str = Field(..., description="현직자의 답변 내용")
     job_tag: str = Field(..., description="직무 태그 (예: 백엔드, 프론트엔드, 데이터 엔지니어)")

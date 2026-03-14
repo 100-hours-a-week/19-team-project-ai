@@ -505,7 +505,7 @@ class MentorRetriever:
         return [
             {
                 "user_id": e["user_id"],
-                "nickname": f"Mentor {e['user_id']}",
+                "nickname": e.get("nickname") or f"Mentor {e['user_id']}",
                 "similarity_score": round(float(e["similarity_score"]), 4),
             }
             for e in experts
