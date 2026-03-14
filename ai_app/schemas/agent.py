@@ -71,7 +71,6 @@ class MentorConditions(BaseModel):
 class MentorCard(BaseModel):
     """추천 멘토 카드"""
 
-    user_id: int = Field(..., description="멘토 사용자 ID")
     nickname: str = Field(..., description="닉네임")
     company_name: str | None = Field(default=None, description="회사명")
     verified: bool = Field(default=False, description="인증 여부")
