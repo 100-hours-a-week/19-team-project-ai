@@ -86,8 +86,6 @@ class AgentController:
         store = get_session_store()
         session = store.get_or_create(request.session_id)
 
-
-
         # 세션에 사용자 메시지 추가
         session.add_user_message(request.message)
 

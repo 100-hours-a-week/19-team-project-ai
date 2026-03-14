@@ -28,7 +28,7 @@ if os.path.exists(env_ai_path):
 elif os.path.exists(env_path):
     load_dotenv(env_path)
 else:
-    load_dotenv() # Fallback to standard search
+    load_dotenv()  # Fallback to standard search
 
 # OpenTelemetry 호스트 설정 저장 (ENABLE_OTEL=true일 때 나중에 활성화)
 ENABLE_OTEL = os.getenv("ENABLE_OTEL", "false").lower() == "true"
@@ -121,5 +121,3 @@ app.include_router(resumes_router.router, prefix="/api/ai")
 app.include_router(reco_router.router, prefix="/api/ai")
 app.include_router(repo_router.router, prefix="/api/ai")
 app.include_router(agent_router.router, prefix="/api/ai")
-
-

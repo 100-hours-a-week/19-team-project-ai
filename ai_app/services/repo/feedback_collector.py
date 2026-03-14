@@ -8,14 +8,11 @@ from services.reco.embedder import ProfileEmbedder, get_embedder
 
 logger = logging.getLogger(__name__)
 
+
 class FeedbackCollector:
     """현직자 피드백 데이터 수집 및 관리 서비스"""
 
-    def __init__(
-        self,
-        backend_client: Optional[BackendAPIClient] = None,
-        embedder: Optional[ProfileEmbedder] = None
-    ):
+    def __init__(self, backend_client: Optional[BackendAPIClient] = None, embedder: Optional[ProfileEmbedder] = None):
         self.backend_client = backend_client or get_backend_client()
         self.embedder = embedder or get_embedder()
 
@@ -35,15 +32,15 @@ class FeedbackCollector:
                 question="백엔드 신입으로 취업하고 싶은데 어떤 프로젝트가 경쟁력 있을까요?",
                 answer="단순한 CRUD보다는 대용량 트래픽 처리를 고려한 아키텍처나, MSA 기반의 분산 시스템 경험이 담긴 프로젝트가 좋습니다.",
                 job_tag="백엔드",
-                question_type="프로젝트"
+                question_type="프로젝트",
             ),
             ExpertFeedback(
                 mentor_id=102,
                 question="비전공자인데 자바 공부는 어떻게 시작하는 게 좋을까요?",
                 answer="자바의 정석 같은 기본서로 문법을 익히되, 반드시 Spring Framework를 활용한 실무 프로젝트를 병행하세요.",
                 job_tag="백엔드",
-                question_type="기술스택"
-            )
+                question_type="기술스택",
+            ),
         ]
         return samples
 
@@ -60,8 +57,10 @@ class FeedbackCollector:
         logger.info(f"{len(feedbacks)}개의 피드백 데이터 임베딩 완료")
         return feedbacks
 
+
 # 싱글톤
 _collector: Optional[FeedbackCollector] = None
+
 
 def get_feedback_collector() -> FeedbackCollector:
     global _collector

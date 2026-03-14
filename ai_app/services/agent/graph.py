@@ -180,7 +180,9 @@ async def organize_input_node(state: AgentState) -> dict:
     target_job = state.get("target_job") or "개발자"
     job_link = state.get("job_link")
     # 세션에서 이미 파싱된 데이터가 있을 수 있음 (AgentController에서 주입)
-    parsed_job_data = state.get("post_process_result")  # 임시로 post_process_result 등에 저장하거나 AgentState 확장 필요
+    parsed_job_data = state.get(
+        "post_process_result"
+    )  # 임시로 post_process_result 등에 저장하거나 AgentState 확장 필요
 
     resume_context = state.get("resume") or "대학교 4학년, 코딩 테스트 준비 중"
 
@@ -193,7 +195,9 @@ async def organize_input_node(state: AgentState) -> dict:
         resume_context += job_desc
     # 2. 파싱된 데이터는 없지만 링크는 있는 경우 (새로운 링크 등)
     elif job_link:
-        events.append({"event": "text", "data": {"chunk": f"제공해주신 공고 링크({job_link})를 분석하고 있어요... 🔗\n"}})
+        events.append(
+            {"event": "text", "data": {"chunk": f"제공해주신 공고 링크({job_link})를 분석하고 있어요... 🔗\n"}}
+        )
         try:
             parsed = await parse_job_from_url(job_link)
             if parsed.get("success"):
@@ -213,8 +217,8 @@ async def organize_input_node(state: AgentState) -> dict:
     return {
         "target_job": target_job,
         "resume": resume_context,
-        "post_process_result": parsed_job_data, # 세션 업데이트를 위해 전달
-        "events": events
+        "post_process_result": parsed_job_data,  # 세션 업데이트를 위해 전달
+        "events": events,
     }
 
 
@@ -222,9 +226,9 @@ async def generate_search_query_node(state: AgentState) -> dict:
     """[D3] 검색 질의 생성 노드: LLM을 이용해 검색 키워드 및 의도 파악"""
     llm = get_llm_client()
 
-    prompt = f"""사용자 질문: {state['message']}
-목표 직무: {state.get('target_job')}
-사용자 이력서 요약: {state.get('resume')}
+    prompt = f"""사용자 질문: {state["message"]}
+목표 직무: {state.get("target_job")}
+사용자 이력서 요약: {state.get("resume")}
 
 위 정보를 바탕으로 현직자 피드백 데이터셋에서 검색할 핵심 키워드 3~5개만 콤마(,)로 구분하여 출력하세요. 다른 설명은 절대 하지 마세요."""
 
@@ -237,7 +241,7 @@ async def generate_search_query_node(state: AgentState) -> dict:
     logger.info(f"D3 검색 질의 생성: {query}")
     return {
         "search_query": query,
-        "events": [{"event": "text", "data": {"chunk": "현직자들의 조언을 검색하고 있어요... 🔍\n"}}]
+        "events": [{"event": "text", "data": {"chunk": "현직자들의 조언을 검색하고 있어요... 🔍\n"}}],
     }
 
 
@@ -254,12 +258,11 @@ async def feedback_retrieval_node(state: AgentState) -> dict:
 
     # 필터링 로직 (직무 태그 등)
     target_job = state.get("target_job", "").lower()
-    filtered = [f.model_dump() for f in feedbacks if target_job in f.job_tag.lower()] or [f.model_dump() for f in feedbacks]
+    filtered = [f.model_dump() for f in feedbacks if target_job in f.job_tag.lower()] or [
+        f.model_dump() for f in feedbacks
+    ]
 
-    return {
-        "feedback_context": filtered[:5],
-        "events": []
-    }
+    return {"feedback_context": filtered[:5], "events": []}
 
 
 async def compress_context_node(state: AgentState) -> dict:
@@ -278,17 +281,19 @@ async def generate_answer_node(state: AgentState) -> dict:
     llm = get_llm_client()
     system_prompt = load_prompt("aimento_d3_system")
 
-    context_text = "\n\n".join([
-        f"질문: {c['question']}\n답변: {c['answer']}\n(멘토 ID: {c.get('mentor_id', 'N/A')})"
-        for c in state.get("feedback_context", [])
-    ])
+    context_text = "\n\n".join(
+        [
+            f"질문: {c['question']}\n답변: {c['answer']}\n(멘토 ID: {c.get('mentor_id', 'N/A')})"
+            for c in state.get("feedback_context", [])
+        ]
+    )
 
     user_prompt = f"""## 사용자 질문
-{state['message']}
+{state["message"]}
 
 ## 사용자 맥락
-- 목표 직무: {state.get('target_job')}
-- 이력서 요약: {state.get('resume')}
+- 목표 직무: {state.get("target_job")}
+- 이력서 요약: {state.get("resume")}
 
 ## 검색된 현직자 피드백 (Context)
 {context_text}
@@ -297,28 +302,18 @@ async def generate_answer_node(state: AgentState) -> dict:
 위 컨텍스트를 바탕으로 AI 멘토로서 답변을 작성하세요."""
 
     try:
-        reply = await llm.generate(
-            prompt=user_prompt,
-            system_instruction=system_prompt,
-            temperature=0.7
-        )
+        reply = await llm.generate(prompt=user_prompt, system_instruction=system_prompt, temperature=0.7)
 
         text_events = []
         for line in reply.split("\n"):
             if line.strip():
                 text_events.append({"event": "text", "data": {"chunk": line + "\n"}})
 
-        return {
-            "reply_text": reply,
-            "events": text_events
-        }
+        return {"reply_text": reply, "events": text_events}
     except Exception as e:
         logger.error(f"D3 답변 생성 실패: {e}")
         error_msg = "죄송합니다. 답변을 생성하는 중 오류가 발생했어요. 잠시 후 다시 시도해주세요."
-        return {
-            "reply_text": error_msg,
-            "events": [{"event": "text", "data": {"chunk": error_msg + "\n"}}]
-        }
+        return {"reply_text": error_msg, "events": [{"event": "text", "data": {"chunk": error_msg + "\n"}}]}
 
 
 async def post_process_node(state: AgentState) -> dict:
@@ -333,14 +328,9 @@ async def post_process_node(state: AgentState) -> dict:
         logger.warning("답변이 너무 짧습니다. 재생성이 필요할 수 있습니다.")
 
     return {
-        "post_process_result": {
-            "has_action_items": has_action_items,
-            "is_too_short": is_too_short
-        },
-        "events": [{"event": "done", "data": {}}]
+        "post_process_result": {"has_action_items": has_action_items, "is_too_short": is_too_short},
+        "events": [{"event": "done", "data": {}}],
     }
-
-
 
 
 def route_by_intent(state: AgentState) -> str:

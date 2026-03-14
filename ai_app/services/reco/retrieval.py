@@ -1,4 +1,5 @@
 """멘토 검색 모듈 - 필터링 + 임베딩 유사도 기반 추천"""
+
 from __future__ import annotations
 
 import logging

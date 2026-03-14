@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field
 
 class ExpertFeedback(BaseModel):
     """현직자 피드백 데이터 스키마 (RAG용)"""
+
     id: Optional[int] = Field(None, description="피드백 식별자")
     mentor_id: Optional[int] = Field(None, description="피드백을 제공한 멘토 ID")
     question: str = Field(..., description="사용자 질문 또는 멘토링 요청 내용")
@@ -17,8 +18,10 @@ class ExpertFeedback(BaseModel):
     quality_score: int = Field(5, description="답변 품질 점수 (1~5)")
     embedding: Optional[list[float]] = Field(None, description="질문/답변 데이터의 벡터 임베딩")
 
+
 class FeedbackSearchQuery(BaseModel):
     """피드백 검색 쿼리 스키마"""
+
     query_text: str = Field(..., description="검색용 텍스트")
     job_tag: Optional[str] = Field(None, description="직무 필터")
     question_type: Optional[str] = Field(None, description="질문 유형 필터")
