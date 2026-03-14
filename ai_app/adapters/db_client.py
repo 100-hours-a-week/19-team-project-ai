@@ -2,7 +2,7 @@
 
 import logging
 import os
-from typing import Any
+from typing import Any, Optional, Union, List, Dict
 
 import asyncpg
 from opentelemetry import trace
@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_TIMEOUT = 30.0
 
 # 커넥션 풀 (싱글톤)
-_pool: asyncpg.Pool | None = None
+_pool: Optional[asyncpg.Pool] = None
 
 
 async def get_pool() -> asyncpg.Pool:
@@ -51,8 +51,8 @@ class VectorSearchClient:
         self,
         query_embedding: list[float],
         top_n: int = 50,
-        exclude_user_id: int | None = None,
-    ) -> list[dict[str, Any]]:
+        exclude_user_id: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
         """
         pgvector 코사인 유사도 기반 멘토 검색
 
@@ -133,7 +133,7 @@ class VectorSearchClient:
 
 
 # 싱글톤
-_client: VectorSearchClient | None = None
+_client: Optional[VectorSearchClient] = None
 tracer = trace.get_tracer(__name__)
 
 
