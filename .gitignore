@@ -184,3 +184,8 @@ docker-compose.override.yml
 step/
 scripts/
 
+# =====================================================
+# K8s Secrets (Git에서 제외 — AWS Secrets Manager로 관리)
+# =====================================================
+k8s/manifests/03-workload/04-ai-secret.yaml
+
