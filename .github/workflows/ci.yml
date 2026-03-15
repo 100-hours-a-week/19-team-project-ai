@@ -237,6 +237,7 @@ jobs:
           echo "::add-mask::${{ steps.login-ecr.outputs.registry }}/${{ secrets.ECR_REPOSITORY_AI }}:main-latest"
           echo "::add-mask::${{ secrets.AWS_ACCESS_KEY_ID }}"
           echo "::add-mask::${{ secrets.AWS_SECRET_ACCESS_KEY }}"
+          echo "::add-mask::${{ secrets.PAT }}"
 
       - name: Build and Push Docker Image
         uses: docker/build-push-action@v6
@@ -256,4 +257,19 @@ jobs:
           provenance: false
           sbom: false
           platforms: linux/arm64
-      
+
+      # GitOps: cloud repo의 values.yaml image tag 업데이트 → ArgoCD가 감지하여 자동 배포
+      - name: Update image tag in cloud repo
+        env:
+          PAT: ${{ secrets.PAT }}
+          IMAGE_TAG: ${{ steps.docker-meta.outputs.image_tag }}
+        run: |
+          git clone https://x-access-token:${PAT}@github.com/100-hours-a-week/19-team-project-cloud.git /tmp/cloud-repo
+          cd /tmp/cloud-repo
+          git config user.email "github-actions@github.com"
+          git config user.name "GitHub Actions"
+          sed -i "s|tag: \"main-.*\"|tag: \"${IMAGE_TAG}\"|" k8s/helm/refit-ai/values.yaml
+          git add k8s/helm/refit-ai/values.yaml
+          git commit -m "feat: refit-ai image tag update to ${IMAGE_TAG}"
+          git push
+
