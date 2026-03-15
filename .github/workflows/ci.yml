@@ -268,7 +268,7 @@ jobs:
           cd /tmp/cloud-repo
           git config user.email "github-actions@github.com"
           git config user.name "GitHub Actions"
-          sed -i "s|tag: \"main-.*\"|tag: \"${IMAGE_TAG}\"|" k8s/helm/refit-ai/values.yaml
+          sed -i "s|tag: \".*\"|tag: \"${IMAGE_TAG}\"|" k8s/helm/refit-ai/values.yaml
           git add k8s/helm/refit-ai/values.yaml
           git commit -m "feat: refit-ai image tag update to ${IMAGE_TAG}"
           git push
