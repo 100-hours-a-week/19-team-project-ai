@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Any
 
@@ -17,6 +18,9 @@ tracer = trace.get_tracer(__name__)
 
 # 필터링 fallback 임계값
 MIN_CANDIDATES_FOR_JOB_FILTER = 5
+
+# 현직자 캐시 최대 크기
+EXPERT_CACHE_MAX_SIZE = 256
 
 
 @dataclass
@@ -79,8 +83,8 @@ class MentorRetriever:
         self.backend_client = backend_client or get_backend_client()
         self.embedder = embedder or get_embedder()
         self.vector_search_client = vector_search_client or get_vector_search_client()
-        # 현직자 상세 정보 캐시 (메모리)
-        self._expert_cache = {}
+        # 현직자 상세 정보 캐시 (LRU, 크기 제한)
+        self._expert_cache: OrderedDict = OrderedDict()
 
     async def get_user_profile(self, user_id: int) -> dict | None:
         """사용자 프로필 정보 조회 (skills, jobs, introduction)"""
@@ -273,7 +277,7 @@ class MentorRetriever:
         jobseeker_text = ". ".join(parts)
 
         # 임베딩 생성 및 검색
-        query_embedding = self.embedder.embed_text(jobseeker_text)
+        query_embedding = await self.embedder.embed_text(jobseeker_text)
         embedding_list = query_embedding.tolist()
 
         candidates = await self.vector_search_client.search_similar_experts(
@@ -383,12 +387,15 @@ class MentorRetriever:
 
         async def _fetch_expert(uid):
             if uid in self._expert_cache:
+                self._expert_cache.move_to_end(uid)
                 return uid, self._expert_cache[uid]
 
             async with semaphore:
                 try:
                     details = await self.backend_client.get_expert_details(uid)
                     if details:
+                        if len(self._expert_cache) >= EXPERT_CACHE_MAX_SIZE:
+                            self._expert_cache.popitem(last=False)
                         self._expert_cache[uid] = details
                     return uid, details
                 except Exception as e:

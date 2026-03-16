@@ -2,6 +2,7 @@
 
 import json
 import logging
+import re
 from collections.abc import AsyncGenerator
 from datetime import datetime, timezone
 from typing import Any
@@ -15,6 +16,54 @@ from services.agent.slot_filling import SlotFiller
 from services.reco.embedder import ProfileEmbedder, get_embedder
 
 logger = logging.getLogger(__name__)
+
+# 경력 연수 추출 패턴 (자기소개 텍스트에서 추출)
+_EXP_PATTERNS = [
+    re.compile(r"(\d+)\s*년\s*[차이]"),  # "3년차", "5년이상"
+    re.compile(r"경력\s*(\d+)\s*년"),  # "경력 3년"
+    re.compile(r"(\d+)\s*년\s*경력"),  # "3년 경력"
+    re.compile(r"(\d+)\s*years?", re.IGNORECASE),  # "3 years"
+    re.compile(r"경력\s*:\s*(\d+)"),  # "경력: 3"
+    re.compile(r"(\d+)\s*년\s*[째경]"),  # "3년째", "3년경"
+]
+
+# 키워드 기반 경력 추정 (자기소개에서 연수를 못 찾을 때 보조)
+_SENIORITY_KEYWORDS = {
+    "시니어": 7,
+    "senior": 7,
+    "리드": 8,
+    "lead": 8,
+    "테크리드": 9,
+    "tech lead": 9,
+    "주니어": 2,
+    "junior": 2,
+    "신입": 1,
+    "인턴": 0,
+}
+
+
+def _extract_experience_years(text: str) -> int | None:
+    """자기소개 텍스트에서 경력 연수를 추출한다."""
+    if not text:
+        return None
+
+    text_lower = text.lower()
+
+    # 1. 정규식 패턴 매칭
+    for pattern in _EXP_PATTERNS:
+        match = pattern.search(text)
+        if match:
+            years = int(match.group(1))
+            if 0 <= years <= 40:  # 합리적 범위
+                return years
+
+    # 2. 키워드 기반 추정
+    for keyword, years in _SENIORITY_KEYWORDS.items():
+        if keyword in text_lower:
+            return years
+
+    return None
+
 
 # ============== 쿼리 빌드 ==============
 
@@ -152,8 +201,17 @@ def rule_rerank(
             if filter_type is None:
                 filter_type = "skill"
 
-        # 3. 경력 차이 패널티 (멘토의 경력 정보 없으면 패스)
-        # 참고: 현재 DB에 경력 연수 필드가 없으므로 이 로직은 추후 확장 가능
+        # 3. 경력 차이 패널티/보너스 (자기소개에서 경력 추출)
+        if conditions.experience_years is not None:
+            mentor_exp = _extract_experience_years(cand.get("introduction", ""))
+            if mentor_exp is not None:
+                diff = abs(mentor_exp - conditions.experience_years)
+                if diff == 0:
+                    score += 0.10  # 정확히 일치
+                elif diff <= 2:
+                    score += 0.03  # 근접 범위
+                else:
+                    score -= min(diff * 0.03, 0.15)  # 차이 클수록 감점 (최대 -0.15)
 
         # 4. 응답률 보정 (직무/스택 모두 불일치인 경우)
         if filter_type is None and cand.get("response_rate", 0) > 0:

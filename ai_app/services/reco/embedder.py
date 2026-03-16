@@ -1,5 +1,7 @@
+import asyncio
 import logging
 import os
+from collections import OrderedDict
 from functools import lru_cache
 from typing import Optional
 
@@ -11,6 +13,9 @@ logger = logging.getLogger(__name__)
 
 # 전역 HTTP 클라이언트 (커넥션 풀 공유)
 _async_client: Optional[httpx.AsyncClient] = None
+
+# 임베딩 캐시 최대 크기
+EMBEDDING_CACHE_MAX_SIZE = 512
 
 
 async def get_async_client() -> httpx.AsyncClient:
@@ -34,8 +39,9 @@ class ProfileEmbedder:
         self.runpod_url = (
             f"https://api.runpod.ai/v2/{self.runpod_endpoint_id}/runsync" if self.runpod_endpoint_id else None
         )
-        # 메모리 캐시 (LRU)
-        self._cache = {}
+        # 메모리 캐시 (LRU, 크기 제한)
+        self._cache: OrderedDict = OrderedDict()
+        self._cache_max_size = EMBEDDING_CACHE_MAX_SIZE
 
     @property
     def model(self) -> SentenceTransformer:
@@ -46,40 +52,56 @@ class ProfileEmbedder:
             logger.info("Embedding model loaded successfully")
         return self._model
 
+    def _put_cache(self, key: tuple, value: np.ndarray) -> None:
+        """LRU 캐시에 저장 (크기 초과 시 가장 오래된 항목 제거)"""
+        if key in self._cache:
+            self._cache.move_to_end(key)
+        else:
+            if len(self._cache) >= self._cache_max_size:
+                self._cache.popitem(last=False)
+        self._cache[key] = value
+
     async def embed_text(self, text: str, is_query: bool = True) -> np.ndarray:
-        """단일 텍스트 임베딩 생성 (캐싱 지원)"""
+        """단일 텍스트 임베딩 생성 (캐싱 + 스레드풀 지원)"""
         cache_key = (text, is_query)
         if cache_key in self._cache:
+            self._cache.move_to_end(cache_key)
             return self._cache[cache_key]
 
         if self.use_runpod and self.runpod_url and self.runpod_api_key:
             try:
                 embedding = (await self._embed_via_runpod([text], is_query))[0]
-                self._cache[cache_key] = embedding
+                self._put_cache(cache_key, embedding)
                 return embedding
             except Exception as e:
                 logger.error(f"RunPod embedding failed, falling back to local: {e}")
 
+        encode_text = text
         if "e5" in self.model_name.lower():
             prefix = "query" if is_query else "passage"
-            text = f"{prefix}: {text}"
+            encode_text = f"{prefix}: {text}"
 
-        # 로설 모델 연산도 CPU를 많이 쓰므로 비동기 이벤트 루프 배려 필요 (Thread 사용 권장되나 여기선 캐시로 해결)
-        embedding = self.model.encode(text, normalize_embeddings=True)
-        self._cache[cache_key] = embedding
+        # CPU-bound 연산을 스레드풀에서 실행하여 이벤트 루프 블로킹 방지
+        loop = asyncio.get_running_loop()
+        embedding = await loop.run_in_executor(None, lambda: self.model.encode(encode_text, normalize_embeddings=True))
+        self._put_cache(cache_key, embedding)
         return embedding
 
     async def embed_texts(self, texts: list[str]) -> np.ndarray:
-        """여러 텍스트 임베딩 생성"""
+        """여러 텍스트 임베딩 생성 (스레드풀 지원)"""
         if self.use_runpod and self.runpod_url and self.runpod_api_key:
             try:
                 return await self._embed_via_runpod(texts, is_query=False)
             except Exception as e:
                 logger.error(f"RunPod batch embedding failed, falling back to local: {e}")
 
+        encode_texts = texts
         if "e5" in self.model_name.lower():
-            texts = [f"passage: {t}" for t in texts]
-        return self.model.encode(texts, normalize_embeddings=True)
+            encode_texts = [f"passage: {t}" for t in texts]
+
+        # CPU-bound 배치 연산을 스레드풀에서 실행
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, lambda: self.model.encode(encode_texts, normalize_embeddings=True))
 
     async def _embed_via_runpod(self, texts: list[str], is_query: bool = True) -> np.ndarray:
         """RunPod Serverless API를 통한 실시간 임베딩 생성 (Async)"""
