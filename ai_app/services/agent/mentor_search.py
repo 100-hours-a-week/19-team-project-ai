@@ -19,18 +19,26 @@ logger = logging.getLogger(__name__)
 
 # 경력 연수 추출 패턴 (자기소개 텍스트에서 추출)
 _EXP_PATTERNS = [
-    re.compile(r"(\d+)\s*년\s*[차이]"),          # "3년차", "5년이상"
-    re.compile(r"경력\s*(\d+)\s*년"),             # "경력 3년"
-    re.compile(r"(\d+)\s*년\s*경력"),             # "3년 경력"
+    re.compile(r"(\d+)\s*년\s*[차이]"),  # "3년차", "5년이상"
+    re.compile(r"경력\s*(\d+)\s*년"),  # "경력 3년"
+    re.compile(r"(\d+)\s*년\s*경력"),  # "3년 경력"
     re.compile(r"(\d+)\s*years?", re.IGNORECASE),  # "3 years"
-    re.compile(r"경력\s*:\s*(\d+)"),              # "경력: 3"
-    re.compile(r"(\d+)\s*년\s*[째경]"),           # "3년째", "3년경"
+    re.compile(r"경력\s*:\s*(\d+)"),  # "경력: 3"
+    re.compile(r"(\d+)\s*년\s*[째경]"),  # "3년째", "3년경"
 ]
 
 # 키워드 기반 경력 추정 (자기소개에서 연수를 못 찾을 때 보조)
 _SENIORITY_KEYWORDS = {
-    "시니어": 7, "senior": 7, "리드": 8, "lead": 8, "테크리드": 9, "tech lead": 9,
-    "주니어": 2, "junior": 2, "신입": 1, "인턴": 0,
+    "시니어": 7,
+    "senior": 7,
+    "리드": 8,
+    "lead": 8,
+    "테크리드": 9,
+    "tech lead": 9,
+    "주니어": 2,
+    "junior": 2,
+    "신입": 1,
+    "인턴": 0,
 }
 
 

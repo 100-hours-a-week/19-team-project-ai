@@ -83,9 +83,7 @@ class ProfileEmbedder:
 
         # CPU-bound 연산을 스레드풀에서 실행하여 이벤트 루프 블로킹 방지
         loop = asyncio.get_running_loop()
-        embedding = await loop.run_in_executor(
-            None, lambda: self.model.encode(encode_text, normalize_embeddings=True)
-        )
+        embedding = await loop.run_in_executor(None, lambda: self.model.encode(encode_text, normalize_embeddings=True))
         self._put_cache(cache_key, embedding)
         return embedding
 
@@ -103,9 +101,7 @@ class ProfileEmbedder:
 
         # CPU-bound 배치 연산을 스레드풀에서 실행
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(
-            None, lambda: self.model.encode(encode_texts, normalize_embeddings=True)
-        )
+        return await loop.run_in_executor(None, lambda: self.model.encode(encode_texts, normalize_embeddings=True))
 
     async def _embed_via_runpod(self, texts: list[str], is_query: bool = True) -> np.ndarray:
         """RunPod Serverless API를 통한 실시간 임베딩 생성 (Async)"""
