@@ -26,6 +26,8 @@ class RecoController:
         self.backend_client = backend_client or get_backend_client()
         self.database_url = os.getenv("DATABASE_URL")
         self._engine = None
+        # MentorRetriever 싱글톤 (캐시 유지)
+        self._retriever: MentorRetriever | None = None
 
     @property
     def engine(self):
@@ -39,8 +41,10 @@ class RecoController:
         return tracked_db_connection(self.engine)
 
     def _get_retriever(self) -> MentorRetriever:
-        """MentorRetriever 인스턴스 생성"""
-        return MentorRetriever(backend_client=self.backend_client)
+        """MentorRetriever 인스턴스 재사용 (캐시 유지)"""
+        if self._retriever is None:
+            self._retriever = MentorRetriever(backend_client=self.backend_client)
+        return self._retriever
 
     async def recommend_mentors(
         self,
