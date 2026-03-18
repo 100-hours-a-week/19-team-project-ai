@@ -258,18 +258,21 @@ jobs:
           sbom: false
           platforms: linux/arm64
 
-      # GitOps: cloud repo의 values.yaml image tag 업데이트 → ArgoCD가 감지하여 자동 배포
-      - name: Update image tag in cloud repo
-        env:
-          PAT: ${{ secrets.PAT }}
-          IMAGE_TAG: ${{ steps.docker-meta.outputs.image_tag }}
-        run: |
-          git clone https://x-access-token:${PAT}@github.com/100-hours-a-week/19-team-project-cloud.git /tmp/cloud-repo
-          cd /tmp/cloud-repo
-          git config user.email "github-actions@github.com"
-          git config user.name "GitHub Actions"
-          sed -i "s|tag: \".*\"|tag: \"${IMAGE_TAG}\"|" k8s/helm/refit-ai/values.yaml
-          git add k8s/helm/refit-ai/values.yaml
-          git commit -m "feat: refit-ai image tag update to ${IMAGE_TAG}"
-          git push
+      - name: Trigger CD-K8s Workflow
+        if: success()
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.PAT }}
+          script: |
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'cd-k8s.yml',
+              ref: 'main',
+              inputs: {
+                image_tag: '${{ steps.docker-meta.outputs.image_tag }}',
+                sha: '${{ github.sha }}'
+              }
+            });
+            console.log('CD-K8s workflow triggered successfully');
 
