@@ -42,7 +42,7 @@ class MentorConditions(BaseModel):
     skills: list[str] = Field(default_factory=list, description="기술 스택 (예: Spring, React)")
     domain: str | None = Field(default=None, description="도메인/산업 (예: 핀테크, 헬스케어)")
     region: str | None = Field(default=None, description="지역 (예: 서울, 판교)")
-    company_type: str | None = Field(default=None, description="회사 유형 (예: 대기업, 스타트업)")
+    company: str | None = Field(default=None, description="회사명 (예: 삼성전자, 스타트업)")
     keywords: list[str] = Field(default_factory=list, description="기타 키워드")
 
     def filled_count(self) -> int:
@@ -58,7 +58,7 @@ class MentorConditions(BaseModel):
             count += 1
         if self.region:
             count += 1
-        if self.company_type:
+        if self.company:
             count += 1
         if self.keywords:
             count += 1

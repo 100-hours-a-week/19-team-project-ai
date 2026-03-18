@@ -1,10 +1,16 @@
+"""현직자 피드백 데이터 수집 및 관리 서비스 — 채팅 로그 → Q&A 추출 → 마스킹 → 임베딩 → 저장"""
+
 import logging
-from typing import Optional
+from typing import Any, Optional
 
 from adapters.backend_client import BackendAPIClient, get_backend_client
+from adapters.db_client import VectorSearchClient, get_vector_search_client
+from adapters.llm_client import LLMClient, get_llm_client
+from prompts import load_prompt
 from schemas.feedback import ExpertFeedback
 
 from services.reco.embedder import ProfileEmbedder, get_embedder
+from services.repo.pii_masker import mask_pii_regex
 
 logger = logging.getLogger(__name__)
 
@@ -12,50 +18,213 @@ logger = logging.getLogger(__name__)
 class FeedbackCollector:
     """현직자 피드백 데이터 수집 및 관리 서비스"""
 
-    def __init__(self, backend_client: Optional[BackendAPIClient] = None, embedder: Optional[ProfileEmbedder] = None):
+    def __init__(
+        self,
+        backend_client: Optional[BackendAPIClient] = None,
+        embedder: Optional[ProfileEmbedder] = None,
+        llm: Optional[LLMClient] = None,
+        vector_client: Optional[VectorSearchClient] = None,
+    ):
         self.backend_client = backend_client or get_backend_client()
         self.embedder = embedder or get_embedder()
+        self.llm = llm or get_llm_client()
+        self.vector_client = vector_client or get_vector_search_client()
 
-    async def collect_from_mentoring_history(self, limit: int = 100) -> list[ExpertFeedback]:
-        """
-        기존 멘토링 이력에서 Q&A 데이터를 추출하여 피드백 객체 리스트로 변환
-        (현재는 Mock 또는 백엔드 특정 엔드포인트 연동 필요)
-        """
-        # TODO: 백엔드 API에 멘토링 이력 조회 엔드포인트 추가 시 연동
-        # 지금은 설계를 위해 샘플 데이터를 반환하는 구조로 잡음
-        logger.info(f"멘토링 이력에서 {limit}개의 피드백 수집 시작")
+    # ============== Phase B: 피드백 검색 (RAG용) ==============
 
-        # 실제 구현 시에는 self.backend_client.get_mentoring_history() 호출
-        samples = [
-            ExpertFeedback(
-                mentor_id=101,
-                question="백엔드 신입으로 취업하고 싶은데 어떤 프로젝트가 경쟁력 있을까요?",
-                answer="단순한 CRUD보다는 대용량 트래픽 처리를 고려한 아키텍처나, MSA 기반의 분산 시스템 경험이 담긴 프로젝트가 좋습니다.",
-                job_tag="백엔드",
-                question_type="프로젝트",
-            ),
-            ExpertFeedback(
-                mentor_id=102,
-                question="비전공자인데 자바 공부는 어떻게 시작하는 게 좋을까요?",
-                answer="자바의 정석 같은 기본서로 문법을 익히되, 반드시 Spring Framework를 활용한 실무 프로젝트를 병행하세요.",
-                job_tag="백엔드",
-                question_type="기술스택",
-            ),
-        ]
-        return samples
-
-    async def prepare_rag_dataset(self, feedbacks: list[ExpertFeedback]):
+    async def search_feedbacks(
+        self,
+        query_text: str,
+        job_tag: Optional[str] = None,
+        top_k: int = 5,
+    ) -> list[dict[str, Any]]:
         """
-        수집된 피드백 데이터에 대해 임베딩을 생성하고 저장 준비
-        """
-        for fb in feedbacks:
-            # 질문과 답변을 결합하여 컨텍스트 임베딩 생성
-            text_to_embed = f"질문: {fb.question}\n답변: {fb.answer}"
-            embedding = await self.embedder.embed_text(text_to_embed)
-            fb.embedding = embedding.tolist()
+        쿼리 텍스트로 피드백 벡터 검색
 
-        logger.info(f"{len(feedbacks)}개의 피드백 데이터 임베딩 완료")
+        Args:
+            query_text: 검색할 텍스트
+            job_tag: 직무 필터 (None이면 전체)
+            top_k: 반환할 결과 수
+
+        Returns:
+            [{id, question, answer, job_tag, question_type, mentor_id, quality_score, similarity_score}, ...]
+        """
+        # 쿼리 임베딩 생성
+        query_embedding = await self.embedder.embed_text(query_text, is_query=True)
+        embedding_list = query_embedding.tolist()
+
+        # DB에서 벡터 검색
+        results = await self.vector_client.search_feedbacks(
+            query_embedding=embedding_list,
+            top_k=top_k,
+            job_tag=job_tag,
+        )
+
+        logger.info(f"피드백 검색 완료: {len(results)}건 (query={query_text[:50]}...)")
+        return results
+
+    # ============== Phase A: 채팅 로그 → 피드백 변환 ==============
+
+    async def extract_feedbacks_from_chat(
+        self, chat_room_id: int, mentor_id: int
+    ) -> list[ExpertFeedback]:
+        """
+        채팅 로그에서 가치 있는 Q&A를 추출하고 개인정보를 마스킹한다.
+
+        Args:
+            chat_room_id: 채팅방 ID
+            mentor_id: 멘토 user_id
+
+        Returns:
+            추출된 ExpertFeedback 리스트
+        """
+        # 1. DB에서 채팅 메시지 직접 조회
+        messages = await self.vector_client.get_chat_messages(chat_room_id)
+        if not messages:
+            logger.info(f"채팅 메시지 없음: room_id={chat_room_id}")
+            return []
+
+        # 2. 대화 로그를 텍스트로 변환
+        chat_log = self._format_chat_log(messages)
+        if not chat_log.strip():
+            return []
+
+        # 3. 정규식 1차 마스킹
+        chat_log = mask_pii_regex(chat_log)
+
+        # 4. LLM으로 Q&A 추출 + 2차 마스킹
+        extracted = await self._extract_qa_pairs(chat_log)
+        if not extracted:
+            logger.info(f"추출된 Q&A 없음: room_id={chat_room_id}")
+            return []
+
+        # 5. ExpertFeedback 객체로 변환
+        feedbacks = []
+        for item in extracted:
+            if item.get("quality_score", 0) < 3:
+                continue
+            feedbacks.append(
+                ExpertFeedback(
+                    mentor_id=mentor_id,
+                    question=item["question"],
+                    answer=item["answer"],
+                    job_tag=item.get("job_tag", "common"),
+                    question_type=item.get("question_type", "career_advice"),
+                    source_type="real_mentor",
+                    quality_score=item.get("quality_score", 3),
+                )
+            )
+
+        logger.info(f"채팅에서 {len(feedbacks)}개 Q&A 추출: room_id={chat_room_id}")
         return feedbacks
+
+    async def process_and_save_chat(self, chat_room_id: int, mentor_id: int) -> int:
+        """
+        채팅 로그 → Q&A 추출 → 임베딩 → 백엔드 API 저장까지 전체 파이프라인
+
+        Returns:
+            저장된 피드백 수
+        """
+        # 1. Q&A 추출
+        feedbacks = await self.extract_feedbacks_from_chat(chat_room_id, mentor_id)
+        if not feedbacks:
+            return 0
+
+        # 2. 임베딩 생성
+        feedback_dicts = []
+        for fb in feedbacks:
+            embedding_text = f"질문: {fb.question}\n답변: {fb.answer}"
+            embedding = await self.embedder.embed_text(embedding_text, is_query=False)
+
+            feedback_dicts.append({
+                "mentor_id": fb.mentor_id,
+                "question": fb.question,
+                "answer": fb.answer,
+                "job_tag": fb.job_tag,
+                "question_type": fb.question_type,
+                "embedding_text": embedding_text,
+                "source_type": fb.source_type,
+                "quality_score": fb.quality_score,
+                "embedding": embedding.tolist(),
+            })
+
+        # 3. 백엔드 API로 저장
+        inserted = await self.backend_client.save_feedbacks_batch(feedback_dicts)
+        logger.info(f"피드백 저장 완료: room_id={chat_room_id}, {inserted}건")
+        return inserted
+
+    async def process_all_closed_chats(self) -> int:
+        """
+        종료된 전체 채팅방에서 피드백 추출 → 저장 (배치)
+
+        Returns:
+            총 저장된 피드백 수
+        """
+        rooms = await self.vector_client.get_closed_chat_rooms()
+        if not rooms:
+            logger.info("종료된 채팅방 없음")
+            return 0
+
+        logger.info(f"피드백 추출 대상: {len(rooms)}개 채팅방")
+        total = 0
+
+        for room in rooms:
+            if room["msg_count"] < 4:
+                continue
+            try:
+                count = await self.process_and_save_chat(
+                    chat_room_id=room["room_id"],
+                    mentor_id=room["expert_id"],
+                )
+                total += count
+            except Exception as e:
+                logger.error(f"채팅방 {room['room_id']} 처리 실패: {e}")
+
+        logger.info(f"전체 피드백 추출 완료: {total}건")
+        return total
+
+    # ============== 내부 헬퍼 ==============
+
+    def _format_chat_log(self, messages: list[dict]) -> str:
+        """채팅 메시지 리스트를 텍스트 형식으로 변환"""
+        lines = []
+        for msg in messages:
+            if msg.get("message_type") != "TEXT":
+                continue
+            content = msg.get("content", "").strip()
+            if not content:
+                continue
+
+            sender_type = msg.get("sender_type", "UNKNOWN")
+            role = "[멘토]" if sender_type == "EXPERT" else "[멘티]"
+            lines.append(f"{role} {content}")
+
+        return "\n".join(lines)
+
+    async def _extract_qa_pairs(self, chat_log: str) -> list[dict]:
+        """LLM을 사용하여 채팅 로그에서 Q&A 쌍 추출 + 개인정보 마스킹"""
+        system_prompt = load_prompt("feedback_extract_system")
+
+        user_prompt = f"""## 멘토링 대화 로그
+{chat_log}
+
+위 대화에서 가치 있는 Q&A 쌍을 추출하고 개인정보를 마스킹하세요. JSON 배열로 반환하세요."""
+
+        try:
+            result = await self.llm.generate_json(
+                prompt=user_prompt,
+                system_instruction=system_prompt,
+                temperature=0.1,
+            )
+            # generate_json이 dict를 반환할 수 있으므로 리스트 확인
+            if isinstance(result, list):
+                return result
+            if isinstance(result, dict) and "feedbacks" in result:
+                return result["feedbacks"]
+            return []
+        except Exception as e:
+            logger.error(f"Q&A 추출 실패: {e}")
+            return []
 
 
 # 싱글톤
