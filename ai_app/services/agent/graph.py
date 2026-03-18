@@ -246,34 +246,76 @@ async def generate_search_query_node(state: AgentState) -> dict:
 
 
 async def feedback_retrieval_node(state: AgentState) -> dict:
-    """[D3] RAG 검색 노드: 피드백 데이터셋에서 유사 답변 검색"""
+    """[D3] RAG 검색 노드: 피드백 데이터셋에서 유사 답변 벡터 검색"""
     collector = get_feedback_collector()
 
-    # 1. 질의 임베딩 (현재 검색 노드 Mock 상태로 미사용 - 추후 복구 시 get_embedder 사용)
+    search_query = state.get("search_query", state["message"])
+    target_job = state.get("target_job", "")
 
-    # 2. 피드백 검색 (현재는 Mock 또는 DB 연동)
-    # TODO: VectorSearchClient에 search_feedback 메서드 추가 필요
-    # 지금은 Mock 데이터로 흐름 완성
-    feedbacks = await collector.collect_from_mentoring_history(limit=5)
+    # 직무 태그 매핑 (한글 → DB 태그)
+    job_tag_map = {
+        "백엔드": "BE", "backend": "BE",
+        "프론트엔드": "FE", "frontend": "FE", "프론트": "FE",
+        "ai": "AI", "ml": "AI", "인공지능": "AI",
+        "데이터": "DATA", "data": "DATA",
+    }
+    job_tag = job_tag_map.get(target_job.lower()) if target_job else None
 
-    # 필터링 로직 (직무 태그 등)
-    target_job = state.get("target_job", "").lower()
-    filtered = [f.model_dump() for f in feedbacks if target_job in f.job_tag.lower()] or [
-        f.model_dump() for f in feedbacks
-    ]
+    try:
+        results = await collector.search_feedbacks(
+            query_text=search_query,
+            job_tag=job_tag,
+            top_k=5,
+        )
 
-    return {"feedback_context": filtered[:5], "events": []}
+        if not results:
+            # job_tag 필터 없이 재시도
+            results = await collector.search_feedbacks(
+                query_text=search_query,
+                job_tag=None,
+                top_k=5,
+            )
+
+        return {"feedback_context": results, "events": []}
+    except Exception as e:
+        logger.warning(f"피드백 검색 실패, 빈 컨텍스트로 진행: {e}")
+        return {"feedback_context": [], "events": []}
 
 
 async def compress_context_node(state: AgentState) -> dict:
-    """[D3] 컨텍스트 정리 노드: 검색 결과 중 핵심 근거 3~5개 압축"""
+    """[D3] 컨텍스트 정리 노드: 중복 제거 및 품질 기반 필터링"""
     context = state.get("feedback_context", [])
     if not context:
         return {"events": []}
 
-    # TODO: LLM을 이용한 중복 제거 및 요약 로직 추가 가능
-    logger.info(f"{len(context)}개의 컨텍스트 정리 완료")
-    return {"events": []}
+    # 1. 유사도 낮은 결과 제거 (임계값 미만)
+    min_similarity = 0.3
+    filtered = [c for c in context if c.get("similarity_score", 1.0) >= min_similarity]
+
+    # 2. 중복 답변 제거 (답변 텍스트가 80% 이상 겹치면 제거)
+    deduplicated = []
+    seen_answers: list[str] = []
+    for item in filtered:
+        answer = item.get("answer", "")
+        is_duplicate = False
+        for seen in seen_answers:
+            # 간단한 중복 체크: 짧은 쪽 기준 포함 여부
+            shorter, longer = (answer, seen) if len(answer) <= len(seen) else (seen, answer)
+            if shorter and shorter in longer:
+                is_duplicate = True
+                break
+        if not is_duplicate:
+            deduplicated.append(item)
+            seen_answers.append(answer)
+
+    # 3. 품질 점수 기준 정렬
+    deduplicated.sort(key=lambda x: (x.get("quality_score", 0), x.get("similarity_score", 0)), reverse=True)
+
+    # 최대 5개
+    final = deduplicated[:5]
+    logger.info(f"컨텍스트 압축: {len(context)}건 → {len(final)}건")
+
+    return {"feedback_context": final, "events": []}
 
 
 async def generate_answer_node(state: AgentState) -> dict:
