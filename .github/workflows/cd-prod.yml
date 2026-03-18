@@ -27,31 +27,27 @@ permissions:
 
 env:
   AWS_REGION: ${{ secrets.AWS_REGION || 'ap-northeast-2' }}
+  CLOUD_REPO: 100-hours-a-week/19-team-project-cloud
+  HELM_VALUES_PATH: k8s/helm/refit-ai/values.yaml
 
 jobs:
   deploy-prod:
-    name: Deploy AI to Prod (K8s Helm)
+    name: Deploy AI to Prod (GitOps)
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 15
     concurrency:
       group: deploy-ai-prod
       cancel-in-progress: false
     environment: production
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
       - name: Preflight - validate required secrets
         env:
+          PAT: ${{ secrets.PAT }}
           ECR_REPOSITORY_AI: ${{ secrets.ECR_REPOSITORY_AI }}
-          K8S_KUBECONFIG_PROD: ${{ secrets.K8S_KUBECONFIG_PROD }}
-          K8S_NAMESPACE: ${{ secrets.K8S_NAMESPACE }}
-          K8S_HELM_RELEASE_NAME: ${{ secrets.K8S_HELM_RELEASE_NAME }}
-          K8S_APP_SECRET_NAME_PROD: ${{ secrets.K8S_APP_SECRET_NAME_PROD }}
         run: |
           set -euo pipefail
-          for v in ECR_REPOSITORY_AI K8S_KUBECONFIG_PROD K8S_NAMESPACE K8S_HELM_RELEASE_NAME K8S_APP_SECRET_NAME_PROD; do
+          for v in PAT ECR_REPOSITORY_AI; do
             if [ -z "${!v:-}" ]; then
               echo "Missing required secret: $v"
               exit 1
@@ -93,6 +89,7 @@ jobs:
             --repository-name "${{ secrets.ECR_REPOSITORY_AI }}" \
             --image-ids imageTag="${{ steps.deploy-vars.outputs.image_tag }}" \
             --region "${{ env.AWS_REGION }}" > /dev/null
+          echo "Image verified: ${{ steps.deploy-vars.outputs.image_tag }}"
 
       - name: Mask sensitive values in logs
         run: |
@@ -101,30 +98,32 @@ jobs:
           echo "::add-mask::${{ secrets.AWS_ACCESS_KEY_ID }}"
           echo "::add-mask::${{ secrets.AWS_SECRET_ACCESS_KEY }}"
 
-      - name: Setup kubeconfig
-        run: |
-          mkdir -p ~/.kube
-          echo "${{ secrets.K8S_KUBECONFIG_PROD }}" > ~/.kube/config
-          chmod 600 ~/.kube/config
+      - name: Checkout cloud repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.CLOUD_REPO }}
+          token: ${{ secrets.PAT }}
+          path: cloud-repo
 
-      - name: Install Helm
-        uses: azure/setup-helm@v4
-
-      - name: Deploy via Helm upgrade --install
-        env:
-          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          IMAGE_TAG: ${{ steps.deploy-vars.outputs.image_tag }}
+      - name: Update image tag in cloud repo (GitOps)
         run: |
           set -euo pipefail
-          helm upgrade --install "${{ secrets.K8S_HELM_RELEASE_NAME }}" charts/refit-ai \
-            --namespace "${{ secrets.K8S_NAMESPACE }}" \
-            --values charts/refit-ai/values-prod.yaml \
-            --set "image.repository=${ECR_REGISTRY}/${{ secrets.ECR_REPOSITORY_AI }}" \
-            --set "image.tag=${IMAGE_TAG}" \
-            --set "appSecretName=${{ secrets.K8S_APP_SECRET_NAME_PROD }}" \
-            --atomic \
-            --timeout 10m \
-            --cleanup-on-fail
+          cd cloud-repo
+
+          sed -i 's|^  tag:.*|  tag: "${{ steps.deploy-vars.outputs.image_tag }}"|' "${{ env.HELM_VALUES_PATH }}"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add "${{ env.HELM_VALUES_PATH }}"
+
+          if git diff --cached --quiet; then
+            echo "Image tag already up to date. Nothing to commit."
+            exit 0
+          fi
+
+          git commit -m "deploy(refit-ai): update image tag to ${{ steps.deploy-vars.outputs.image_tag }}"
+          git push
+          echo "GitOps update pushed. ArgoCD will deploy automatically."
 
       - name: Notify Discord - Success
         if: success()
@@ -138,8 +137,8 @@ jobs:
           payload=$(cat <<EOF
           {
             "embeds": [{
-              "title": "AI 프로덕션 배포 완료",
-              "description": "AI 프로덕션 배포가 성공적으로 완료되었습니다.",
+              "title": "AI 프로덕션 배포 진행 중",
+              "description": "cloud repo image tag 업데이트 완료. ArgoCD가 배포를 진행합니다.",
               "color": 3066993,
               "fields": [
                 {"name": "서비스", "value": "Re-Fit AI (Prod)", "inline": true},
@@ -147,7 +146,7 @@ jobs:
                 {"name": "커밋 SHA", "value": "\`$SHA_SHORT\`", "inline": true},
                 {"name": "워크플로우", "value": "[상세 보기](https://github.com/${{ github.repository }}/actions/runs/$RUN_ID)", "inline": false}
               ],
-              "footer": { "text": "Re-Fit Prod Deployment" },
+              "footer": { "text": "Re-Fit Prod Deployment · GitOps" },
               "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
             }]
           }
@@ -168,7 +167,7 @@ jobs:
           {
             "embeds": [{
               "title": "AI 프로덕션 배포 실패",
-              "description": "AI 프로덕션 배포가 실패했습니다. 로그를 확인하세요.",
+              "description": "cloud repo image tag 업데이트 또는 ECR 검증에 실패했습니다.",
               "color": 15158332,
               "fields": [
                 {"name": "서비스", "value": "Re-Fit AI (Prod)", "inline": true},
@@ -176,7 +175,7 @@ jobs:
                 {"name": "커밋 SHA", "value": "\`$SHA_SHORT\`", "inline": true},
                 {"name": "워크플로우", "value": "[상세 보기](https://github.com/${{ github.repository }}/actions/runs/$RUN_ID)", "inline": false}
               ],
-              "footer": { "text": "Re-Fit Prod Deployment" },
+              "footer": { "text": "Re-Fit Prod Deployment · GitOps" },
               "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
             }]
           }
