@@ -86,8 +86,8 @@ def build_query_text(conditions: MentorConditions) -> str:
         parts.append(f"도메인: {conditions.domain}")
     if conditions.region:
         parts.append(f"지역: {conditions.region}")
-    if conditions.company_type:
-        parts.append(f"회사유형: {conditions.company_type}")
+    if conditions.company:
+        parts.append(f"회사: {conditions.company}")
     if conditions.keywords:
         parts.append(f"키워드: {', '.join(conditions.keywords)}")
 
@@ -149,7 +149,7 @@ def rule_rerank(
     재정렬 규칙:
     1. 직무 일치 가중치 (+0.15)
     2. 기술스택 일치 가중치 (+0.05 × 일치 개수)
-    3. 경력 차이 패널티 (차이 × -0.02, 최대 -0.1)
+    3. 경력 차이 패널티 (차이 × -0.05, 최대 -0.30 / 추출 불가 시 -0.10)
     4. 차이가 큰 경우 응답률 우선 보정
     5. 최근 활동 가중치 (7일 이내 +0.05)
 
@@ -211,7 +211,10 @@ def rule_rerank(
                 elif diff <= 2:
                     score += 0.03  # 근접 범위
                 else:
-                    score -= min(diff * 0.03, 0.15)  # 차이 클수록 감점 (최대 -0.15)
+                    score -= min(diff * 0.05, 0.30)  # 차이 클수록 감점 (최대 -0.30)
+            else:
+                # 경력 정보를 추출할 수 없는 멘토는 감점 (연차 조건 충족 불확실)
+                score -= 0.10
 
         # 4. 응답률 보정 (직무/스택 모두 불일치인 경우)
         if filter_type is None and cand.get("response_rate", 0) > 0:

@@ -219,6 +219,34 @@ class BackendAPIClient:
         # None (조회 실패) 제거
         return [r for r in results if r]
 
+    # ---------- 피드백 저장 ----------
+
+    async def save_feedbacks_batch(self, feedbacks: List[Dict[str, Any]]) -> int:
+        """
+        피드백 일괄 저장
+
+        Args:
+            feedbacks: 피드백 dict 리스트
+
+        Returns:
+            저장된 건수
+        """
+        url = f"{self.internal_url}/expert-feedbacks/batch"
+        payload = {"feedbacks": feedbacks}
+        headers = self._get_internal_headers()
+
+        try:
+            resp = await self.client.post(url, json=payload, headers=headers)
+            resp.raise_for_status()
+
+            data = resp.json().get("data", {})
+            inserted = data.get("inserted_count", 0)
+            logger.info(f"피드백 일괄 저장 완료: {inserted}건")
+            return inserted
+        except Exception as e:
+            logger.error(f"피드백 일괄 저장 실패: {e}")
+            raise
+
     # ---------- 유저 존재 확인 ----------
 
     async def user_exists(self, user_id: int) -> bool:

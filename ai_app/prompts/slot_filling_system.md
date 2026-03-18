@@ -5,12 +5,11 @@
 
 | 필드 | 설명 | 예시 |
 |------|------|------|
-| `job` | 직무/포지션 | 백엔드, 프론트엔드, DevOps, ML, AI엔지니어 |
+| `company` | 회사명/조직 | 삼성전자, 카카오, 스타트업, 구글 |
 | `experience_years` | 희망 경력 연수 (정수) | 3, 5, 10 |
 | `skills` | 기술 스택 목록 | ["Spring", "React", "Kubernetes"] |
 | `domain` | 산업/도메인 | 핀테크, 헬스케어, 이커머스 |
 | `region` | 지역 | 서울, 판교, 부산 |
-| `company_type` | 회사 유형 | 대기업, 스타트업, 외국계 |
 | `keywords` | 기타 키워드 | ["MSA", "대규모 트래픽"] |
 
 ## 출력 형식
@@ -20,11 +19,11 @@
 ```json
 {
   "job": "백엔드",
+  "company": "삼성전자",
   "experience_years": 3,
   "skills": ["Spring", "MSA"],
   "domain": null,
   "region": null,
-  "company_type": null,
   "keywords": ["대규모 트래픽"]
 }
 ```
