@@ -27,40 +27,49 @@ permissions:
 
 env:
   AWS_REGION: ${{ secrets.AWS_REGION || 'ap-northeast-2' }}
-  CLOUD_REPO: 100-hours-a-week/19-team-project-cloud
-  HELM_VALUES_PATH: k8s/helm/refit-ai/values.yaml
+  PROD_COMPOSE_FILE: docker-compose.yml
 
 jobs:
   deploy-prod:
-    name: Deploy AI to Prod (GitOps)
+    name: Deploy AI to Prod
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     concurrency:
       group: deploy-ai-prod
       cancel-in-progress: false
     environment: production
 
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Preflight - validate required secrets
         env:
-          PAT: ${{ secrets.PAT }}
           ECR_REPOSITORY_AI: ${{ secrets.ECR_REPOSITORY_AI }}
+          EC2_HOST_PROD: ${{ secrets.EC2_HOST_PROD }}
+          EC2_USERNAME_PROD: ${{ secrets.EC2_USERNAME_PROD }}
+          EC2_SSH_KEY_PROD: ${{ secrets.EC2_SSH_KEY_PROD }}
+          COMPOSE_DIR_PROD: ${{ secrets.COMPOSE_DIR_PROD }}
+          ENV_FILE_PROD: ${{ secrets.ENV_FILE_PROD }}
         run: |
           set -euo pipefail
-          for v in PAT ECR_REPOSITORY_AI; do
+          for v in ECR_REPOSITORY_AI EC2_HOST_PROD EC2_USERNAME_PROD EC2_SSH_KEY_PROD COMPOSE_DIR_PROD ENV_FILE_PROD; do
             if [ -z "${!v:-}" ]; then
               echo "Missing required secret: $v"
               exit 1
             fi
           done
+          [ -f "${{ env.PROD_COMPOSE_FILE }}" ] || { echo "Missing compose file: ${{ env.PROD_COMPOSE_FILE }}"; exit 1; }
 
       - name: Set deployment variables
         id: deploy-vars
         run: |
           set -euo pipefail
+          USE_LATEST="${{ inputs.use_latest }}"
+
           if [ -n "${{ inputs.image_tag }}" ]; then
             IMAGE_TAG="${{ inputs.image_tag }}"
-          elif [ "${{ inputs.use_latest }}" = "true" ]; then
+          elif [ "$USE_LATEST" = "true" ]; then
             IMAGE_TAG="main-latest"
           else
             echo "image_tag is empty and use_latest is false."
@@ -68,8 +77,11 @@ jobs:
           fi
 
           SHA="${{ inputs.sha }}"
+          SHA_SHORT="${SHA:0:7}"
+
           echo "image_tag=${IMAGE_TAG}" >> "$GITHUB_OUTPUT"
-          echo "sha_short=${SHA:0:7}" >> "$GITHUB_OUTPUT"
+          echo "sha=${SHA}" >> "$GITHUB_OUTPUT"
+          echo "sha_short=${SHA_SHORT}" >> "$GITHUB_OUTPUT"
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -85,45 +97,101 @@ jobs:
       - name: Verify image exists in ECR
         run: |
           set -euo pipefail
+          IMAGE_TAG="${{ steps.deploy-vars.outputs.image_tag }}"
+          REPO="${{ secrets.ECR_REPOSITORY_AI }}"
+
           aws ecr describe-images \
-            --repository-name "${{ secrets.ECR_REPOSITORY_AI }}" \
-            --image-ids imageTag="${{ steps.deploy-vars.outputs.image_tag }}" \
+            --repository-name "$REPO" \
+            --image-ids imageTag="$IMAGE_TAG" \
             --region "${{ env.AWS_REGION }}" > /dev/null
-          echo "Image verified: ${{ steps.deploy-vars.outputs.image_tag }}"
 
       - name: Mask sensitive values in logs
         run: |
           echo "::add-mask::${{ steps.login-ecr.outputs.registry }}"
           echo "::add-mask::${{ secrets.ECR_REPOSITORY_AI }}"
+          echo "::add-mask::${{ steps.deploy-vars.outputs.image_tag }}"
+          echo "::add-mask::${{ secrets.EC2_HOST_PROD }}"
+          echo "::add-mask::${{ secrets.EC2_USERNAME_PROD }}"
+          echo "::add-mask::${{ secrets.EC2_SSH_PORT_PROD }}"
+          echo "::add-mask::${{ secrets.COMPOSE_DIR_PROD }}"
           echo "::add-mask::${{ secrets.AWS_ACCESS_KEY_ID }}"
           echo "::add-mask::${{ secrets.AWS_SECRET_ACCESS_KEY }}"
 
-      - name: Checkout cloud repository
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ env.CLOUD_REPO }}
-          token: ${{ secrets.PAT }}
-          path: cloud-repo
-
-      - name: Update image tag in cloud repo (GitOps)
+      - name: Prepare compose content
+        id: compose-content
         run: |
           set -euo pipefail
-          cd cloud-repo
+          COMPOSE_B64="$(base64 -w 0 "${{ env.PROD_COMPOSE_FILE }}")"
+          echo "compose_b64=${COMPOSE_B64}" >> "$GITHUB_OUTPUT"
 
-          sed -i 's|^  tag:.*|  tag: "${{ steps.deploy-vars.outputs.image_tag }}"|' "${{ env.HELM_VALUES_PATH }}"
+      - name: Deploy to Prod Server via SSH
+        uses: appleboy/ssh-action@v1
+        env:
+          ENV_FILE_PROD: ${{ secrets.ENV_FILE_PROD }}
+          COMPOSE_B64: ${{ steps.compose-content.outputs.compose_b64 }}
+          COMPOSE_DIR: ${{ secrets.COMPOSE_DIR_PROD }}
+          IMAGE_TAG: ${{ steps.deploy-vars.outputs.image_tag }}
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY_AI: ${{ secrets.ECR_REPOSITORY_AI }}
+          AWS_REGION: ${{ env.AWS_REGION }}
+        with:
+          host: ${{ secrets.EC2_HOST_PROD }}
+          username: ${{ secrets.EC2_USERNAME_PROD }}
+          key: ${{ secrets.EC2_SSH_KEY_PROD }}
+          port: ${{ secrets.EC2_SSH_PORT_PROD || '22' }}
+          envs: ENV_FILE_PROD,COMPOSE_B64,COMPOSE_DIR,IMAGE_TAG,ECR_REGISTRY,ECR_REPOSITORY_AI,AWS_REGION
+          script: |
+            set -euo pipefail
+            export PATH="/usr/local/bin:/usr/bin:/bin:$PATH"
 
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add "${{ env.HELM_VALUES_PATH }}"
+            # 배포 전 필수 구성요소 점검
+            [ -d "$COMPOSE_DIR" ] || { echo "Compose directory not found: $COMPOSE_DIR"; exit 1; }
+            command -v docker >/dev/null 2>&1 || { echo "docker not found"; exit 1; }
+            docker compose version >/dev/null 2>&1 || { echo "docker compose not found"; exit 1; }
+            command -v aws >/dev/null 2>&1 || { echo "aws cli not found"; exit 1; }
 
-          if git diff --cached --quiet; then
-            echo "Image tag already up to date. Nothing to commit."
-            exit 0
-          fi
+            cd "$COMPOSE_DIR"
+            printf '%s' "$COMPOSE_B64" | base64 -d > docker-compose.yml
+            printf '%s\n' "$ENV_FILE_PROD" > .env.ai
+            chmod 644 docker-compose.yml .env.ai
 
-          git commit -m "deploy(refit-ai): update image tag to ${{ steps.deploy-vars.outputs.image_tag }}"
-          git push
-          echo "GitOps update pushed. ArgoCD will deploy automatically."
+            aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "$ECR_REGISTRY" >/dev/null 2>&1
+
+            # .env 키를 안전하게 갱신(없으면 추가)
+            if grep -q '^ECR_REGISTRY=' .env 2>/dev/null; then
+              sed -i "s|^ECR_REGISTRY=.*|ECR_REGISTRY=${ECR_REGISTRY}|" .env
+            else
+              echo "ECR_REGISTRY=${ECR_REGISTRY}" >> .env
+            fi
+
+            if grep -q '^ECR_REPOSITORY_AI=' .env 2>/dev/null; then
+              sed -i "s|^ECR_REPOSITORY_AI=.*|ECR_REPOSITORY_AI=${ECR_REPOSITORY_AI}|" .env
+            else
+              echo "ECR_REPOSITORY_AI=${ECR_REPOSITORY_AI}" >> .env
+            fi
+
+            if grep -q '^AI_TAG=' .env 2>/dev/null; then
+              sed -i "s|^AI_TAG=.*|AI_TAG=${IMAGE_TAG}|" .env
+            else
+              echo "AI_TAG=${IMAGE_TAG}" >> .env
+            fi
+
+            docker compose pull ai
+            docker compose up -d ai
+            docker image prune -a -f 2>/dev/null || true
+
+            for i in {1..20}; do
+              code=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8000/health || echo 000)
+              if [ "$code" = "200" ]; then
+                echo "Internal health check passed"
+                exit 0
+              fi
+              echo "Internal health check attempt ${i}/20 - HTTP ${code}"
+              sleep 5
+            done
+
+            echo "Internal health check failed"
+            exit 1
 
       - name: Notify Discord - Success
         if: success()
@@ -137,8 +205,8 @@ jobs:
           payload=$(cat <<EOF
           {
             "embeds": [{
-              "title": "AI 프로덕션 배포 진행 중",
-              "description": "cloud repo image tag 업데이트 완료. ArgoCD가 배포를 진행합니다.",
+              "title": "AI 프로덕션 배포 완료",
+              "description": "AI 프로덕션 배포가 성공적으로 완료되었습니다.",
               "color": 3066993,
               "fields": [
                 {"name": "서비스", "value": "Re-Fit AI (Prod)", "inline": true},
@@ -146,7 +214,7 @@ jobs:
                 {"name": "커밋 SHA", "value": "\`$SHA_SHORT\`", "inline": true},
                 {"name": "워크플로우", "value": "[상세 보기](https://github.com/${{ github.repository }}/actions/runs/$RUN_ID)", "inline": false}
               ],
-              "footer": { "text": "Re-Fit Prod Deployment · GitOps" },
+              "footer": { "text": "Re-Fit Prod Deployment" },
               "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
             }]
           }
@@ -167,7 +235,7 @@ jobs:
           {
             "embeds": [{
               "title": "AI 프로덕션 배포 실패",
-              "description": "cloud repo image tag 업데이트 또는 ECR 검증에 실패했습니다.",
+              "description": "AI 프로덕션 배포가 실패했습니다. 로그를 확인하세요.",
               "color": 15158332,
               "fields": [
                 {"name": "서비스", "value": "Re-Fit AI (Prod)", "inline": true},
@@ -175,7 +243,7 @@ jobs:
                 {"name": "커밋 SHA", "value": "\`$SHA_SHORT\`", "inline": true},
                 {"name": "워크플로우", "value": "[상세 보기](https://github.com/${{ github.repository }}/actions/runs/$RUN_ID)", "inline": false}
               ],
-              "footer": { "text": "Re-Fit Prod Deployment · GitOps" },
+              "footer": { "text": "Re-Fit Prod Deployment" },
               "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
             }]
           }
