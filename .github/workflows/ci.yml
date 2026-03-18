@@ -267,7 +267,7 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               workflow_id: 'cd-k8s.yml',
-              ref: 'main',
+              ref: 'develop',
               inputs: {
                 image_tag: '${{ steps.docker-meta.outputs.image_tag }}',
                 sha: '${{ github.sha }}'
