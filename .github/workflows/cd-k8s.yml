@@ -1,0 +1,142 @@
+name: Re-Fit AI CD (K8s / ArgoCD)
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: 'Docker image tag (e.g., main-abc1234)'
+        required: true
+        type: string
+      sha:
+        description: 'Commit SHA'
+        required: false
+        type: string
+
+jobs:
+  deploy-k8s:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Checkout Cloud Repo
+        uses: actions/checkout@v4
+        with:
+          repository: 100-hours-a-week/19-team-project-cloud
+          token: ${{ secrets.PAT }}
+          path: cloud
+
+      - name: Update Helm values.yaml image tag
+        run: |
+          IMAGE_TAG="${{ inputs.image_tag }}"
+          VALUES_FILE="cloud/k8s/helm/refit-ai/values.yaml"
+
+          sed -i "s|^  tag:.*|  tag: \"${IMAGE_TAG}\"|" "${VALUES_FILE}"
+
+          echo "Updated image tag → ${IMAGE_TAG}"
+          grep "tag:" "${VALUES_FILE}"
+
+      - name: Commit and Push to Cloud Repo
+        id: git-push
+        run: |
+          cd cloud
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add k8s/helm/refit-ai/values.yaml
+
+          if git diff --cached --quiet; then
+            echo "No changes — image tag is already up to date"
+            echo "pushed=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          IMAGE_TAG="${{ inputs.image_tag }}"
+          SHA="${{ inputs.sha }}"
+          SHA_SHORT="${SHA:0:7}"
+
+          git commit -m "ci: update refit-ai image to ${IMAGE_TAG} [${SHA_SHORT}]"
+          git push
+
+          echo "pushed=true" >> $GITHUB_OUTPUT
+          echo "Pushed to cloud repo — ArgoCD will sync within ~3 minutes"
+
+      - name: Wait for ArgoCD rollout
+        if: steps.git-push.outputs.pushed == 'true'
+        run: |
+          echo "Waiting 60s for ArgoCD to detect and apply the change..."
+          sleep 60
+
+      - name: Health Check
+        run: |
+          HEALTH_URL="${{ secrets.K8S_HEALTH_CHECK_URL_AI }}"
+
+          if [ -z "$HEALTH_URL" ]; then
+            echo "K8S_HEALTH_CHECK_URL_AI not configured, skipping"
+            exit 0
+          fi
+
+          echo "Health check: ${HEALTH_URL}"
+          for i in {1..15}; do
+            HTTP_STATUS=$(timeout 5 curl -s -o /dev/null -w "%{http_code}" "${HEALTH_URL}" 2>/dev/null || echo "000")
+            if [ "${HTTP_STATUS}" = "200" ]; then
+              echo "Health check passed (HTTP 200)"
+              exit 0
+            fi
+            echo "  Attempt ${i}/15 — HTTP ${HTTP_STATUS}"
+            [ $i -lt 15 ] && sleep 10
+          done
+
+          echo "Health check failed"
+          exit 1
+
+      - name: Notify Discord - Success
+        if: success()
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+        run: |
+          [ -z "$DISCORD_WEBHOOK" ] && exit 0
+          SHA="${{ inputs.sha }}"
+          SHA_SHORT="${SHA:0:7}"
+          payload=$(cat <<EOF
+          {
+            "embeds": [{
+              "title": "AI K8s 배포 완료",
+              "description": "ArgoCD를 통해 K8s 클러스터에 배포되었습니다.",
+              "color": 3066993,
+              "fields": [
+                {"name": "이미지 태그", "value": "\`${{ inputs.image_tag }}\`", "inline": true},
+                {"name": "커밋 SHA", "value": "\`${SHA_SHORT}\`", "inline": true},
+                {"name": "워크플로우", "value": "[상세 보기](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})", "inline": false}
+              ],
+              "footer": {"text": "Re-Fit K8s CD"},
+              "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            }]
+          }
+          EOF
+          )
+          curl -sS -H "Content-Type: application/json" -X POST -d "$payload" "$DISCORD_WEBHOOK"
+
+      - name: Notify Discord - Failure
+        if: failure()
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+        run: |
+          [ -z "$DISCORD_WEBHOOK" ] && exit 0
+          SHA="${{ inputs.sha }}"
+          SHA_SHORT="${SHA:0:7}"
+          payload=$(cat <<EOF
+          {
+            "embeds": [{
+              "title": "AI K8s 배포 실패",
+              "color": 15158332,
+              "fields": [
+                {"name": "이미지 태그", "value": "\`${{ inputs.image_tag }}\`", "inline": true},
+                {"name": "커밋 SHA", "value": "\`${SHA_SHORT}\`", "inline": true},
+                {"name": "워크플로우", "value": "[상세 보기](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})", "inline": false}
+              ],
+              "footer": {"text": "Re-Fit K8s CD"},
+              "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            }]
+          }
+          EOF
+          )
+          curl -sS -H "Content-Type: application/json" -X POST -d "$payload" "$DISCORD_WEBHOOK"
