@@ -70,8 +70,8 @@ jobs:
           HEALTH_URL="${{ secrets.K8S_HEALTH_CHECK_URL_AI }}"
 
           if [ -z "$HEALTH_URL" ]; then
-            echo "K8S_HEALTH_CHECK_URL_AI not configured, skipping"
-            exit 0
+            echo "K8S_HEALTH_CHECK_URL_AI is not set. Health check is required."
+            exit 1
           fi
 
           echo "Health check: ${HEALTH_URL}"
