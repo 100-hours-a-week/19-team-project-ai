@@ -1,22 +1,21 @@
-"""expert_profiles 테이블 구조 확인용 스크립트"""
 import asyncio
 import os
 import sys
 
+# 프로젝트 루트 경로를 참조할 수 있도록 sys.path 추가
 _this_dir = os.path.dirname(os.path.abspath(__file__))
 _ai_app_dir = os.path.abspath(os.path.join(_this_dir, "..", ".."))
 if _ai_app_dir not in sys.path:
     sys.path.insert(0, _ai_app_dir)
 
+import asyncpg  # noqa: E402
+
 try:
     from dotenv import load_dotenv
+
     load_dotenv()
 except ImportError:
     pass
-
-import asyncpg
-
-
 async def check():
     db_url = os.getenv("DATABASE_URL")
     if not db_url:

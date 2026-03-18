@@ -8,13 +8,13 @@ _ai_app_dir = os.path.abspath(os.path.join(_this_dir, "..", ".."))
 if _ai_app_dir not in sys.path:
     sys.path.insert(0, _ai_app_dir)
 
+import httpx  # noqa: E402
+
 try:
     from dotenv import load_dotenv
     load_dotenv()
 except ImportError:
     pass
-
-import httpx
 
 
 async def check():

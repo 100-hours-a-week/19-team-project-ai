@@ -4,7 +4,7 @@ import logging
 import os
 import traceback
 from functools import lru_cache
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 from opentelemetry import trace

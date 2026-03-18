@@ -12,9 +12,8 @@ from pathlib import Path
 from typing import Any, Optional
 
 from adapters.db_client import VectorSearchClient, get_vector_search_client
-from schemas.agent import MentorConditions
 
-from services.agent.mentor_search import build_query_text, rule_rerank, vector_search
+from services.agent.mentor_search import build_query_text
 from services.agent.slot_filling import SlotFiller
 from services.reco.embedder import ProfileEmbedder, get_embedder
 
