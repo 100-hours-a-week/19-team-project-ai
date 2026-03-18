@@ -25,6 +25,7 @@ if _ai_app_dir not in sys.path:
 
 try:
     from dotenv import load_dotenv
+
     load_dotenv()
 except ImportError:
     pass

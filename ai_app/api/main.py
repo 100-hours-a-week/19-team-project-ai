@@ -57,10 +57,7 @@ if ENABLE_OTEL:
     _provider = TracerProvider()
     _provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter(endpoint=OTLP_ENDPOINT)))
     trace.set_tracer_provider(_provider)
-    FastAPIInstrumentor.instrument_app(
-        app,
-        excluded_urls="health,api/ai/health,api/ai/metrics,metrics"
-    )
+    FastAPIInstrumentor.instrument_app(app, excluded_urls="health,api/ai/health,api/ai/metrics,metrics")
     logging.info(f"OpenTelemetry 가 활성화되었습니다. (endpoint={OTLP_ENDPOINT})")
 
 

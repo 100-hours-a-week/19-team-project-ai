@@ -1,4 +1,5 @@
 """백엔드 API 상태 확인 스크립트"""
+
 import asyncio
 import os
 import sys
@@ -12,6 +13,7 @@ import httpx  # noqa: E402
 
 try:
     from dotenv import load_dotenv
+
     load_dotenv()
 except ImportError:
     pass
@@ -65,7 +67,7 @@ async def check():
                         print(f"  키: {list(detail.keys())}")
                         print(f"  jobs: {detail.get('jobs', [])[:2]}")
                         print(f"  skills: {detail.get('skills', [])[:3]}")
-                        intro = detail.get('introduction', '')
+                        intro = detail.get("introduction", "")
                         print(f"  introduction: {intro[:100]}..." if intro else "  introduction: (없음)")
                     else:
                         print(f"  응답: {resp2.text[:200]}")
@@ -89,6 +91,7 @@ async def check():
         print("\n--- 4. DB 직접 조회: chat_messages (채팅 조회) ---")
         try:
             import asyncpg
+
             db_url = os.getenv("DATABASE_URL", "")
             pool = await asyncpg.create_pool(dsn=db_url, min_size=1, max_size=2)
             async with pool.acquire() as conn:

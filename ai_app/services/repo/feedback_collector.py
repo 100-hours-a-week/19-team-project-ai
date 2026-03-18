@@ -65,9 +65,7 @@ class FeedbackCollector:
 
     # ============== Phase A: 채팅 로그 → 피드백 변환 ==============
 
-    async def extract_feedbacks_from_chat(
-        self, chat_room_id: int, mentor_id: int
-    ) -> list[ExpertFeedback]:
+    async def extract_feedbacks_from_chat(self, chat_room_id: int, mentor_id: int) -> list[ExpertFeedback]:
         """
         채팅 로그에서 가치 있는 Q&A를 추출하고 개인정보를 마스킹한다.
 
@@ -136,17 +134,19 @@ class FeedbackCollector:
             embedding_text = f"질문: {fb.question}\n답변: {fb.answer}"
             embedding = await self.embedder.embed_text(embedding_text, is_query=False)
 
-            feedback_dicts.append({
-                "mentor_id": fb.mentor_id,
-                "question": fb.question,
-                "answer": fb.answer,
-                "job_tag": fb.job_tag,
-                "question_type": fb.question_type,
-                "embedding_text": embedding_text,
-                "source_type": fb.source_type,
-                "quality_score": fb.quality_score,
-                "embedding": embedding.tolist(),
-            })
+            feedback_dicts.append(
+                {
+                    "mentor_id": fb.mentor_id,
+                    "question": fb.question,
+                    "answer": fb.answer,
+                    "job_tag": fb.job_tag,
+                    "question_type": fb.question_type,
+                    "embedding_text": embedding_text,
+                    "source_type": fb.source_type,
+                    "quality_score": fb.quality_score,
+                    "embedding": embedding.tolist(),
+                }
+            )
 
         # 3. 백엔드 API로 저장
         inserted = await self.backend_client.save_feedbacks_batch(feedback_dicts)

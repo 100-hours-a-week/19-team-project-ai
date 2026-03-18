@@ -16,6 +16,8 @@ try:
     load_dotenv()
 except ImportError:
     pass
+
+
 async def check():
     db_url = os.getenv("DATABASE_URL")
     if not db_url:

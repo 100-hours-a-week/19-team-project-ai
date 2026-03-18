@@ -254,10 +254,16 @@ async def feedback_retrieval_node(state: AgentState) -> dict:
 
     # 직무 태그 매핑 (한글 → DB 태그)
     job_tag_map = {
-        "백엔드": "BE", "backend": "BE",
-        "프론트엔드": "FE", "frontend": "FE", "프론트": "FE",
-        "ai": "AI", "ml": "AI", "인공지능": "AI",
-        "데이터": "DATA", "data": "DATA",
+        "백엔드": "BE",
+        "backend": "BE",
+        "프론트엔드": "FE",
+        "frontend": "FE",
+        "프론트": "FE",
+        "ai": "AI",
+        "ml": "AI",
+        "인공지능": "AI",
+        "데이터": "DATA",
+        "data": "DATA",
     }
     job_tag = job_tag_map.get(target_job.lower()) if target_job else None
 

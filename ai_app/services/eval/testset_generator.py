@@ -105,21 +105,23 @@ class TestsetGenerator:
                 embedding = list(embedding_str)
 
             # 1. Silver GT 데이터 (임베딩 직접 사용)
-            testset.append({
-                "type": "embedding_gt",
-                "query": None,  # 임베딩으로 직접 검색
-                "embedding": embedding,
-                "difficulty": "embedding",
-                "gt_mentor_id": user_id,
-                "gt_mentor_profile": {
-                    "company_name": company,
-                    "verified": verified,
-                    "rating_avg": rating_avg,
-                },
-            })
+            testset.append(
+                {
+                    "type": "embedding_gt",
+                    "query": None,  # 임베딩으로 직접 검색
+                    "embedding": embedding,
+                    "difficulty": "embedding",
+                    "gt_mentor_id": user_id,
+                    "gt_mentor_profile": {
+                        "company_name": company,
+                        "verified": verified,
+                        "rating_avg": rating_avg,
+                    },
+                }
+            )
 
             # 2. LLM 합성 질의 (E2E 평가)
-            logger.info(f"[{i+1}/{len(rows)}] 멘토 {user_id} 질의 생성 중...")
+            logger.info(f"[{i + 1}/{len(rows)}] 멘토 {user_id} 질의 생성 중...")
             queries = await self._generate_queries(
                 user_id=user_id,
                 company_name=company,
@@ -129,20 +131,22 @@ class TestsetGenerator:
             )
 
             for q in queries:
-                testset.append({
-                    "type": "query_gt",
-                    "query": q["query"],
-                    "embedding": None,
-                    "difficulty": q.get("difficulty", "medium"),
-                    "gt_mentor_id": user_id,
-                    "gt_mentor_profile": {
-                        "company_name": company,
-                        "verified": verified,
-                        "rating_avg": rating_avg,
-                    },
-                })
+                testset.append(
+                    {
+                        "type": "query_gt",
+                        "query": q["query"],
+                        "embedding": None,
+                        "difficulty": q.get("difficulty", "medium"),
+                        "gt_mentor_id": user_id,
+                        "gt_mentor_profile": {
+                            "company_name": company,
+                            "verified": verified,
+                            "rating_avg": rating_avg,
+                        },
+                    }
+                )
 
-        logger.info(f"테스트셋 생성 완료: {len(testset)}개 ({len(rows)} embedding + {len(testset)-len(rows)} query)")
+        logger.info(f"테스트셋 생성 완료: {len(testset)}개 ({len(rows)} embedding + {len(testset) - len(rows)} query)")
         return testset
 
     async def generate_and_save(
@@ -171,10 +175,7 @@ class TestsetGenerator:
         emb_items = [item for item in testset if item.get("embedding")]
         if emb_items:
             emb_path = TESTSET_DIR / "testset_d1_embeddings.json"
-            emb_data = {
-                str(item["gt_mentor_id"]): item["embedding"]
-                for item in emb_items
-            }
+            emb_data = {str(item["gt_mentor_id"]): item["embedding"] for item in emb_items}
             with open(emb_path, "w") as f:
                 json.dump(emb_data, f)
             logger.info(f"임베딩 저장: {emb_path} ({len(emb_data)}건)")

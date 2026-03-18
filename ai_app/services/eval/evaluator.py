@@ -86,7 +86,7 @@ class D1Evaluator:
                 if not query:
                     continue
 
-                logger.info(f"[{i+1}/{len(testset)}] 평가: {query[:40]}...")
+                logger.info(f"[{i + 1}/{len(testset)}] 평가: {query[:40]}...")
                 result = await self._evaluate_query(
                     query=query,
                     gt_mentor_id=gt_id,
@@ -228,15 +228,10 @@ class D1Evaluator:
             else:
                 reciprocal_ranks.append(0.0)
 
-        metrics = {
-            f"hit_at_{k}": round(hits[k] / total * 100, 2)
-            for k in [1, 3, 5, 10]
-        }
+        metrics = {f"hit_at_{k}": round(hits[k] / total * 100, 2) for k in [1, 3, 5, 10]}
         metrics["mrr"] = round(sum(reciprocal_ranks) / total, 4)
         metrics["total"] = total
-        metrics["avg_latency_ms"] = round(
-            sum(r.get("latency_ms", 0) for r in valid) / total, 1
-        )
+        metrics["avg_latency_ms"] = round(sum(r.get("latency_ms", 0) for r in valid) / total, 1)
 
         # 난이도별 (query_gt만)
         by_difficulty = {}
@@ -246,10 +241,7 @@ class D1Evaluator:
                 continue
             diff_total = len(diff_results)
             diff_hits = sum(1 for r in diff_results if r.get("rank") and r["rank"] <= 3)
-            diff_mrr_vals = [
-                1.0 / r["rank"] if r.get("rank") else 0.0
-                for r in diff_results
-            ]
+            diff_mrr_vals = [1.0 / r["rank"] if r.get("rank") else 0.0 for r in diff_results]
             by_difficulty[diff] = {
                 "total": diff_total,
                 "hit_at_3": round(diff_hits / diff_total * 100, 2),

@@ -195,9 +195,7 @@ class VectorSearchClient:
 
     # ---------- 채팅 메시지 조회 ----------
 
-    async def get_chat_messages(
-        self, chat_room_id: int
-    ) -> List[Dict[str, Any]]:
+    async def get_chat_messages(self, chat_room_id: int) -> List[Dict[str, Any]]:
         """
         채팅방의 전체 메시지를 시간순으로 조회
 
@@ -240,9 +238,7 @@ class VectorSearchClient:
             logger.error(f"채팅 메시지 조회 실패 (room_id={chat_room_id}): {e}")
             raise
 
-    async def get_closed_chat_rooms(
-        self, limit: int = 100
-    ) -> List[Dict[str, Any]]:
+    async def get_closed_chat_rooms(self, limit: int = 100) -> List[Dict[str, Any]]:
         """
         종료된 채팅방 목록 조회 (피드백 추출 대상)
 
