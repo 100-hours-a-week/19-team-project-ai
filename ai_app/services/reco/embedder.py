@@ -43,8 +43,6 @@ class ProfileEmbedder:
         self._cache: OrderedDict = OrderedDict()
         self._cache_max_size = EMBEDDING_CACHE_MAX_SIZE
 
-
-
     @property
     def model(self) -> SentenceTransformer:
         """Lazy loading으로 모델 로드"""
@@ -147,9 +145,7 @@ class ProfileEmbedder:
                 # 아직 대기 중 (IN_QUEUE, IN_PROGRESS 등)
                 await asyncio.sleep(1)
 
-            raise TimeoutError(
-                f"RunPod job {job_id} timed out after polling ({max_retries}s). Status was: {status}"
-            )
+            raise TimeoutError(f"RunPod job {job_id} timed out after polling ({max_retries}s). Status was: {status}")
 
         except Exception as e:
             logger.error(f"RunPod API request failed: {e}. Falling back to local model if available.")
