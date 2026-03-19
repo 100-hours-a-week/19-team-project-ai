@@ -27,5 +27,4 @@ services:
       - "4317:4317"
       - "4318:4318"
     volumes:
-      - /etc/refit/otel-agent-config-ai.yaml:/etc/refit/otel-agent-config-ai.yaml:ro
       - /var/lib/docker/containers:/var/lib/docker/containers:ro
