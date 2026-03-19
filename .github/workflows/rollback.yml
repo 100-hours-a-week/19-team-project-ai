@@ -3,9 +3,16 @@ name: AI Service Rollback (Prod)
 on:
   workflow_dispatch:
     inputs:
-      image_tag:
-        description: '복구할 Docker image tag (e.g., main-abc1234)'
+      action:
+        description: 'rollback: 구버전 배포 + Image Updater 중단 / resume: 자동 배포 재개'
         required: true
+        type: choice
+        options:
+          - rollback
+          - resume
+      image_tag:
+        description: '[rollback 시 필수] 롤백할 이미지 태그 (e.g., main-abc1234)'
+        required: false
         type: string
 
 permissions:
@@ -13,36 +20,46 @@ permissions:
 
 env:
   AWS_REGION: ${{ secrets.AWS_REGION || 'ap-northeast-2' }}
+  CLOUD_REPO: 100-hours-a-week/19-team-project-cloud
+  HELM_VALUES_PATH: k8s/helm/refit-ai/values.yaml
+  ARGOCD_APPS_PATH: k8s/manifests/argocd-apps/refit-stack.yaml
 
 jobs:
-  rollback:
-    name: Rollback to Previous Image
+  run:
+    name: ${{ inputs.action == 'rollback' && format('Rollback to {0}', inputs.image_tag) || 'Resume Auto-Deployment' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 10
     concurrency:
       group: rollback-ai-prod
       cancel-in-progress: false
     environment: production
 
     steps:
-      - name: Preflight - validate required secrets
-        env:
-          ECR_REPOSITORY_AI: ${{ secrets.ECR_REPOSITORY_AI }}
-          EC2_HOST_PROD: ${{ secrets.EC2_HOST_PROD }}
-          EC2_USERNAME_PROD: ${{ secrets.EC2_USERNAME_PROD }}
-          EC2_SSH_KEY_PROD: ${{ secrets.EC2_SSH_KEY_PROD }}
-          COMPOSE_DIR_PROD: ${{ secrets.COMPOSE_DIR_PROD }}
-          ENV_FILE_PROD: ${{ secrets.ENV_FILE_PROD }}
+      - name: Validate inputs
         run: |
           set -euo pipefail
-          for v in ECR_REPOSITORY_AI EC2_HOST_PROD EC2_USERNAME_PROD EC2_SSH_KEY_PROD COMPOSE_DIR_PROD ENV_FILE_PROD; do
+          if [ "${{ inputs.action }}" = "rollback" ] && [ -z "${{ inputs.image_tag }}" ]; then
+            echo "image_tag is required when action is rollback."
+            exit 1
+          fi
+
+      - name: Preflight - validate required secrets
+        env:
+          PAT: ${{ secrets.PAT }}
+          ECR_REPOSITORY_AI: ${{ secrets.ECR_REPOSITORY_AI }}
+        run: |
+          set -euo pipefail
+          for v in PAT ECR_REPOSITORY_AI; do
             if [ -z "${!v:-}" ]; then
               echo "Missing required secret: $v"
               exit 1
             fi
           done
 
+      # ── rollback 전용 스텝 ──────────────────────────────────────
+
       - name: Configure AWS credentials
+        if: inputs.action == 'rollback'
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
@@ -50,126 +67,148 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Login to Amazon ECR
+        if: inputs.action == 'rollback'
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Verify image exists in ECR
+      - name: Mask sensitive values in logs
+        if: inputs.action == 'rollback'
+        run: |
+          echo "::add-mask::${{ steps.login-ecr.outputs.registry }}"
+          echo "::add-mask::${{ secrets.ECR_REPOSITORY_AI }}"
+          echo "::add-mask::${{ secrets.AWS_ACCESS_KEY_ID }}"
+          echo "::add-mask::${{ secrets.AWS_SECRET_ACCESS_KEY }}"
+
+      - name: Verify rollback image exists in ECR
+        if: inputs.action == 'rollback'
         run: |
           set -euo pipefail
           aws ecr describe-images \
             --repository-name "${{ secrets.ECR_REPOSITORY_AI }}" \
             --image-ids imageTag="${{ inputs.image_tag }}" \
             --region "${{ env.AWS_REGION }}" > /dev/null
+          echo "Rollback image verified: ${{ inputs.image_tag }}"
 
-      - name: Mask sensitive values in logs
-        run: |
-          echo "::add-mask::${{ steps.login-ecr.outputs.registry }}"
-          echo "::add-mask::${{ secrets.ECR_REPOSITORY_AI }}"
-          echo "::add-mask::${{ inputs.image_tag }}"
-          echo "::add-mask::${{ secrets.EC2_HOST_PROD }}"
-          echo "::add-mask::${{ secrets.EC2_USERNAME_PROD }}"
-          echo "::add-mask::${{ secrets.EC2_SSH_PORT_PROD }}"
-          echo "::add-mask::${{ secrets.COMPOSE_DIR_PROD }}"
-          echo "::add-mask::${{ secrets.AWS_ACCESS_KEY_ID }}"
-          echo "::add-mask::${{ secrets.AWS_SECRET_ACCESS_KEY }}"
+      # ── 공통: cloud 레포 체크아웃 ─────────────────────────────
 
-      - name: Rollback via SSH
-        id: rollback
-        uses: appleboy/ssh-action@v1
-        env:
-          ENV_FILE_PROD: ${{ secrets.ENV_FILE_PROD }}
-          COMPOSE_DIR: ${{ secrets.COMPOSE_DIR_PROD }}
-          IMAGE_TAG: ${{ inputs.image_tag }}
-          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          ECR_REPOSITORY_AI: ${{ secrets.ECR_REPOSITORY_AI }}
-          AWS_REGION: ${{ env.AWS_REGION }}
+      - name: Checkout cloud repository
+        uses: actions/checkout@v4
         with:
-          host: ${{ secrets.EC2_HOST_PROD }}
-          username: ${{ secrets.EC2_USERNAME_PROD }}
-          key: ${{ secrets.EC2_SSH_KEY_PROD }}
-          port: ${{ secrets.EC2_SSH_PORT_PROD || '22' }}
-          envs: ENV_FILE_PROD,COMPOSE_DIR,IMAGE_TAG,ECR_REGISTRY,ECR_REPOSITORY_AI,AWS_REGION
-          script: |
-            set -euo pipefail
-            export PATH="/usr/local/bin:/usr/bin:/bin:$PATH"
+          repository: ${{ env.CLOUD_REPO }}
+          token: ${{ secrets.PAT }}
+          path: cloud-repo
 
-            # 롤백 전 필수 구성요소 점검
-            [ -d "$COMPOSE_DIR" ] || { echo "Compose directory not found: $COMPOSE_DIR"; exit 1; }
-            command -v docker >/dev/null 2>&1 || { echo "docker not found"; exit 1; }
-            docker compose version >/dev/null 2>&1 || { echo "docker compose not found"; exit 1; }
-            command -v aws >/dev/null 2>&1 || { echo "aws cli not found"; exit 1; }
+      # ── rollback 처리 ──────────────────────────────────────────
 
-            cd "$COMPOSE_DIR"
-            printf '%s\n' "$ENV_FILE_PROD" > .env.ai
-            chmod 644 .env.ai
+      - name: Apply rollback
+        if: inputs.action == 'rollback'
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        run: |
+          set -euo pipefail
+          cd cloud-repo
 
-            aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "$ECR_REGISTRY" >/dev/null 2>&1
+          # values.yaml image.tag 롤백
+          sed -i "s|^  tag:.*|  tag: \"${{ inputs.image_tag }}\"|" "${{ env.HELM_VALUES_PATH }}"
+          sed -i "s|^  repository:.*|  repository: ${ECR_REGISTRY}/${{ secrets.ECR_REPOSITORY_AI }}|" "${{ env.HELM_VALUES_PATH }}"
 
-            # .env 키를 안전하게 갱신(없으면 추가)
-            if grep -q '^ECR_REGISTRY=' .env 2>/dev/null; then
-              sed -i "s|^ECR_REGISTRY=.*|ECR_REGISTRY=${ECR_REGISTRY}|" .env
-            else
-              echo "ECR_REGISTRY=${ECR_REGISTRY}" >> .env
-            fi
+          # Image Updater 비활성화 (롤백 이미지를 다시 덮어쓰지 못하게)
+          if ! grep -q 'update-disabled' "${{ env.ARGOCD_APPS_PATH }}"; then
+            sed -i '/argocd-image-updater.argoproj.io\/git-branch:/a\    argocd-image-updater.argoproj.io/update-disabled: "true"' "${{ env.ARGOCD_APPS_PATH }}"
+          fi
 
-            if grep -q '^ECR_REPOSITORY_AI=' .env 2>/dev/null; then
-              sed -i "s|^ECR_REPOSITORY_AI=.*|ECR_REPOSITORY_AI=${ECR_REPOSITORY_AI}|" .env
-            else
-              echo "ECR_REPOSITORY_AI=${ECR_REPOSITORY_AI}" >> .env
-            fi
+      # ── resume 처리 ────────────────────────────────────────────
 
-            if grep -q '^AI_TAG=' .env 2>/dev/null; then
-              sed -i "s|^AI_TAG=.*|AI_TAG=${IMAGE_TAG}|" .env
-            else
-              echo "AI_TAG=${IMAGE_TAG}" >> .env
-            fi
+      - name: Resume auto-deployment
+        if: inputs.action == 'resume'
+        run: |
+          set -euo pipefail
+          cd cloud-repo
 
-            docker compose pull ai
-            docker compose up -d ai
-            docker image prune -a -f 2>/dev/null || true
+          if ! grep -q 'update-disabled' "${{ env.ARGOCD_APPS_PATH }}"; then
+            echo "Image Updater is already active. Nothing to do."
+            exit 0
+          fi
 
-            for i in {1..20}; do
-              code=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8000/health || echo 000)
-              if [ "$code" = "200" ]; then
-                echo "Rollback health check passed"
-                exit 0
-              fi
-              echo "Rollback health check attempt ${i}/20 - HTTP ${code}"
-              sleep 5
-            done
+          sed -i '/argocd-image-updater.argoproj.io\/update-disabled:/d' "${{ env.ARGOCD_APPS_PATH }}"
 
-            echo "Rollback health check failed"
-            exit 1
+      # ── 공통: 커밋 & 푸시 ─────────────────────────────────────
+
+      - name: Commit and push to cloud repo
+        run: |
+          set -euo pipefail
+          cd cloud-repo
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add "${{ env.HELM_VALUES_PATH }}" "${{ env.ARGOCD_APPS_PATH }}"
+
+          if git diff --cached --quiet; then
+            echo "Nothing to commit."
+            exit 0
+          fi
+
+          if [ "${{ inputs.action }}" = "rollback" ]; then
+            git commit -m "rollback(refit-ai): revert to ${{ inputs.image_tag }} + pause image updater"
+          else
+            git commit -m "chore(refit-ai): resume image updater after rollback"
+          fi
+
+          git push
+
+      # ── 공통: Discord 알림 ─────────────────────────────────────
 
       - name: Notify Discord
         if: always()
         env:
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
           STATUS: ${{ job.status }}
-          IMAGE_TAG: ${{ inputs.image_tag }}
           RUN_ID: ${{ github.run_id }}
         run: |
           [ -z "$DISCORD_WEBHOOK" ] && exit 0
 
-          if [ "$STATUS" = "success" ]; then
-            COLOR=3066993
-            TITLE="AI 롤백 성공"
+          if [ "${{ inputs.action }}" = "rollback" ]; then
+            if [ "$STATUS" = "success" ]; then
+              COLOR=16776960
+              TITLE="AI 롤백 진행 중"
+              DESC="${{ inputs.image_tag }}으로 롤백. ArgoCD 배포 중 (Image Updater 일시 중단)."
+            else
+              COLOR=15158332
+              TITLE="AI 롤백 실패"
+              DESC="롤백에 실패했습니다. 워크플로우 로그를 확인하세요."
+            fi
+            FIELDS='[
+              {"name": "서비스", "value": "Re-Fit AI (Prod)", "inline": true},
+              {"name": "롤백 태그", "value": "`${{ inputs.image_tag }}`", "inline": true},
+              {"name": "Image Updater", "value": "일시 비활성화", "inline": true},
+              {"name": "워크플로우", "value": "[상세 보기](https://github.com/${{ github.repository }}/actions/runs/$RUN_ID)", "inline": false}
+            ]'
           else
-            COLOR=15158332
-            TITLE="AI 롤백 실패"
+            if [ "$STATUS" = "success" ]; then
+              COLOR=3066993
+              TITLE="AI 자동 배포 재개"
+              DESC="Image Updater 재활성화. 이후 main push 시 자동 배포됩니다."
+            else
+              COLOR=15158332
+              TITLE="AI 배포 재개 실패"
+              DESC="배포 재개에 실패했습니다. 워크플로우 로그를 확인하세요."
+            fi
+            FIELDS='[
+              {"name": "서비스", "value": "Re-Fit AI (Prod)", "inline": true},
+              {"name": "Image Updater", "value": "재활성화", "inline": true},
+              {"name": "워크플로우", "value": "[상세 보기](https://github.com/${{ github.repository }}/actions/runs/$RUN_ID)", "inline": false}
+            ]'
           fi
 
           payload=$(cat <<EOF
           {
             "embeds": [{
               "title": "$TITLE",
+              "description": "$DESC",
               "color": $COLOR,
-              "fields": [
-                {"name": "서비스", "value": "Re-Fit AI (Prod)", "inline": true},
-                {"name": "이미지 태그", "value": "\`$IMAGE_TAG\`", "inline": true},
-                {"name": "워크플로우", "value": "[상세 보기](https://github.com/${{ github.repository }}/actions/runs/$RUN_ID)", "inline": false}
-              ],
-              "footer": { "text": "Re-Fit AI Rollback" },
+              "fields": $FIELDS,
+              "footer": { "text": "Re-Fit Prod · Rollback" },
               "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
             }]
           }

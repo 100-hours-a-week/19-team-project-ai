@@ -2,6 +2,7 @@
 
 import json
 import logging
+import re
 from collections.abc import AsyncGenerator
 from datetime import datetime, timezone
 from typing import Any
@@ -15,6 +16,54 @@ from services.agent.slot_filling import SlotFiller
 from services.reco.embedder import ProfileEmbedder, get_embedder
 
 logger = logging.getLogger(__name__)
+
+# 경력 연수 추출 패턴 (자기소개 텍스트에서 추출)
+_EXP_PATTERNS = [
+    re.compile(r"(\d+)\s*년\s*[차이]"),  # "3년차", "5년이상"
+    re.compile(r"경력\s*(\d+)\s*년"),  # "경력 3년"
+    re.compile(r"(\d+)\s*년\s*경력"),  # "3년 경력"
+    re.compile(r"(\d+)\s*years?", re.IGNORECASE),  # "3 years"
+    re.compile(r"경력\s*:\s*(\d+)"),  # "경력: 3"
+    re.compile(r"(\d+)\s*년\s*[째경]"),  # "3년째", "3년경"
+]
+
+# 키워드 기반 경력 추정 (자기소개에서 연수를 못 찾을 때 보조)
+_SENIORITY_KEYWORDS = {
+    "시니어": 7,
+    "senior": 7,
+    "리드": 8,
+    "lead": 8,
+    "테크리드": 9,
+    "tech lead": 9,
+    "주니어": 2,
+    "junior": 2,
+    "신입": 1,
+    "인턴": 0,
+}
+
+
+def _extract_experience_years(text: str) -> int | None:
+    """자기소개 텍스트에서 경력 연수를 추출한다."""
+    if not text:
+        return None
+
+    text_lower = text.lower()
+
+    # 1. 정규식 패턴 매칭
+    for pattern in _EXP_PATTERNS:
+        match = pattern.search(text)
+        if match:
+            years = int(match.group(1))
+            if 0 <= years <= 40:  # 합리적 범위
+                return years
+
+    # 2. 키워드 기반 추정
+    for keyword, years in _SENIORITY_KEYWORDS.items():
+        if keyword in text_lower:
+            return years
+
+    return None
+
 
 # ============== 쿼리 빌드 ==============
 
@@ -37,8 +86,8 @@ def build_query_text(conditions: MentorConditions) -> str:
         parts.append(f"도메인: {conditions.domain}")
     if conditions.region:
         parts.append(f"지역: {conditions.region}")
-    if conditions.company_type:
-        parts.append(f"회사유형: {conditions.company_type}")
+    if conditions.company:
+        parts.append(f"회사: {conditions.company}")
     if conditions.keywords:
         parts.append(f"키워드: {', '.join(conditions.keywords)}")
 
@@ -100,7 +149,7 @@ def rule_rerank(
     재정렬 규칙:
     1. 직무 일치 가중치 (+0.15)
     2. 기술스택 일치 가중치 (+0.05 × 일치 개수)
-    3. 경력 차이 패널티 (차이 × -0.02, 최대 -0.1)
+    3. 경력 차이 패널티 (차이 × -0.05, 최대 -0.30 / 추출 불가 시 -0.10)
     4. 차이가 큰 경우 응답률 우선 보정
     5. 최근 활동 가중치 (7일 이내 +0.05)
 
@@ -152,8 +201,20 @@ def rule_rerank(
             if filter_type is None:
                 filter_type = "skill"
 
-        # 3. 경력 차이 패널티 (멘토의 경력 정보 없으면 패스)
-        # 참고: 현재 DB에 경력 연수 필드가 없으므로 이 로직은 추후 확장 가능
+        # 3. 경력 차이 패널티/보너스 (자기소개에서 경력 추출)
+        if conditions.experience_years is not None:
+            mentor_exp = _extract_experience_years(cand.get("introduction", ""))
+            if mentor_exp is not None:
+                diff = abs(mentor_exp - conditions.experience_years)
+                if diff == 0:
+                    score += 0.10  # 정확히 일치
+                elif diff <= 2:
+                    score += 0.03  # 근접 범위
+                else:
+                    score -= min(diff * 0.05, 0.30)  # 차이 클수록 감점 (최대 -0.30)
+            else:
+                # 경력 정보를 추출할 수 없는 멘토는 감점 (연차 조건 충족 불확실)
+                score -= 0.10
 
         # 4. 응답률 보정 (직무/스택 모두 불일치인 경우)
         if filter_type is None and cand.get("response_rate", 0) > 0:
@@ -188,14 +249,8 @@ def rule_rerank(
     # Top K 선택 & MentorCard 변환
     cards = []
     for item in scored[:top_k]:
-        # 필드 매핑 보정
-        user_id = item.get("user_id") or item.get("id")
-        if user_id is None:
-            continue
-
         cards.append(
             MentorCard(
-                user_id=int(user_id),
                 nickname=item.get("nickname") or item.get("name") or "이름 없음",
                 company_name=item.get("company_name") or item.get("organization"),
                 verified=item.get("verified", False),
@@ -376,7 +431,7 @@ async def run_d1_pipeline(
 
     # 2. 쿼리 빌드 & 임베딩 생성
     query_text = build_query_text(conditions)
-    query_embedding = embedder.embed_text(query_text)
+    query_embedding = await embedder.embed_text(query_text)
     embedding_list = query_embedding.tolist()
 
     # 3. 벡터 검색 Top N (백엔드 API 경유)

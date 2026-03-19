@@ -26,6 +26,8 @@ class RecoController:
         self.backend_client = backend_client or get_backend_client()
         self.database_url = os.getenv("DATABASE_URL")
         self._engine = None
+        # MentorRetriever 싱글톤 (캐시 유지)
+        self._retriever: MentorRetriever | None = None
 
     @property
     def engine(self):
@@ -39,8 +41,10 @@ class RecoController:
         return tracked_db_connection(self.engine)
 
     def _get_retriever(self) -> MentorRetriever:
-        """MentorRetriever 인스턴스 생성"""
-        return MentorRetriever(backend_client=self.backend_client)
+        """MentorRetriever 인스턴스 재사용 (캐시 유지)"""
+        if self._retriever is None:
+            self._retriever = MentorRetriever(backend_client=self.backend_client)
+        return self._retriever
 
     async def recommend_mentors(
         self,
@@ -81,13 +85,13 @@ class RecoController:
         )
 
         if not results:
-            # [자동 감지] 임베딩이 누락된 전문가가 있는 경우 백그라운드 업데이트 트리거
+            # [자동 감지] 임베딩이 누락된 현직자가 있는 경우 백그라운드 업데이트 트리거
             status = await retriever.vector_search_client.get_embedding_status()
             if status["total_count"] > 0 and status["embedded_count"] < status["total_count"]:
                 if background_tasks:
                     missing = status["total_count"] - status["embedded_count"]
                     logger.warning(
-                        f"🚨 임베딩 누락 자동 감지: {missing}명의 전문가 임베딩이 없습니다. 전체 일괄 업데이트를 백그라운드에서 시작합니다."
+                        f"🚨 임베딩 누락 자동 감지: {missing}명의 현직자 임베딩이 없습니다. 전체 일괄 업데이트를 백그라운드에서 시작합니다."
                     )
                     background_tasks.add_task(self.update_all_embeddings)
 

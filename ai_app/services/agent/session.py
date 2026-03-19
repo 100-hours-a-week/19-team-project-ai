@@ -15,6 +15,9 @@ class Session:
         self.created_at = datetime.now(timezone.utc).isoformat()
         self.messages: list[dict] = []  # [{"role": "user"|"assistant", "content": "..."}]
         self.last_intent: str | None = None
+        self.target_job: str | None = None
+        self.job_link: str | None = None
+        self.parsed_job_data: dict | None = None
 
     def add_user_message(self, message: str) -> None:
         self.messages.append({"role": "user", "content": message})
@@ -32,6 +35,9 @@ class Session:
             "created_at": self.created_at,
             "message_count": len(self.messages),
             "last_intent": self.last_intent,
+            "target_job": self.target_job,
+            "job_link": self.job_link,
+            "parsed_job_data": self.parsed_job_data,
         }
 
 
