@@ -51,9 +51,10 @@ jobs:
           EC2_SSH_KEY_PROD: ${{ secrets.EC2_SSH_KEY_PROD }}
           COMPOSE_DIR_PROD: ${{ secrets.COMPOSE_DIR_PROD }}
           ENV_FILE_PROD: ${{ secrets.ENV_FILE_PROD }}
+          VERTEX_AI_CREDENTIALS: ${{ secrets.VERTEX_AI_CREDENTIALS }}
         run: |
           set -euo pipefail
-          for v in ECR_REPOSITORY_AI EC2_HOST_PROD EC2_USERNAME_PROD EC2_SSH_KEY_PROD COMPOSE_DIR_PROD ENV_FILE_PROD; do
+          for v in ECR_REPOSITORY_AI EC2_HOST_PROD EC2_USERNAME_PROD EC2_SSH_KEY_PROD COMPOSE_DIR_PROD ENV_FILE_PROD VERTEX_AI_CREDENTIALS; do
             if [ -z "${!v:-}" ]; then
               echo "Missing required secret: $v"
               exit 1
@@ -128,6 +129,7 @@ jobs:
         uses: appleboy/ssh-action@v1
         env:
           ENV_FILE_PROD: ${{ secrets.ENV_FILE_PROD }}
+          VERTEX_AI_CREDENTIALS: ${{ secrets.VERTEX_AI_CREDENTIALS }}
           COMPOSE_B64: ${{ steps.compose-content.outputs.compose_b64 }}
           COMPOSE_DIR: ${{ secrets.COMPOSE_DIR_PROD }}
           IMAGE_TAG: ${{ steps.deploy-vars.outputs.image_tag }}
@@ -139,7 +141,7 @@ jobs:
           username: ${{ secrets.EC2_USERNAME_PROD }}
           key: ${{ secrets.EC2_SSH_KEY_PROD }}
           port: ${{ secrets.EC2_SSH_PORT_PROD || '22' }}
-          envs: ENV_FILE_PROD,COMPOSE_B64,COMPOSE_DIR,IMAGE_TAG,ECR_REGISTRY,ECR_REPOSITORY_AI,AWS_REGION
+          envs: ENV_FILE_PROD,VERTEX_AI_CREDENTIALS,COMPOSE_B64,COMPOSE_DIR,IMAGE_TAG,ECR_REGISTRY,ECR_REPOSITORY_AI,AWS_REGION
           script: |
             set -euo pipefail
             export PATH="/usr/local/bin:/usr/bin:/bin:$PATH"
@@ -154,6 +156,11 @@ jobs:
             printf '%s' "$COMPOSE_B64" | base64 -d > docker-compose.yml
             printf '%s\n' "$ENV_FILE_PROD" > .env.ai
             chmod 644 docker-compose.yml .env.ai
+
+            # VertexAI credentials 주입
+            mkdir -p credentials
+            printf '%s' "$VERTEX_AI_CREDENTIALS" > credentials/project-f8e7e79f-04df-4a7b-b63-027aacf07f4a.json
+            chmod 600 credentials/project-f8e7e79f-04df-4a7b-b63-027aacf07f4a.json
 
             aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "$ECR_REGISTRY" >/dev/null 2>&1
 
