@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 from typing import Any
 
 from google import genai
@@ -48,9 +49,22 @@ class LLMClient:
         project_id = os.getenv("GCP_PROJECT_ID")
         location = os.getenv("GCP_LOCATION", "asia-northeast3")
         credentials_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+        credentials_json = os.getenv("VERTEX_AI_CREDENTIALS")
 
-        if project_id and credentials_path:
-            self._vertex_clients.append(genai.Client(vertexai=True, project=project_id, location=location))
+        if project_id and (credentials_path or credentials_json):
+            if credentials_json:
+                from google.oauth2 import service_account
+
+                cred_info = json.loads(credentials_json)
+                credentials = service_account.Credentials.from_service_account_info(
+                    cred_info,
+                    scopes=["https://www.googleapis.com/auth/cloud-platform"],
+                )
+                self._vertex_clients.append(
+                    genai.Client(vertexai=True, project=project_id, location=location, credentials=credentials)
+                )
+            else:
+                self._vertex_clients.append(genai.Client(vertexai=True, project=project_id, location=location))
             self._vertex_labels.append(f"VertexAI({location})")
 
         if not self._api_key_clients and not self._vertex_clients:
@@ -167,6 +181,7 @@ class LLMClient:
                             if lines and lines[-1].strip() == "```":
                                 lines = lines[:-1]
                             text = "\n".join(lines)
+                        text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", text)
                         return json.loads(text)
                     except Exception as e:
                         last_error = e
@@ -234,6 +249,7 @@ class LLMClient:
                             if lines and lines[-1].strip() == "```":
                                 lines = lines[:-1]
                             text = "\n".join(lines)
+                        text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", text)
                         return json.loads(text)
                     except Exception as e:
                         last_error = e
