@@ -205,21 +205,21 @@ jobs:
 
       - name: Skip Full Tests
         run: echo "No tests configured, skipping"
-      
+
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
-      
+
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
-      
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-      
+
       - name: Docker image tag
         id: docker-meta
         run: |
@@ -235,10 +235,10 @@ jobs:
           echo "::add-mask::${{ steps.docker-meta.outputs.image_tag }}"
           echo "::add-mask::${{ steps.login-ecr.outputs.registry }}/${{ secrets.ECR_REPOSITORY_AI }}:${{ steps.docker-meta.outputs.image_tag }}"
           echo "::add-mask::${{ steps.login-ecr.outputs.registry }}/${{ secrets.ECR_REPOSITORY_AI }}:main-latest"
-          echo "::add-mask::${{ secrets.PAT }}"
           echo "::add-mask::${{ secrets.AWS_ACCESS_KEY_ID }}"
           echo "::add-mask::${{ secrets.AWS_SECRET_ACCESS_KEY }}"
-      
+          echo "::add-mask::${{ secrets.PAT }}"
+
       - name: Build and Push Docker Image
         uses: docker/build-push-action@v6
         env:
@@ -257,8 +257,8 @@ jobs:
           provenance: false
           sbom: false
           platforms: linux/arm64
-      
-      - name: Trigger CD-Prod Workflow
+
+      - name: Trigger CD-K8s Workflow
         if: success()
         uses: actions/github-script@v7
         with:
@@ -267,13 +267,12 @@ jobs:
             await github.rest.actions.createWorkflowDispatch({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              workflow_id: 'cd-prod.yml',
+              workflow_id: 'cd-k8s.yml',
               ref: 'main',
               inputs: {
                 image_tag: '${{ steps.docker-meta.outputs.image_tag }}',
-                sha: '${{ github.sha }}',
-                run_id: '${{ github.run_id }}',
-                use_latest: 'false'
+                sha: '${{ github.sha }}'
               }
             });
-            console.log('CD-Prod workflow triggered');
+            console.log('CD-K8s workflow triggered successfully');
+
