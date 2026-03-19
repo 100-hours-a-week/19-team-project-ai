@@ -200,6 +200,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: main
           fetch-depth: 0
 
       - name: Skip Full Tests
@@ -267,7 +268,7 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               workflow_id: 'cd-k8s.yml',
-              ref: 'develop',
+              ref: 'main',
               inputs: {
                 image_tag: '${{ steps.docker-meta.outputs.image_tag }}',
                 sha: '${{ github.sha }}'
