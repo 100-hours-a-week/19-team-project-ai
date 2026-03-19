@@ -386,9 +386,13 @@ class MentorRetriever:
         semaphore = asyncio.Semaphore(10)  # 동시 요청 수 제한
 
         async def _fetch_expert(uid):
+            now = time.time()
             if uid in self._expert_cache:
-                self._expert_cache.move_to_end(uid)
-                return uid, self._expert_cache[uid]
+                cached_time, cached_details = self._expert_cache[uid]
+                # 5분(300초) 이내 데이터면 캐시 사용
+                if now - cached_time < 300:
+                    self._expert_cache.move_to_end(uid)
+                    return uid, cached_details
 
             async with semaphore:
                 try:
@@ -396,10 +400,13 @@ class MentorRetriever:
                     if details:
                         if len(self._expert_cache) >= EXPERT_CACHE_MAX_SIZE:
                             self._expert_cache.popitem(last=False)
-                        self._expert_cache[uid] = details
+                        self._expert_cache[uid] = (now, details)
                     return uid, details
                 except Exception as e:
                     logger.warning(f"Error fetching expert {uid}: {e}")
+                    # 만약 API 실패 시 기존 캐시가 있다면 만료되었어도 폴백으로 사용
+                    if uid in self._expert_cache:
+                        return uid, self._expert_cache[uid][1]
                     return uid, None
 
         fetch_tasks = [_fetch_expert(sr["user_id"]) for sr in search_results_to_fetch]
@@ -521,6 +528,10 @@ class MentorRetriever:
 
     async def update_expert_embedding(self, user_id: int) -> bool:
         """특정 멘토의 임베딩 업데이트 (백엔드 API를 통해 저장)"""
+        # 임베딩 업데이트 시 상세 정보 캐시 무효화 (즉시 갱신되도록)
+        if user_id in self._expert_cache:
+            self._expert_cache.pop(user_id, None)
+
         # 멘토 상세 정보 조회 (현직자 API 사용)
         expert_details = await self.backend_client.get_expert_details(user_id)
         if not expert_details:
