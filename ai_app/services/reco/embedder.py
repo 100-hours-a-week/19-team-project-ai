@@ -43,13 +43,7 @@ class ProfileEmbedder:
         self._cache: OrderedDict = OrderedDict()
         self._cache_max_size = EMBEDDING_CACHE_MAX_SIZE
 
-        # RunPod 설정
-        self.use_runpod = os.getenv("USE_RUNPOD_EMBEDDING", "false").lower() == "true"
-        self.runpod_api_key = os.getenv("RUNPOD_API_KEY")
-        self.runpod_endpoint_id = os.getenv("RUNPOD_EMBEDDING_ENDPOINT_ID")
-        self.runpod_url = (
-            f"https://api.runpod.ai/v2/{self.runpod_endpoint_id}/runsync" if self.runpod_endpoint_id else None
-        )
+
 
     @property
     def model(self) -> SentenceTransformer:
@@ -112,82 +106,50 @@ class ProfileEmbedder:
         return await loop.run_in_executor(None, lambda: self.model.encode(encode_texts, normalize_embeddings=True))
 
     async def _embed_via_runpod(self, texts: list[str], is_query: bool = True) -> np.ndarray:
-        """RunPod Serverless API를 통한 실시간 임베딩 생성 (Async)"""
-        if not self.runpod_url or not self.runpod_api_key:
-            raise RuntimeError("RunPod configuration missing (URL or API Key)")
-
-        import time
+        """RunPod Serverless API를 통한 임베딩 생성 (polling 방식)"""
+        if not self.runpod_endpoint_id or not self.runpod_api_key:
+            raise RuntimeError("RunPod configuration missing (Endpoint ID or API Key)")
 
         headers = {"Authorization": f"Bearer {self.runpod_api_key}", "Content-Type": "application/json"}
         payload = {"input": {"texts": texts, "is_query": is_query}}
 
-        start_time = time.time()
         try:
             client = await get_async_client()
-            response = await client.post(self.runpod_url, headers=headers, json=payload)
+            # 1. 작업 요청 (/run)
+            run_url = f"https://api.runpod.ai/v2/{self.runpod_endpoint_id}/run"
+            response = await client.post(run_url, headers=headers, json=payload)
             response.raise_for_status()
-            result = response.json()
+            job_data = response.json()
+            job_id = job_data.get("id")
 
-            elapsed = time.time() - start_time
-            status = result.get("status")
+            if not job_id:
+                raise RuntimeError(f"Failed to get job ID from RunPod: {job_data}")
 
-            if status == "COMPLETED":
-                logger.info(f"RunPod API success: {len(texts)} texts, took {elapsed:.2f}s")
-                return np.array(result["output"])
-            elif status in ["FAILED", "CANCELLED"]:
-                logger.error(f"RunPod job {status} after {elapsed:.2f}s: {result}")
-                raise RuntimeError(f"RunPod job {status}")
-            else:
-                logger.warning(f"RunPod unexpected status {status} after {elapsed:.2f}s")
-                raise RuntimeError(f"RunPod returned unexpected status: {status}")
+            # 2. 결과 대기 (polling)
+            status_url = f"https://api.runpod.ai/v2/{self.runpod_endpoint_id}/status/{job_id}"
+            import asyncio
 
-        except Exception as e:
-            elapsed = time.time() - start_time
-            logger.error(f"RunPod API request failed after {elapsed:.2f}s: {e}")
-            raise e
+            max_retries = 150  # 총 150초 대기
+            logger.info(f"RunPod 작업 시작됨 (ID: {job_id}). 결과를 기다리는 중...")
 
-    def _embed_via_runpod(self, texts: list[str], is_query: bool = True) -> np.ndarray:
-        """RunPod Serverless API를 통한 임베딩 생성 (polling 방식)"""
-        headers = {"Authorization": f"Bearer {self.runpod_api_key}", "Content-Type": "application/json"}
-        payload = {"input": {"texts": texts, "is_query": is_query}}
+            for i in range(max_retries):
+                status_response = await client.get(status_url, headers=headers)
+                status_response.raise_for_status()
+                result = status_response.json()
 
-        try:
-            with httpx.Client(timeout=10.0) as client:
-                # 1. 작업 요청 (/run)
-                run_url = f"https://api.runpod.ai/v2/{self.runpod_endpoint_id}/run"
-                response = client.post(run_url, headers=headers, json=payload)
-                response.raise_for_status()
-                job_data = response.json()
-                job_id = job_data.get("id")
+                status = result.get("status")
+                if status == "COMPLETED":
+                    return np.array(result["output"])
+                elif status in ["FAILED", "CANCELLED"]:
+                    logger.error(f"RunPod job {status}: {result}")
+                    raise RuntimeError(f"RunPod job {job_id} {status}")
 
-                if not job_id:
-                    raise RuntimeError(f"Failed to get job ID from RunPod: {job_data}")
+                # 아직 대기 중 (IN_QUEUE, IN_PROGRESS 등)
+                await asyncio.sleep(1)
 
-                # 2. 결과 대기 (polling)
-                status_url = f"https://api.runpod.ai/v2/{self.runpod_endpoint_id}/status/{job_id}"
-                import time
-
-                max_retries = 150  # 총 150초 대기 (1s * 150)
-                logger.info(f"RunPod 작업 시작됨 (ID: {job_id}). 결과를 기다리는 중...")
-
-                for i in range(max_retries):
-                    status_response = client.get(status_url, headers=headers)
-                    status_response.raise_for_status()
-                    result = status_response.json()
-
-                    status = result.get("status")
-                    if status == "COMPLETED":
-                        return np.array(result["output"])
-                    elif status in ["FAILED", "CANCELLED"]:
-                        logger.error(f"RunPod job {status}: {result}")
-                        raise RuntimeError(f"RunPod job {job_id} {status}")
-
-                    # 아직 대기 중 (IN_QUEUE, IN_PROGRESS 등)
-                    time.sleep(1)  # 대기 시간을 5초에서 1초로 단축 (지연 시간 절감)
-
-                raise TimeoutError(
-                    f"RunPod job {job_id} timed out after polling ({max_retries * 5}s). Status was: {status}"
-                )
+            raise TimeoutError(
+                f"RunPod job {job_id} timed out after polling ({max_retries}s). Status was: {status}"
+            )
 
         except Exception as e:
             logger.error(f"RunPod API request failed: {e}. Falling back to local model if available.")
