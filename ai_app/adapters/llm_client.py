@@ -181,7 +181,7 @@ class LLMClient:
                             if lines and lines[-1].strip() == "```":
                                 lines = lines[:-1]
                             text = "\n".join(lines)
-                        text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", text)
+                        text = re.sub(r"[\x00-\x1f\x7f\x80-\x9f]", "", text)
                         return json.loads(text)
                     except Exception as e:
                         last_error = e
@@ -249,7 +249,7 @@ class LLMClient:
                             if lines and lines[-1].strip() == "```":
                                 lines = lines[:-1]
                             text = "\n".join(lines)
-                        text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", text)
+                        text = re.sub(r"[\x00-\x1f\x7f\x80-\x9f]", "", text)
                         return json.loads(text)
                     except Exception as e:
                         last_error = e

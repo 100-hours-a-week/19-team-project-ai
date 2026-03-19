@@ -1,9 +1,20 @@
 """PDF 파서 - PDF 파일에서 텍스트와 레이아웃 추출"""
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
 import pymupdf
+
+# 탭·개행·CR을 제외한 제어문자 + DEL(\x7f) + C1 제어문자(\x80-\x9f)
+_CTRL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f\x80-\x9f]")
+
+
+def _clean_text(text: str) -> str:
+    """PDF 추출 텍스트에서 제어문자 제거 및 줄바꿈 정규화"""
+    text = _CTRL_RE.sub("", text)
+    # CR+LF → LF, 단독 CR → LF
+    return text.replace("\r\n", "\n").replace("\r", "\n")
 
 
 @dataclass
@@ -128,7 +139,7 @@ class PDFParser:
                 for line in block.get("lines", []):
                     line_text = ""
                     for span in line.get("spans", []):
-                        line_text += span.get("text", "")
+                        line_text += _clean_text(span.get("text", ""))
                     block_text_parts.append(line_text)
 
                 block_text = "\n".join(block_text_parts).strip()
@@ -146,7 +157,7 @@ class PDFParser:
                     )
 
         # 읽기 순서를 유지한 전체 페이지 텍스트
-        full_text = page.get_text("text")
+        full_text = _clean_text(page.get_text("text"))
 
         return ParsedPage(
             page_num=page_num,
