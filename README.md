@@ -155,9 +155,10 @@ ai_app/
     ├── storage_client.py           # S3 wrapper
     ├── vectordb_client.py
     └── cache_client.py             # Redis wrapper
-</code></pre>
+```
 
 ## 실행방법
+```
 # 1. 저장소 클론
 git clone https://github.com/100-hours-a-week/19-team-project-ai.git
 
@@ -169,5 +170,5 @@ cp .env.example .env
 
 # 4. 서버 실행
 docker-compose up --build
-
+```
 
