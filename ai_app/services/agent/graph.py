@@ -69,7 +69,7 @@ async def classify_intent_node(state: AgentState) -> dict:
     message = state.get("message", "").strip().lower()
 
     # 단순 인사말 처리 (LLM 스킵)
-    cleaned_msg = re.sub(r'[^가-힣a-z]', '', message)
+    cleaned_msg = re.sub(r"[^가-힣a-z]", "", message)
     if cleaned_msg in ["안녕", "안녕하세요", "반가워", "반가워요", "반갑습니다", "하이", "hello", "hi"]:
         intent_result = IntentResult(intent="GREETING", confidence=1.0)
         logger.info("의도 분류(하드코딩): GREETING")
@@ -96,10 +96,7 @@ async def handle_greeting_node(state: AgentState) -> dict:
     reply = "안녕하세요! AI 멘토입니다. 어떤 도움이 필요하신가요?"
     return {
         "reply_text": reply,
-        "events": [
-            {"event": "text", "data": {"chunk": reply + "\n"}},
-            {"event": "done", "data": {}}
-        ]
+        "events": [{"event": "text", "data": {"chunk": reply + "\n"}}, {"event": "done", "data": {}}],
     }
 
 
