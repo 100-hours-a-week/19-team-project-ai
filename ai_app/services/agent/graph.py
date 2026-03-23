@@ -67,7 +67,7 @@ class AgentState(TypedDict):
 async def classify_intent_node(state: AgentState) -> dict:
     """의도 분류 노드"""
     message = state.get("message", "").strip().lower()
-    
+
     # 단순 인사말 처리 (LLM 스킵)
     cleaned_msg = re.sub(r'[^가-힣a-z]', '', message)
     if cleaned_msg in ["안녕", "안녕하세요", "반가워", "반가워요", "반갑습니다", "하이", "hello", "hi"]:
