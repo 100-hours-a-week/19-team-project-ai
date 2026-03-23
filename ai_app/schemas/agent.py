@@ -27,7 +27,7 @@ class AgentSessionCreateRequest(BaseModel):
 class IntentResult(BaseModel):
     """의도 분류 결과"""
 
-    intent: Literal["D1", "D2", "D3"] = Field(..., description="D1: 멘토 탐색, D2: 질문 개선, D3: AI멘토 대화")
+    intent: Literal["D1", "D2", "D3", "GREETING"] = Field(..., description="D1: 멘토 탐색, D2: 질문 개선, D3: AI멘토 대화, GREETING: 단순 인사")
     confidence: float = Field(default=1.0, ge=0.0, le=1.0, description="분류 신뢰도")
 
 
