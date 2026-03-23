@@ -78,6 +78,84 @@ async def classify_intent_node(state: AgentState) -> dict:
             "events": [{"event": "intent", "data": intent_result.model_dump()}],
         }
 
+    # 역할/능력 및 UI/기능 문의 처리 (LLM 스킵)
+    about_keywords = [
+        "할수있는",
+        "뭐할수",
+        "뭘할수",
+        "무엇을할수",
+        "어떤도움을",
+        "뭘도와줄",
+        "무엇을도와",
+        "역할이뭐",
+        "기능이뭐",
+        "넌누구",
+        "너누구",
+        "누구야",
+        "누구세요",
+        "어떻게써",
+        "어디서봐",
+        "이기능뭐",
+        "설명서",
+    ]
+    if len(message) < 50 and any(k in message.replace(" ", "") for k in about_keywords):
+        intent_result = IntentResult(intent="ABOUT", confidence=1.0)
+        logger.info("의도 분류(하드코딩): ABOUT")
+        return {
+            "intent_result": intent_result,
+            "events": [{"event": "intent", "data": intent_result.model_dump()}],
+        }
+
+    # 감사/종료 멘트 처리 (CLOSING)
+    closing_keywords = [
+        "고마워",
+        "고맙습",
+        "감사",
+        "땡큐",
+        "알겠어",
+        "도움됐어",
+        "도움이됐어",
+        "이제됐어",
+        "수고했어",
+        "수고해",
+    ]
+    if len(message) < 30 and any(k in message.replace(" ", "") for k in closing_keywords):
+        intent_result = IntentResult(intent="CLOSING", confidence=1.0)
+        logger.info("의도 분류(하드코딩): CLOSING")
+        return {"intent_result": intent_result, "events": [{"event": "intent", "data": intent_result.model_dump()}]}
+
+    # 짧은 반응 처리 (SHORT_REPLY)
+    if len(message.strip()) <= 3 and message.strip() in [
+        "응",
+        "어",
+        "아니",
+        "음",
+        "오",
+        "잠깐",
+        "뭐",
+        "네",
+        "예",
+        "뭐라고",
+        "어어",
+    ]:
+        intent_result = IntentResult(intent="SHORT_REPLY", confidence=1.0)
+        logger.info("의도 분류(하드코딩): SHORT_REPLY")
+        return {"intent_result": intent_result, "events": [{"event": "intent", "data": intent_result.model_dump()}]}
+
+    # 시스템/정책 문의 처리 (POLICY)
+    policy_keywords = ["개인정보", "저장돼", "이력서남", "삭제돼", "기록남아", "정보유출", "보안", "관리돼"]
+    if len(message) < 50 and any(k in message.replace(" ", "") for k in policy_keywords):
+        intent_result = IntentResult(intent="POLICY", confidence=1.0)
+        logger.info("의도 분류(하드코딩): POLICY")
+        return {"intent_result": intent_result, "events": [{"event": "intent", "data": intent_result.model_dump()}]}
+
+    # 위험한 프롬프트 유도 (PROMPT_INJECTION)
+    prompt_keywords = ["프롬프트", "시스템메시지", "지시사항", "이전대화다", "시스템프롬프트", "너의설정", "규칙알려줘"]
+    if any(k in message.replace(" ", "") for k in prompt_keywords):
+        intent_result = IntentResult(intent="PROMPT_INJECTION", confidence=1.0)
+        logger.info("의도 분류(하드코딩): PROMPT_INJECTION")
+        return {"intent_result": intent_result, "events": [{"event": "intent", "data": intent_result.model_dump()}]}
+
     router = IntentRouter()
     intent_result = await router.classify(
         message=state["message"],
@@ -94,6 +172,37 @@ async def classify_intent_node(state: AgentState) -> dict:
 async def handle_greeting_node(state: AgentState) -> dict:
     """단순 인사 처리 노드"""
     reply = "안녕하세요! AI 멘토입니다. 어떤 도움이 필요하신가요?"
+    return {
+        "reply_text": reply,
+        "events": [{"event": "text", "data": {"chunk": reply + "\n"}}, {"event": "done", "data": {}}],
+    }
+
+
+async def handle_about_node(state: AgentState) -> dict:
+    """역할/능력 안내 처리 노드"""
+    reply = "저는 여러분의 취업 준비를 돕는 AI 멘토입니다! 멘토를 추천해 드리거나, 작성하신 질문을 다듬어 드리거나, 현직자의 조언을 바탕으로 고민에 답변해 드릴 수 있어요. 어떤 도움이 필요하신가요?"
+    return {
+        "reply_text": reply,
+        "events": [{"event": "text", "data": {"chunk": reply + "\n"}}, {"event": "done", "data": {}}],
+    }
+
+
+async def handle_fixed_response_node(state: AgentState) -> dict:
+    """고정 응답 처리 노드 (CLOSING, SHORT_REPLY, POLICY, PROMPT_INJECTION, OUT_OF_SCOPE)"""
+    intent = state["intent_result"].intent
+    reply = "무엇을 도와드릴까요?"
+
+    if intent == "CLOSING":
+        reply = "도움이 되었다니 다행이에요! 더 궁금한 점이나 취업 고민이 생기면 언제든 다시 찾아주세요. 😊"
+    elif intent == "SHORT_REPLY":
+        reply = "제가 아주 짧은 대답만으로는 문맥을 파악하기 어려울 때가 있어요. 조금만 더 자세히 말씀해 주시겠어요?"
+    elif intent == "POLICY":
+        reply = "Re-Fit은 사용자의 개인정보를 소중히 다룹니다! 이력서나 분석 결과 데이터는 응답 후 바로 휘발되거나 안전하게 취급되니 안심하고 사용하셔도 됩니다. 🔒"
+    elif intent == "PROMPT_INJECTION":
+        reply = "죄송하지만 시스템 내부 프롬프트나 설정 기준은 보안상 안내해 드릴 수 없어요. 대신 취업이나 멘토 추천에 대해서 물어봐주세요! 🛡️"
+    elif intent == "OUT_OF_SCOPE":
+        reply = "저는 커리어, 이력서, 공고 분석, 멘토 추천 관련 상담에 최적화된 AI 멘토입니다. 다른 주제보다는 취업 고민 및 직무 관련 질문에 가장 잘 대답할 수 있어요! 💼"
+
     return {
         "reply_text": reply,
         "events": [{"event": "text", "data": {"chunk": reply + "\n"}}, {"event": "done", "data": {}}],
@@ -358,18 +467,17 @@ async def generate_answer_node(state: AgentState) -> dict:
         ]
     )
 
-    user_prompt = f"""## 사용자 질문
-{state["message"]}
-
-## 사용자 맥락
+    user_prompt = f"""## [상담 대상자(사용자) 정보]
+- 질문: {state["message"]}
 - 목표 직무: {state.get("target_job")}
-- 이력서 요약: {state.get("resume")}
+- 현재 상태/이력 요약: {state.get("resume")}
 
-## 검색된 현직자 피드백 (Context)
+## [현직자 피드백 데이터 (참고용)]
 {context_text}
 
-## 지시사항
-위 컨텍스트를 바탕으로 AI 멘토로서 답변을 작성하세요."""
+## [지시사항]
+당신은 10년차 시니어 멘토입니다. 위 '상담 대상자'의 정보를 바탕으로, 검색된 피드백 데이터를 참고하여 조언해 주세요.
+(주의: 상담 대상자의 '현 상태/이력'을 본인의 이력으로 착각하여 "저도 대학생입니다"라고 답변하지 않도록 명심하세요.)"""
 
     try:
         reply = await llm.generate(prompt=user_prompt, system_instruction=system_prompt, temperature=0.7)
@@ -408,6 +516,10 @@ def route_by_intent(state: AgentState) -> str:
     intent = state["intent_result"].intent
     if intent == "GREETING":
         return "handle_greeting"
+    elif intent == "ABOUT":
+        return "handle_about"
+    elif intent in ["CLOSING", "SHORT_REPLY", "POLICY", "PROMPT_INJECTION", "OUT_OF_SCOPE"]:
+        return "handle_fixed_response"
     elif intent == "D1":
         return "extract_conditions"
     elif intent == "D2":
@@ -426,6 +538,8 @@ def build_agent_graph() -> StateGraph:
     # 노드 등록
     graph.add_node("classify_intent", classify_intent_node)
     graph.add_node("handle_greeting", handle_greeting_node)
+    graph.add_node("handle_about", handle_about_node)
+    graph.add_node("handle_fixed_response", handle_fixed_response_node)
     graph.add_node("extract_conditions", extract_conditions_node)
     graph.add_node("vector_search", vector_search_node)
     graph.add_node("rerank", rerank_node)
@@ -445,12 +559,16 @@ def build_agent_graph() -> StateGraph:
         route_by_intent,
         {
             "handle_greeting": "handle_greeting",
+            "handle_about": "handle_about",
+            "handle_fixed_response": "handle_fixed_response",
             "extract_conditions": "extract_conditions",
             "handle_d2": "handle_d2",
             "handle_d3": "organize_input",  # D3 진입점 변경
         },
     )
     graph.add_edge("handle_greeting", END)
+    graph.add_edge("handle_about", END)
+    graph.add_edge("handle_fixed_response", END)
     graph.add_edge("extract_conditions", "vector_search")
     graph.add_edge("vector_search", "rerank")
     graph.add_edge("rerank", "compose_reply")
