@@ -1,6 +1,7 @@
 """Agent LangGraph — StateGraph 기반 파이프라인 오케스트레이션"""
 
 import logging
+import re
 from typing import Annotated, TypedDict
 
 from adapters.llm_client import get_llm_client
@@ -65,6 +66,18 @@ class AgentState(TypedDict):
 
 async def classify_intent_node(state: AgentState) -> dict:
     """의도 분류 노드"""
+    message = state.get("message", "").strip().lower()
+
+    # 단순 인사말 처리 (LLM 스킵)
+    cleaned_msg = re.sub(r"[^가-힣a-z]", "", message)
+    if cleaned_msg in ["안녕", "안녕하세요", "반가워", "반가워요", "반갑습니다", "하이", "hello", "hi"]:
+        intent_result = IntentResult(intent="GREETING", confidence=1.0)
+        logger.info("의도 분류(하드코딩): GREETING")
+        return {
+            "intent_result": intent_result,
+            "events": [{"event": "intent", "data": intent_result.model_dump()}],
+        }
+
     router = IntentRouter()
     intent_result = await router.classify(
         message=state["message"],
@@ -75,6 +88,15 @@ async def classify_intent_node(state: AgentState) -> dict:
     return {
         "intent_result": intent_result,
         "events": [{"event": "intent", "data": intent_result.model_dump()}],
+    }
+
+
+async def handle_greeting_node(state: AgentState) -> dict:
+    """단순 인사 처리 노드"""
+    reply = "안녕하세요! AI 멘토입니다. 어떤 도움이 필요하신가요?"
+    return {
+        "reply_text": reply,
+        "events": [{"event": "text", "data": {"chunk": reply + "\n"}}, {"event": "done", "data": {}}],
     }
 
 
@@ -384,7 +406,9 @@ async def post_process_node(state: AgentState) -> dict:
 def route_by_intent(state: AgentState) -> str:
     """의도에 따라 다음 노드를 결정"""
     intent = state["intent_result"].intent
-    if intent == "D1":
+    if intent == "GREETING":
+        return "handle_greeting"
+    elif intent == "D1":
         return "extract_conditions"
     elif intent == "D2":
         return "handle_d2"
@@ -401,6 +425,7 @@ def build_agent_graph() -> StateGraph:
 
     # 노드 등록
     graph.add_node("classify_intent", classify_intent_node)
+    graph.add_node("handle_greeting", handle_greeting_node)
     graph.add_node("extract_conditions", extract_conditions_node)
     graph.add_node("vector_search", vector_search_node)
     graph.add_node("rerank", rerank_node)
@@ -419,11 +444,13 @@ def build_agent_graph() -> StateGraph:
         "classify_intent",
         route_by_intent,
         {
+            "handle_greeting": "handle_greeting",
             "extract_conditions": "extract_conditions",
             "handle_d2": "handle_d2",
             "handle_d3": "organize_input",  # D3 진입점 변경
         },
     )
+    graph.add_edge("handle_greeting", END)
     graph.add_edge("extract_conditions", "vector_search")
     graph.add_edge("vector_search", "rerank")
     graph.add_edge("rerank", "compose_reply")
