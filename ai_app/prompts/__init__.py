@@ -41,7 +41,18 @@ def load_prompt(name: str) -> str:
             # Langchain prompt template 포맷인 경우 .prompt를 사용하거나, 일반 텍스트인 경우 처리
             # 여기서는 기본적으로 문자열 반환을 위해 compile() 후 content 추출 또는 raw content 사용
             if hasattr(prompt, "get_langchain_prompt"):
-                return prompt.compile()
+                # If the app treats the compiled output as a string, attempt compile
+                compiled = prompt.compile()
+                if isinstance(compiled, list):
+                    return "\n\n".join(
+                        [msg.get("content", "") if isinstance(msg, dict) else str(msg) for msg in compiled]
+                    )
+                return str(compiled)
+
+            if isinstance(prompt.prompt, list):
+                return "\n\n".join(
+                    [msg.get("content", "") if isinstance(msg, dict) else str(msg) for msg in prompt.prompt]
+                )
             return prompt.prompt
     except Exception as e:
         logger.warning(f"⚠️ Failed to load prompt '{name}' from Langfuse, falling back to local: {e}")

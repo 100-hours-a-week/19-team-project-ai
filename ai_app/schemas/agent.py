@@ -27,7 +27,12 @@ class AgentSessionCreateRequest(BaseModel):
 class IntentResult(BaseModel):
     """의도 분류 결과"""
 
-    intent: Literal["D1", "D2", "D3"] = Field(..., description="D1: 멘토 탐색, D2: 질문 개선, D3: AI멘토 대화")
+    intent: Literal[
+        "D1", "D2", "D3", "GREETING", "ABOUT", "CLOSING", "SHORT_REPLY", "POLICY", "PROMPT_INJECTION", "OUT_OF_SCOPE"
+    ] = Field(
+        ...,
+        description="D1: 멘토 탐색, D2: 질문 개선, D3: AI멘토 대화, GREETING: 단순 인사, ABOUT: 역할 안내, CLOSING: 감사/종료, SHORT_REPLY: 짧은 반응, POLICY: 정책 문의, PROMPT_INJECTION: 프롬프트 해킹 시도, OUT_OF_SCOPE: 서비스 범위 밖",
+    )
     confidence: float = Field(default=1.0, ge=0.0, le=1.0, description="분류 신뢰도")
 
 
